@@ -59,7 +59,7 @@ class App:
         self.jobs_dir = jobs_dir
         self.models_config = models_config
         self.children: dict[str, subprocess.Popen] = {}  # runs started here, so finished ones are reaped
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # one start or resume at a time, so two tabs can't start two runs
         self.checked: tuple[float, dict] = (0.0, {})
 
     # ---------- what the page shows ----------
@@ -105,7 +105,9 @@ class App:
                     "note": None, "progress": {"done": 0, "total": 0}, "checking": {"done": 0, "total": 0},
                     "left_out": [], "summary": {}, "report": None, "resumable": False,
                     "log": None if starting else tail(log)}
-        meta = json.loads((job_dir / "run.json").read_text())
+        meta = read_json(job_dir / "run.json")
+        if not meta:
+            return None
         status = meta.get("status") or {}
         phase, detail = status.get("phase"), status.get("detail") or ""
         models = meta.get("models") or []
@@ -132,8 +134,7 @@ class App:
             title = repos[0] if len(repos) == 1 else f"{len(run_tasks)} tasks from {len(repos)} repositories"
         summary = {}
         report_json = job_dir / "report.json"
-        if report_json.is_file():
-            data = json.loads(report_json.read_text())
+        if data := read_json(report_json):
             last += [t.get("finished_at") or "" for t in data["trials"]]
             summary = {m["key"]: {k: data["summary"][m["key"]].get(k) for k in
                                   ("pass_at_1", "solved", "valid", "cost_per_solved", "invalid")}
@@ -159,10 +160,7 @@ class App:
         """Cost and time per attempt for each model, from the most recent run that has them."""
         found: dict[str, dict] = {}
         for run in runs:  # newest first
-            path = self.jobs_dir / run["id"] / "report.json"
-            if not path.is_file():
-                continue
-            for key, s in json.loads(path.read_text())["summary"].items():
+            for key, s in (read_json(self.jobs_dir / run["id"] / "report.json").get("summary") or {}).items():
                 if key not in found and s.get("valid") and s.get("cost_per_attempt") is not None:
                     found[key] = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
         return found
@@ -186,6 +184,10 @@ class App:
     # ---------- what the page does ----------
 
     def start(self, form: dict) -> dict:
+        with self.lock:
+            return self._start(form)
+
+    def _start(self, form: dict) -> dict:
         state = self.state()
         if state["busy"]:
             return {"error": "A run is already going. Let it finish, or stop it, before starting another."}
@@ -196,7 +198,7 @@ class App:
         repo = None if sample else parse_repo(str(form.get("repo") or ""))
         if not sample and not repo:
             return {"error": "Enter a GitHub repository as owner/repo, or choose the sample tasks."}
-        if not sample and not checks["gh"]:
+        if not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
@@ -231,14 +233,21 @@ class App:
         run = self.find(run_id)
         if not run or run["phase"] not in pipeline.ACTIVE:
             return {"error": "That run isn't going."}
-        meta = json.loads((self.jobs_dir / run_id / "run.json").read_text())
-        pid = (meta.get("status") or {}).get("pid")
+        child = self.children.get(run_id)
+        if child and child.poll() is None:
+            pid = child.pid  # started or resumed from here, maybe before its status says so
+        else:
+            pid = (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
         if not alive(pid):
             return {"error": "That run's process has already ended."}
         os.kill(pid, signal.SIGINT)  # the run removes its containers and marks itself stopped
         return {"ok": True}
 
     def resume(self, run_id: str) -> dict:
+        with self.lock:
+            return self._resume(run_id)
+
+    def _resume(self, run_id: str) -> dict:
         run = self.find(run_id)
         if not run or not run["resumable"]:
             return {"error": "That run can't be resumed."}
@@ -261,6 +270,14 @@ class App:
                     [sys.executable, "-m", "eval_sandbox", "run", *argv], cwd=pipeline.ROOT,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
+
+
+def read_json(path: Path) -> dict:
+    """A run's JSON file, or {} if it isn't there or can't be read right now."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def tail(path: Path, lines: int = 15) -> str | None:

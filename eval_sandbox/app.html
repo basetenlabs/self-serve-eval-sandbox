@@ -348,7 +348,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     const claude = state.models.find((m) => m.provider === "anthropic");
     const items = [
       [c.docker, "Docker is running", "Start Docker Desktop, or run colima start --cpu 8 --memory 12"],
-      [c.gh, "Signed in to GitHub", "Run gh auth login in a terminal (only needed for your own repository)"],
+      [c.gh, "Signed in to GitHub", "Run gh auth login in a terminal, then reload this page"],
       [c.image ? true : null, c.image ? "Trial image is built" : "Trial image builds on the first run", "A few minutes, once"],
       [baseten && !baseten.missing, "Baseten key, for open models", "Set BASETEN_API_KEY, then restart pr-eval serve"],
       [claude && !claude.missing, "Claude key, for Claude models", "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve"],

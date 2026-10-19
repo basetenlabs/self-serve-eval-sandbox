@@ -539,9 +539,13 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
             write_json(log_dir / "result.json", record)
 
 
+# Check results that say nothing about the task itself; such a task is checked again.
+PASSING_CHECK_FAILURES = ("docker-error", "setup-timeout", "timeout", "workspace-error")
+
+
 def validate_all(tasks: list[Task], settings: Settings, run_id: str, on_result=None) -> None:
-    """Check tasks not yet checked in this image, a few at a time."""
-    todo = [t for t in tasks if validation_status(t) is None]
+    """Check tasks not yet checked in this image, or whose check failed for a passing reason."""
+    todo = [t for t in tasks if (validation_status(t) or "docker-error").startswith(PASSING_CHECK_FAILURES)]
     in_parallel(todo, lambda t: validate_task(t, settings, run_id), settings.concurrency, run_id, on_result)
 
 

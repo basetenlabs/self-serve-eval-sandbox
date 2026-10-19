@@ -26,7 +26,11 @@ def cmd_run(args) -> int:
         # models, so a new model is compared on the same tasks without rerunning the others.
         job = pipeline.Job(args.resume)
         keys, added = pipeline.resumed_models(job.meta, args.models)
-        models, judge = pipeline.preflight(keys, args.judge, args.models_config)
+        try:
+            models, judge = pipeline.preflight(keys, args.judge, args.models_config)
+        except SystemExit as exc:
+            job.status("failed", str(exc.code))  # so the page shows why Resume didn't start
+            raise
         job.meta["models"] += [m.as_dict() for m in models if m.key in added]
         job.meta["attempts"] = max(args.attempts or 0, job.meta.get("attempts", 1))
         job.save()
@@ -139,7 +143,7 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
     p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
-                   help=f"skip PRs that change more lines than this (default {tasks.DEFAULT_MAX_LINES})")
+                   help=f"when picking recent PRs, skip ones that change more lines than this (default {tasks.DEFAULT_MAX_LINES}; --pr allows up to {tasks.MAX_LINES})")
 
 
 def main(argv: list[str] | None = None) -> int:

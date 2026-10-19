@@ -269,10 +269,13 @@ class CollectTest(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def export(self, **kwargs):
+    def export(self, commits=(), **kwargs):
         from unittest import mock
         issue = {"title": "double() returns its input", "body": "double(2) should be 4, but it returns 2. " * 3}
-        with mock.patch.object(tasks, "gh", return_value=issue):
+
+        def github(endpoint):
+            return [{"commit": {"message": m}} for m in commits] if endpoint.endswith("/commits?per_page=100") else issue
+        with mock.patch.object(tasks, "gh", side_effect=github):
             return tasks.export_task(self.repo / ".git", "o/r", "Python", self.pr, self.out, **kwargs)
 
     def test_the_answer_stays_out_of_the_agents_copy(self):
@@ -292,7 +295,30 @@ class CollectTest(unittest.TestCase):
     def test_own_commands_and_changed_test_files(self):
         task = tasks.load(self.export(setup="make deps", test="pytest {test_files}"))
         self.assertEqual(task.meta["environment"]["setup"], "make deps")
-        self.assertEqual(task.meta["verifier"]["test"], "pytest tests/test_gone.py tests/test_lib.py")
+        self.assertEqual(task.meta["verifier"]["test"], "pytest tests/test_lib.py")  # not the test it deleted
+
+    def test_a_rebase_merge_starts_before_all_of_the_prs_commits(self):
+        self.git("checkout", "-q", "-b", "rebased", self.base)  # the PR's two commits, laid on main one by one
+        (self.repo / "lib.py").write_text("def double(x):\n    return x + x\n")
+        self.git("commit", "-qam", "first part")
+        (self.repo / "tests" / "test_lib.py").write_text("hidden test: double(2) == 4\n")
+        self.git("commit", "-qam", "second part")
+        self.pr["merge_commit_sha"] = self.git("rev-parse", "HEAD")
+        task = tasks.load(self.export(commits=["first part", "second part"]))
+        self.assertEqual(task.meta["task"]["base_sha"], self.base)  # not "first part", which holds the fix
+        self.assertIn("return x + x", (task.path / "solution/reference.patch").read_text())
+
+    def test_new_commands_make_the_task_again(self):
+        from unittest import mock
+        self.export()
+        github = {"repos/o/r": {"language": "Python"}, "repos/o/r/pulls/7": self.pr}
+        with mock.patch.object(tasks, "gh", side_effect=github.get), \
+                mock.patch.object(tasks, "clone", return_value=self.repo / ".git"), \
+                mock.patch.object(tasks, "export_task") as export:
+            tasks.collect("o/r", self.out, prs=[7])
+            export.assert_not_called()  # same commands: the folder and its check are kept
+            tasks.collect("o/r", self.out, prs=[7], setup="make deps", test="pytest")
+            export.assert_called_once()
 
     def test_a_pr_that_only_changes_tests_is_skipped(self):
         (self.repo / "tests" / "test_lib.py").write_text("another test\n")

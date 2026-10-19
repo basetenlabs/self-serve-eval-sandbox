@@ -27,7 +27,7 @@ pr-eval serve
 
 When it finishes, **Open report** shows solve rate and cost per solved task side by side, with every attempt's diff, test output and the judge's reason. The checklist on the page says what's missing before you start: Docker, the GitHub login, or a key. The first run builds the Docker image, which takes a few minutes once.
 
-Private repositories work through your own `gh` login. Go and Python repositories have default install and test commands. For anything else, open **Install and test commands** and say how, for example `npm ci` and `npx vitest run {test_files}`, where `{test_files}` becomes the PR's changed test files.
+Private repositories work through your own `gh` login (the sample needs it too). Go and Python repositories have default install and test commands. For anything else, open **Install and test commands** and say how, for example `npm ci` and `npx vitest run {test_files}`, where `{test_files}` becomes the PR's changed test files. Changing the commands and starting again sets the PRs up afresh. The trial image has Go, Node and Python; another language's toolchain goes in `docker/Dockerfile`, and dependencies from a private registry need their access in the install command.
 
 Before any model runs, each PR is checked in the same container the models use: its tests have to fail without the change and pass with it. PRs that don't are left out, because that's a setup problem, not the model's.
 
@@ -42,6 +42,7 @@ The page runs this same command, so either works:
 ```bash
 pr-eval run your-org/your-repo --limit 10 --models claude-opus,deepseek-v4.1-flash
 pr-eval run                                   # the sample tasks instead (10 of them; --limit 42 for all)
+pr-eval run your-org/your-repo --pr 123 --pr 456   # exactly these PRs (up to 1,600 lines each)
 ```
 
 It prints one line per attempt and keeps the report current. Stop it with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`; the same command with `--attempts 3` adds attempts to a finished run, and with `--models kimi-k3` adds a model on the same tasks.
