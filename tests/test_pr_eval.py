@@ -15,6 +15,11 @@ from eval_sandbox import app, config, pipeline, report, runner, tasks  # noqa: E
 from eval_sandbox.config import Judge, Model  # noqa: E402
 
 
+def mock_env(**values):
+    from unittest import mock
+    return mock.patch.dict("os.environ", values)
+
+
 def baseten_model() -> Model:
     return Model(key="glm-5.3", label="GLM-5.3", kind="open", provider="baseten", model="zai-org/GLM-5.3",
                  effort="high", prices={"zai-org/GLM-5.3": {"input": 1.40, "cached_input": 0.14, "output": 4.40}})
@@ -317,6 +322,29 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertEqual(runner.diff_stats(numstat)["files"], 2)
 
 
+    def test_the_agents_own_tests_are_set_aside_before_the_hidden_ones(self):
+        import subprocess
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            def local_sh(container, script, *, timeout, **_):
+                p = subprocess.run(["bash", "-c", script], cwd=d, capture_output=True, text=True)
+                return p.returncode, p.stdout + p.stderr, False
+            git = "git -c user.name=t -c user.email=t@t"
+            local_sh(None, "git init -q -b main && echo code > lib.go && echo old > lib_test.go && git add -A && "
+                           f"{git} commit -qm setup", timeout=9)
+            baseline = local_sh(None, "git rev-parse HEAD", timeout=9)[1].strip()
+            # the agent fixes the code, edits a test and adds one whose name may clash with the PR's
+            local_sh(None, "echo fixed > lib.go && echo mine > lib_test.go && echo TestFix > fix_test.go && git add -A",
+                     timeout=9)
+            with mock.patch.object(runner, "sh", local_sh):
+                set_aside = runner.set_aside_agent_tests("unused", baseline)
+            files = {name: (Path(d) / name).read_text().strip() if (Path(d) / name).exists() else None
+                     for name in ("lib.go", "lib_test.go", "fix_test.go")}
+        self.assertEqual(sorted(set_aside), ["fix_test.go", "lib_test.go"])
+        self.assertEqual(files, {"lib.go": "fixed", "lib_test.go": "old", "fix_test.go": None})
+        self.assertTrue(runner.touches_tests("diff --git a/lib.go b/lib.go\ndiff --git a/x_test.go b/x_test.go\n"))
+        self.assertFalse(runner.touches_tests("diff --git a/lib.go b/lib.go\n"))
+
 class PipelineTest(unittest.TestCase):
     def test_resume_adds_new_models_after_the_runs_own(self):
         meta = {"models": [{"key": "claude-opus"}, {"key": "glm-5.3"}]}
@@ -454,6 +482,12 @@ class ReportTest(unittest.TestCase):
 class JudgeTest(unittest.TestCase):
     task = tasks.Task(id="x", path=Path("/nonexistent"), meta={"task": {"repo": "a/b"}}, instruction="do it")
     judge = Judge(model="m", base_url="http://localhost:9", api_key_env="PR_EVAL_TEST_UNSET")
+
+    def test_a_judge_that_cannot_run_is_caught_before_the_run(self):
+        self.assertIn("PR_EVAL_TEST_UNSET", self.judge.problem())
+        with mock_env(PR_EVAL_TEST_KEY="k"):
+            unreachable = Judge(model="m", base_url="http://127.0.0.1:9", api_key_env="PR_EVAL_TEST_KEY")
+            self.assertIsNone(unreachable.problem())  # a network hiccup doesn't stop a run
 
     def test_missing_key_is_an_error_not_a_verdict(self):
         from eval_sandbox import judge

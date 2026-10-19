@@ -88,7 +88,9 @@ class App:
             gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
             cached = {"docker": docker, "gh": gh, "image": docker and pipeline.image_exists(runner.DEFAULT_IMAGE)}
             self.checked = (time.monotonic(), cached)
-        return {**cached, "judge": {"model": judge.model, "env": judge.api_key_env, "ok": bool(judge.api_key)}}
+            cached["judge"] = judge.problem()
+        return {**cached, "judge": {"model": judge.model, "env": judge.api_key_env, "ok": not cached["judge"],
+                                    "problem": cached["judge"]}}
 
     def describe(self, job_dir: Path) -> dict | None:
         log = job_dir / "log.txt"

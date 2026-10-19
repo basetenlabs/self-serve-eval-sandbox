@@ -639,7 +639,9 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
     const body = el("div", { class: "attempt-body" });
     if (r.outcome === "invalid") body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Why invalid"), el("span", {}, r.invalid_reason || "unknown")));
     if (a.timed_out) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Time limit"), el("span", {}, `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`)));
-    if (r.tests) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Hidden tests"), el("span", {}, `${r.tests.passed ? "Passed" : "Failed"}${r.tests.summary ? ` · ${r.tests.summary}` : ""}`)));
+    const setAside = (r.tests && r.tests.set_aside) || [];
+    if (r.tests) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Hidden tests"), el("span", {}, `${r.tests.passed ? "Passed" : "Failed"}${r.tests.summary ? ` · ${r.tests.summary}` : ""}` +
+      (setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""))));
     if (r.judge) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Judge"), el("span", {}, r.judge.error ? `Error: ${r.judge.error}` : `${r.judge.verdict === "pass" ? "Pass" : "Fail"} · ${r.judge.reason || ""}`)));
     if (r.diff) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Change"), el("span", {}, `${r.diff.files} files, +${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`)));
     body.append(tabs, viewer);

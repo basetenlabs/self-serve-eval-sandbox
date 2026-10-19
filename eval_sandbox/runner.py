@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import judge as judge_mod
 from .config import BASETEN_URL, Judge, Model, credential_env
-from .tasks import Task
+from .tasks import TEST_FILE, Task
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = "eval-sandbox-runner:dev"
@@ -380,6 +380,29 @@ def capture_patch(container: str, baseline: str) -> tuple[str, str]:
     return patch, numstat
 
 
+def set_aside_agent_tests(container: str, baseline: str) -> list[str]:
+    """Put test files back as they were before the agent; return the ones it had changed.
+
+    The PR's hidden tests decide, so they run against the agent's code alone. The agent's
+    own tests could otherwise break them: in Go, a test it adds with the same name as one
+    of the PR's stops the package compiling, and a correct fix reads as a failure. The
+    judge still sees the agent's whole diff, tests included. Expects the agent's work staged.
+    """
+    _, out, _ = sh(container, f"git diff --cached --name-status --no-renames -z {baseline}", timeout=60)
+    fields = out.split("\0")
+    changed = [(status, path) for status, path in zip(fields[::2], fields[1::2], strict=False) if TEST_FILE.search(path)]
+    if changed:
+        added = [path for status, path in changed if status.startswith("A")]
+        others = [path for status, path in changed if not status.startswith("A")]
+        script = []
+        if added:
+            script.append("rm -f -- " + " ".join(map(shlex.quote, added)))
+        if others:
+            script.append(f"git checkout -q {baseline} -- " + " ".join(map(shlex.quote, others)))
+        sh(container, " && ".join(script), timeout=120)
+    return [path for _, path in changed]
+
+
 def run_tests(container: str, task: Task, log_path: Path) -> dict:
     """Copy the hidden tests in and run them. Only ever called after the agent has stopped."""
     docker("cp", str(task.path / "tests"), f"{container}:/tests")
@@ -431,9 +454,10 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         (trial_dir / "agent.patch").write_text(patch)
         result["diff"] = diff_stats(numstat)
 
+        set_aside = set_aside_agent_tests(container, result["setup"]["baseline"])
         tests = run_tests(container, task, trial_dir / "verifier.log")
         test_output = tests.pop("output")
-        result["tests"] = tests
+        result["tests"] = {**tests, "set_aside": set_aside}
         if tests["timed_out"]:
             return finish("invalid", "verifier-timeout")
     except subprocess.TimeoutExpired as exc:
@@ -595,6 +619,70 @@ def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None) -> 
         raise
     finally:
         pool.shutdown(wait=True)
+
+
+def retest(job_dir: Path, tasks_dir: Path, settings: Settings, *, force: bool = False, on_result=None) -> None:
+    """Run the hidden tests again from each attempt's saved diff, with its own tests set aside.
+
+    For runs graded before set_aside_agent_tests existed. No model is called: the diff
+    is applied to a fresh copy of the starting code, and the judge's verdict is kept.
+    Only attempts whose diff touched a test file can change, so only those are rerun.
+    """
+    todo = []
+    for trial_dir in sorted((job_dir / "trials").iterdir()):
+        path, patch = trial_dir / "result.json", trial_dir / "agent.patch"
+        if not path.is_file() or not patch.is_file():
+            continue
+        result = json.loads(path.read_text())
+        if result["outcome"] in ("solved", "failed") and result.get("tests") and "set_aside" not in result["tests"] \
+                and (force or "retested" not in result) and touches_tests(patch.read_text(errors="replace")):
+            todo.append((trial_dir, result))
+    todo.sort(key=lambda job: job[1]["outcome"] != "failed")  # failures first: they are the ones likely to change
+    run_id = f"retest-{job_dir.name}"
+    in_parallel(todo, lambda job: retest_trial(*job, load_task(tasks_dir / job[1]["task_id"]), settings, run_id),
+                settings.concurrency, run_id, on_result)
+
+
+def touches_tests(patch: str) -> bool:
+    return any(TEST_FILE.search(path) for path in re.findall(r"^diff --git a/(\S+) b/", patch, re.M))
+
+
+def retest_trial(trial_dir: Path, result: dict, task: Task, settings: Settings, run_id: str) -> dict:
+    log_dir = trial_dir / "retest"
+    log_dir.mkdir(exist_ok=True)
+    container = container_name(run_id)
+    try:
+        start_container(container, run_id, settings)
+        reason, setup = prepare_workspace(container, task, log_dir)
+        if reason:
+            return {"trial": result["trial"], "error": reason}
+        docker("cp", str(trial_dir / "agent.patch"), f"{container}:/tmp/agent.patch")
+        code, out, _ = sh(container, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
+        if code:
+            (log_dir / "apply.log").write_text(out)
+            return {"trial": result["trial"], "error": "the saved diff doesn't apply"}
+        set_aside = set_aside_agent_tests(container, setup["baseline"])
+        tests = run_tests(container, task, log_dir / "verifier.log")
+    except (subprocess.SubprocessError, OSError) as exc:
+        return {"trial": result["trial"], "error": f"docker-error: {exc}"}
+    finally:
+        docker("rm", "-f", container, check=False, timeout=120)
+    tests.pop("output")
+    if tests["timed_out"] or STOPPING.is_set():
+        return {"trial": result["trial"], "error": "stopped or timed out; left as it was"}
+    before = {"outcome": result["outcome"], "tests": result["tests"]}
+    verdict = (result.get("judge") or {}).get("verdict")
+    solved = tests["passed"] and verdict in ("pass", None)  # None: a run scored on tests alone
+    result.update(outcome="solved" if solved else "failed", tests={**tests, "set_aside": set_aside},
+                  retested={"at": now(), "before": before})
+    old_log = trial_dir / "verifier.log"
+    if old_log.is_file():
+        old_log.replace(trial_dir / "verifier.before-retest.log")
+    (log_dir / "verifier.log").replace(old_log)
+    write_json(trial_dir / "result.json", result)
+    return {"trial": result["trial"], "before": before["outcome"], "after": result["outcome"],
+            "tests": f"{'passed' if before['tests'].get('passed') else 'failed'} -> "
+                     f"{'passed' if tests['passed'] else 'failed'}", "judge": verdict}
 
 
 def cleanup(run_id: str | None = None) -> list[str]:

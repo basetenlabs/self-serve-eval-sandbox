@@ -178,7 +178,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
           <label for="limit">Pull requests</label>
           <select id="limit"></select>
         </div>
-        <p class="hint" style="flex:1;min-width:220px">The most recent ones that change both code and tests. Each is checked first: its tests must fail before the change and pass after it.</p>
+        <p class="hint" style="flex:1;min-width:220px">The most recent ones that change both code and tests, up to 400 lines. Each is checked first: its tests must fail before the change and pass after it.</p>
       </div>
 
       <fieldset>
@@ -352,7 +352,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
       [c.image ? true : null, c.image ? "Trial image is built" : "Trial image builds on the first run", "A few minutes, once"],
       [baseten && !baseten.missing, "Baseten key, for open models", "Set BASETEN_API_KEY, then restart pr-eval serve"],
       [claude && !claude.missing, "Claude key, for Claude models", "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve"],
-      [c.judge.ok, `Judge key (${c.judge.model})`, `Set ${c.judge.env}, then restart pr-eval serve`],
+      [c.judge.ok, `Judge key (${c.judge.model})`, c.judge.problem || `Set ${c.judge.env}, then restart pr-eval serve`],
     ];
     $("checks").replaceChildren(...items.map(([ok, label, fix]) => el("li", {},
       el("span", { class: `mark ${ok === true ? "ok" : ok === null ? "wait" : "no"}`, "aria-hidden": "true" }, ok === true ? "✓" : ok === null ? "·" : "✗"),

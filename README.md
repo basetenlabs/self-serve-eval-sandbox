@@ -6,13 +6,13 @@ Status: v0. Claude Code is the only harness.
 
 ## Quickstart
 
-You need Docker (Docker Desktop, or `colima start --cpu 8 --memory 12`), Python 3.12+, the GitHub CLI (`gh auth login`), and three keys:
+You need Docker with room for four containers at once (Docker Desktop with 8 CPUs and 12 GB under Settings > Resources, or `colima start --cpu 8 --memory 12`), Python 3.12+, the GitHub CLI (`gh auth login`), and three keys:
 
 | Variable | For |
 | --- | --- |
 | `BASETEN_API_KEY` | open models on Baseten Model APIs |
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Claude models |
-| `OPENAI_API_KEY` | the judge (`gpt-6.1-sol`; set in `configs/models.toml`) |
+| `OPENAI_API_KEY` | the judge (`gpt-6.1-sol`, set in `configs/models.toml`); the key needs access to that model |
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate && pip install -e .
@@ -22,7 +22,7 @@ pr-eval serve
 `serve` opens http://127.0.0.1:8765. There you:
 
 1. type a GitHub repository (or pick the sample: 42 merged PRs from 7 public repos),
-2. choose how many pull requests and which models to compare,
+2. choose how many pull requests (the most recent that change code and tests, up to 400 lines each) and which models to compare (Claude Opus 5.5 and DeepSeek V4.1 Flash to start),
 3. press **Start run** and watch it go: finding PRs, checking them, then running each model. Stop and Resume are on the run.
 
 When it finishes, **Open report** shows solve rate and cost per solved task side by side, with every attempt's diff, test output and the judge's reason. The checklist on the page says what's missing before you start: Docker, the GitHub login, or a key. The first run builds the Docker image, which takes a few minutes once.
@@ -50,7 +50,7 @@ It prints one line per attempt and keeps the report current. Stop it with Ctrl-C
 
 1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point; the merged diff and the PR's tests are kept aside as the answer.
 2. **Run.** Each attempt gets a fresh container. Claude Code works on the request with the model under test; open models on Baseten go through a small proxy in the container that sets the same reasoning effort on every request. GitHub, package registries and Claude Code's web tools are blocked while the agent works.
-3. **Grade.** The agent's diff is saved, then the PR's hidden tests run against it, then an LLM judge compares it with the merged diff and gives a one-sentence reason. Solved means the tests pass and the judge agrees.
+3. **Grade.** The agent's diff is saved, then the PR's hidden tests run against its code (its own test changes are set aside, so a test it wrote can't clash with the PR's), then an LLM judge compares its whole diff with the merged one and gives a one-sentence reason. Solved means the tests pass and the judge agrees.
 4. **Report.** One HTML page per run, plus `report.json`: solve rate, cost per solved task, time and tokens, results by language, change size and repository, and every attempt's diff, test output and judge reason.
 
 ## What the numbers mean
@@ -74,6 +74,7 @@ It prints one line per attempt and keeps the report current. Stop it with Ctrl-C
 | `pr-eval report jobs/<run>` | rebuild a run's report |
 | `pr-eval validate` | check task folders in the trial image without running a model |
 | `pr-eval rejudge jobs/<run>` | grade a finished run again with another judge model |
+| `pr-eval retest jobs/<run>` | rerun a finished run's hidden tests from its saved diffs (no model calls) |
 | `pr-eval cleanup` | remove containers a killed run left behind |
 | `pr-eval build-image` | rebuild the trial image, e.g. for another Claude Code version |
 

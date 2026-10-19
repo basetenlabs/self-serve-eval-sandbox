@@ -34,8 +34,8 @@ def cmd_run(args) -> int:
         if args.pr and len(args.repos) != 1:
             sys.exit("--pr needs exactly one repository")
         models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config)
-        request = pipeline.Request(repos=args.repos, prs=args.pr, limit=args.limit, since=args.since,
-                                   setup=args.setup, test=args.test, language=args.language, task_ids=args.task)
+        request = pipeline.Request(repos=args.repos, prs=args.pr, limit=args.limit, since=args.since, setup=args.setup,
+                                   test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task)
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
                                jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks)
     print(f"run {job.id} -> {job.path}")
@@ -56,7 +56,7 @@ def cmd_collect(args) -> int:
     written = []
     for repo, prs in wanted.items():
         written += tasks.collect(repo, args.out, prs=prs, limit=args.limit, since=args.since, setup=args.setup,
-                                 test=args.test, language=args.language, force=args.force)
+                                 test=args.test, language=args.language, force=args.force, max_lines=args.max_lines)
     print(f"{len(written)} tasks in {args.out}")
     return 0 if written else 1
 
@@ -93,6 +93,25 @@ def cmd_rejudge(args) -> int:
     return 0
 
 
+def cmd_retest(args) -> int:
+    pipeline.ensure_image(args.image)
+    meta = json.loads((args.job / "run.json").read_text())
+    tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
+    settings = runner.Settings(image=args.image, concurrency=args.concurrency)
+    changed = []
+
+    def retested(r, done, total):
+        line = r.get("error") or f"{r['before']} -> {r['after']} (tests {r['tests']}, judge {r['judge']})"
+        print(f"[{done}/{total}] {r['trial']}: {line}", flush=True)
+        if r.get("before") != r.get("after") and not r.get("error"):
+            changed.append(r)
+
+    runner.retest(args.job, tasks_dir, settings, force=args.force, on_result=retested)
+    print(f"{len(changed)} attempt(s) changed outcome")
+    print(report.build(args.job))
+    return 0
+
+
 def cmd_report(args) -> int:
     for job in args.jobs:
         print(report.build(job))
@@ -119,6 +138,8 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--setup", help="command that installs dependencies (Go and Python have a default)")
     p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
+    p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
+                   help=f"skip PRs that change more lines than this (default {tasks.DEFAULT_MAX_LINES})")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -176,6 +197,14 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("--concurrency", type=int, default=8)
     j.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     j.set_defaults(func=cmd_rejudge)
+
+    t = sub.add_parser("retest", help="rerun a finished run's hidden tests from its saved diffs, with each "
+                       "attempt's own test changes set aside (no model calls)")
+    t.add_argument("job", type=Path)
+    t.add_argument("--concurrency", type=int, default=2)
+    t.add_argument("--force", action="store_true", help="also attempts already retested")
+    t.add_argument("--image", default=runner.DEFAULT_IMAGE)
+    t.set_defaults(func=cmd_retest)
 
     k = sub.add_parser("cleanup", help="remove trial containers a killed run left behind")
     k.add_argument("--run-id")

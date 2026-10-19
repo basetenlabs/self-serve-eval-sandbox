@@ -22,7 +22,7 @@ from . import config, report, runner, tasks
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JOBS = ROOT / "jobs"
-DEFAULT_MODELS = ["claude-opus", "glm-5.3"]
+DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash"]
 DEFAULT_LIMIT = 10
 ACTIVE = ("collecting", "checking", "running")
 
@@ -48,6 +48,7 @@ class Request:
     setup: str | None = None
     test: str | None = None
     language: str | None = None
+    max_lines: int = tasks.DEFAULT_MAX_LINES
     task_ids: list[str] | None = None  # exactly these task folders instead
 
     def describe(self) -> str:
@@ -95,10 +96,10 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
         config.credential_env(model)  # fail now, not inside every container
     if judge_choice == "none":
         return models, None
-    if not judge.api_key:
-        raise SystemExit(f"the judge needs {judge.api_key_env}; set it, or pass --judge none to score on tests only")
     if judge_choice != "default":
         judge.model = judge_choice
+    if problem := judge.problem():
+        raise SystemExit(problem)
     return models, judge
 
 
@@ -130,7 +131,7 @@ def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
     if request.repos:
         paths = [path for repo in request.repos for path in tasks.collect(
             repo, tasks_dir, prs=request.prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
-            setup=request.setup, test=request.test, language=request.language)]
+            setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines)]
         return [tasks.load(p) for p in paths]
     paths = [path for repo, prs in tasks.sample().items() for path in tasks.collect(repo, tasks_dir, prs=prs)]
     found = sorted((tasks.load(p) for p in paths), key=lambda t: t.meta["task"]["merged_at"])
