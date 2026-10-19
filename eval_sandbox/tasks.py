@@ -39,9 +39,10 @@ SAMPLE = ROOT / "configs" / "sample_tasks.toml"
 # Scans of recent PRs take only those up to DEFAULT_MAX_LINES; bigger ones cost a lot per
 # attempt and tell little. PRs asked for by number may go up to MAX_LINES.
 MAX_FILES, MAX_LINES, DEFAULT_MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 40, 1600, 400, 400_000, 80
-TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|testing|fixtures)(/|$)"
-                       r"|(?:_test\.go|[._](?:test|spec)\.[cm]?[jt]sx?|^test_[^/]+\.py|/test_[^/]+\.py)$", re.I)
-SOURCE_FILE = re.compile(r"\.(?:py|go|[cm]?[jt]sx?|rs|c|cpp|h|java|rb|php)$", re.I)
+# Test files, and what only tests read (Go testdata, snapshots): all of it is hidden from the agent.
+TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|__snapshots__|testing|testdata|fixtures)(/|$)"
+                       r"|(?:_test\.go|[._](?:test|spec)\.[cm]?[jt]sx?|^test_[^/]+\.py|/test_[^/]+\.py|\.snap)$", re.I)
+SOURCE_FILE = re.compile(r"\.(?:py|go|[cm]?[jt]sx?|rs|c|cc|cpp|h|hpp|java|kt|kts|scala|swift|cs|rb|php|ex|exs)$", re.I)
 MAINTENANCE = re.compile(r"\b(bump|dependabot|renovate|release|changelog|typo|readme|ci|workflow|pre-commit|"
                          r"formatting|linting|translations?)\b", re.I)
 CLOSES_ISSUE = re.compile(r"\b(?:fix(?:es|ed)?|clos(?:e[sd]?|ing)|resolv(?:e[sd]?|ing))\s+"
@@ -173,6 +174,26 @@ def request(repo: str, pr: dict) -> tuple[str, str]:
     return f"{pr['title']}\n\n{body}", "pr-description"
 
 
+def base_commit(mirror: Path, repo: str, pr: dict, reference: str) -> str:
+    """What the default branch looked like just before the PR landed.
+
+    For a merge commit, its first parent; for a squash merge, its parent. A rebase merge
+    lays the PR's commits onto the branch one by one and `merge_commit_sha` is only the
+    last, so its parent already holds the PR's earlier commits: step back past all of them.
+    """
+    parents = git(mirror, "rev-list", "--parents", "-n", "1", reference).decode().split()
+    if len(parents) < 2:
+        raise Skip("the merge has no parent commit")
+    if len(parents) > 2:
+        return parents[1]
+    commits = gh(f"repos/{repo}/pulls/{pr['number']}/commits?per_page=100")
+    if len(commits) > 1:
+        landed = git(mirror, "log", "--format=%s", f"-n{len(commits)}", reference).decode().splitlines()
+        if landed == [(c["commit"]["message"].splitlines() or [""])[0] for c in reversed(commits)]:
+            return git(mirror, "rev-parse", f"{reference}~{len(commits)}").decode().strip()
+    return parents[1]
+
+
 def changed_files(mirror: Path, base: str, reference: str) -> list[dict]:
     files = []
     for entry in git(mirror, "diff", "--no-renames", "--numstat", "-z", base, reference).decode().split("\0"):
@@ -205,10 +226,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     """Write tasks/<id> for one merged pull request. Raises Skip if it can't be a task."""
     reference = pr["merge_commit_sha"]
     ensure_commit(mirror, reference)
-    parents = git(mirror, "rev-list", "--parents", "-n", "1", reference).decode().split()
-    if len(parents) < 2:
-        raise Skip("the merge has no parent commit")
-    base = parents[1]  # what the default branch looked like just before the merge
+    base = base_commit(mirror, repo, pr, reference)
     files = changed_files(mirror, base, reference)
     test_paths = [f["path"] for f in files if f["role"] == "test"]
     if not test_paths or not any(f["role"] == "implementation" for f in files):
@@ -226,9 +244,13 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
             package_json = json.loads(git(mirror, "show", f"{base}:package.json"))
         except subprocess.CalledProcessError:
             pass
-    commands = recipe(repo, language, test_paths, package_json) if not (setup and test) else {}
+    present = set(git(mirror, "ls-tree", "-r", "--name-only", reference, "--", *test_paths).decode().splitlines())
+    # {test_files}: the PR's test sources that still exist, not its fixtures or deleted tests
+    runnable = [p for p in test_paths if p in present and SOURCE_FILE.search(p)]
+    commands = recipe(repo, language, runnable, package_json) if not (setup and test) else {}
+    template = test or commands["test"]
     commands = {"setup": setup or commands["setup"], "scope": commands.get("scope", "the given test command"),
-                "test": (test or commands["test"]).replace("{test_files}", " ".join(map(shlex.quote, test_paths)))}
+                "test": template.replace("{test_files}", " ".join(map(shlex.quote, runnable)))}
     text, source = request(repo, pr)
     if len(text.strip()) < MIN_REQUEST_CHARS:
         raise Skip("the PR and its issue say too little to work from")
@@ -239,7 +261,6 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     for folder in ("environment", "tests/files", "solution"):
         (tmp / folder).mkdir(parents=True)
     (tmp / "environment" / "source.tar").write_bytes(git(mirror, "archive", "--format=tar", base))
-    present = set(git(mirror, "ls-tree", "-r", "--name-only", reference, "--", *test_paths).decode().splitlines())
     for path in test_paths:
         if path in present:
             target = tmp / "tests" / "files" / path
@@ -259,7 +280,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
                  "reference_sha": reference, "instruction_source": source},
         "environment": {"setup": commands["setup"], "setup_timeout_sec": 900},
         "agent": {"timeout_sec": 1800},
-        "verifier": {"test": commands["test"], "scope": commands["scope"], "timeout_sec": 900,
+        "verifier": {"test": commands["test"], "test_template": template, "scope": commands["scope"], "timeout_sec": 900,
                      "test_files": test_paths, "deleted_test_files": deleted},
     })
     dest = out / task_id
@@ -286,13 +307,18 @@ def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = Non
     """Task folders for one repository: the given PR numbers, or up to `limit` recent merged PRs.
 
     Folders that already exist are kept unless `force`, so collecting again is cheap and
-    keeps their validation results.
+    keeps their validation results. One made with other install or test commands than
+    these is made again, and so checked again.
     """
     def folder(number: int) -> Path:
         return out / f"{repo.replace('/', '__')}-{number}"
 
     def kept(number: int) -> bool:
-        return not force and (folder(number) / "task.toml").is_file()
+        if force or not (folder(number) / "task.toml").is_file():
+            return False
+        meta = load(folder(number)).meta
+        return ((not setup or meta["environment"]["setup"] == setup)
+                and (not test or meta["verifier"].get("test_template", meta["verifier"]["test"]) == test))
 
     written = [folder(n) for n in prs or [] if kept(n)]
     todo = [n for n in prs or [] if not kept(n)]
@@ -360,6 +386,8 @@ def load(path: Path) -> Task:
 
 
 def discover(tasks_dir: Path, ids=None) -> list[Task]:
+    if not tasks_dir.is_dir():
+        raise SystemExit(f"no tasks in {tasks_dir} yet: `pr-eval run owner/repo` or `pr-eval collect` makes them")
     found = [load(p) for p in sorted(tasks_dir.iterdir()) if (p / "task.toml").is_file()]
     if ids:
         missing = set(ids) - {t.id for t in found}

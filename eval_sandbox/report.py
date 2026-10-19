@@ -148,10 +148,17 @@ def build_data(job_dir: Path) -> dict:
 
 def build(job_dir: Path) -> Path:
     data = build_data(job_dir)
-    (job_dir / "report.json").write_text(json.dumps(data, indent=1))
+    write_atomic(job_dir / "report.json", json.dumps(data, indent=1))
     html = TEMPLATE.read_text()
     payload = json.dumps(data).replace("</", "<\\/")  # never close the script tag early
     html = html.replace("__REPORT_DATA__", payload).replace("__REPORT_TITLE__", f"PR eval · {data['run']['run_id']}")
     target = job_dir / "report.html"
-    target.write_text(html)
+    write_atomic(target, html)
     return target
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """The page reads reports while a run rewrites them; it must never see half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)

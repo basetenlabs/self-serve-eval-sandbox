@@ -144,15 +144,15 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     try:
         if job.meta.get("tasks"):  # resumed after the check: keep the same tasks
             selected = tasks.discover(tasks_dir, job.meta["tasks"])
-            ensure_image(settings.image)
+            prepare_image(job, settings.image)
         else:
             request = Request(**job.meta.get("request") or {})
             job.status("collecting", f"Finding merged pull requests in {request.describe()}")
             candidates = find_tasks(request, tasks_dir)
             if not candidates:
                 raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
+            prepare_image(job, settings.image)
             job.meta["candidates"] = [t.id for t in candidates]
-            ensure_image(settings.image)
             selected = candidates if skip_check else check(job, candidates, settings)
             job.meta["tasks"] = [t.id for t in selected]
         job.meta["harness_version"] = job.meta.get("harness_version") or image_claude_version(settings.image)
@@ -238,6 +238,12 @@ def docker_running() -> bool:
 
 def image_exists(image: str) -> bool:
     return subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0
+
+
+def prepare_image(job: Job, image: str) -> None:
+    if docker_running() and not image_exists(image):
+        job.status("checking", "Building the trial image: first run only, a few minutes")
+    ensure_image(image)
 
 
 def ensure_image(image: str) -> None:
