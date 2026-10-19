@@ -36,7 +36,9 @@ DEFAULT_REPOS = ROOT / "data" / "repos"
 SAMPLE = ROOT / "configs" / "sample_tasks.toml"
 
 # A PR makes a good task when it changes code and tests together and is a reviewable size.
-MAX_FILES, MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 40, 1600, 400_000, 80
+# Scans of recent PRs take only those up to DEFAULT_MAX_LINES; bigger ones cost a lot per
+# attempt and tell little. PRs asked for by number may go up to MAX_LINES.
+MAX_FILES, MAX_LINES, DEFAULT_MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 40, 1600, 400, 400_000, 80
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|testing|fixtures)(/|$)"
                        r"|(?:_test\.go|[._](?:test|spec)\.[cm]?[jt]sx?|^test_[^/]+\.py|/test_[^/]+\.py)$", re.I)
 SOURCE_FILE = re.compile(r"\.(?:py|go|[cm]?[jt]sx?|rs|c|cpp|h|java|rb|php)$", re.I)
@@ -199,7 +201,7 @@ exit "$code"
 
 
 def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
-                setup: str | None = None, test: str | None = None) -> Path:
+                setup: str | None = None, test: str | None = None, max_lines: int = MAX_LINES) -> Path:
     """Write tasks/<id> for one merged pull request. Raises Skip if it can't be a task."""
     reference = pr["merge_commit_sha"]
     ensure_commit(mirror, reference)
@@ -212,7 +214,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     if not test_paths or not any(f["role"] == "implementation" for f in files):
         raise Skip("doesn't change both code and tests")
     lines = sum(f["lines"] for f in files)
-    if len(files) > MAX_FILES or lines > MAX_LINES:
+    if len(files) > MAX_FILES or lines > max_lines:
         raise Skip(f"too large ({len(files)} files, {lines} lines)")
     patch = git(mirror, "diff", "--binary", "--no-renames", base, reference)
     if len(patch) > MAX_PATCH_BYTES:
@@ -279,7 +281,8 @@ def merged_prs(repo: str, since: str | None = None, pages: int = 10):
 
 def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = None, limit: int = 20,
             since: str | None = None, setup: str | None = None, test: str | None = None,
-            language: str | None = None, repos_dir: Path = DEFAULT_REPOS, force: bool = False) -> list[Path]:
+            language: str | None = None, repos_dir: Path = DEFAULT_REPOS, force: bool = False,
+            max_lines: int = DEFAULT_MAX_LINES) -> list[Path]:
     """Task folders for one repository: the given PR numbers, or up to `limit` recent merged PRs.
 
     Folders that already exist are kept unless `force`, so collecting again is cheap and
@@ -312,12 +315,14 @@ def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = Non
         if not prs and len(written) >= limit:
             break
         if kept(pr["number"]):
-            written.append(folder(pr["number"]))
+            if prs or load(folder(pr["number"])).meta["task"]["lines_changed"] <= max_lines:
+                written.append(folder(pr["number"]))
             continue
         try:
             if not prs and MAINTENANCE.search(pr["title"]):
                 raise Skip("maintenance, not a code change")
-            written.append(export_task(mirror, repo, language, pr, out, setup=setup, test=test))
+            written.append(export_task(mirror, repo, language, pr, out, setup=setup, test=test,
+                                       max_lines=MAX_LINES if prs else max_lines))
             print(f"  {repo}#{pr['number']}: {pr['title']}")
         except Skip as why:
             skipped += 1

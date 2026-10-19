@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -75,6 +77,27 @@ class Judge:
     @property
     def api_key(self) -> str | None:
         return os.environ.get(self.api_key_env)
+
+    def problem(self) -> str | None:
+        """Why the judge can't run with this key (no key, or no access to the model), else None.
+
+        Asks the provider's model list, which costs nothing. A network hiccup is not a
+        problem worth stopping for; a missing model is, since every attempt would then
+        come back invalid.
+        """
+        if not self.api_key:
+            return f"the judge needs {self.api_key_env}; set it, or pass --judge none to score on tests only"
+        request = urllib.request.Request(f"{self.base_url}/models/{self.model}",
+                                         headers={"authorization": f"Bearer {self.api_key}"})
+        try:
+            urllib.request.urlopen(request, timeout=10).close()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403, 404):
+                return (f"the key in {self.api_key_env} can't use the judge model {self.model} (HTTP {exc.code}); "
+                        "use a key that can, or set [judge] model in configs/models.toml")
+        except (urllib.error.URLError, TimeoutError):
+            pass
+        return None
 
 
 def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Judge]:
