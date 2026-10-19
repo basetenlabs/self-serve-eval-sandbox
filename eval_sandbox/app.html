@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR eval</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee; --surface-3: #ebeae4;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #7a7873; --hairline: #e1e0d9; --axis: #c3c2b7;
+  --good: #0ca30c; --good-ink: #006300; --bad: #d03b3b; --bad-ink: #a32424; --warn-ink: #8a5a00;
+  --good-wash: rgba(12,163,12,0.10); --bad-wash: rgba(208,59,59,0.09); --warn-wash: rgba(250,178,25,0.16);
+  --accent: #1c5cab; --accent-wash: rgba(28,92,171,0.08);
+  --shadow: 0 1px 2px rgba(11,11,11,0.04), 0 4px 16px rgba(11,11,11,0.04);
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220; --surface-3: #2c2c2a;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8f8d86; --hairline: #2c2c2a; --axis: #383835;
+    --good-ink: #3fc23f; --bad-ink: #f07070; --warn-ink: #fab219;
+    --good-wash: rgba(12,163,12,0.16); --bad-wash: rgba(208,59,59,0.16); --warn-wash: rgba(250,178,25,0.14);
+    --accent: #86b6ef; --accent-wash: rgba(134,182,239,0.12);
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220; --surface-3: #2c2c2a;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8f8d86; --hairline: #2c2c2a; --axis: #383835;
+  --good-ink: #3fc23f; --bad-ink: #f07070; --warn-ink: #fab219;
+  --good-wash: rgba(12,163,12,0.16); --bad-wash: rgba(208,59,59,0.16); --warn-wash: rgba(250,178,25,0.14);
+  --accent: #86b6ef; --accent-wash: rgba(134,182,239,0.12);
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select { font: inherit; color: inherit; }
+code { font: 12.5px var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 640px) { .wrap { padding: 0 16px; } }
+
+.top { border-bottom: 1px solid var(--hairline); background: var(--surface); }
+.top .wrap { display: flex; align-items: center; gap: 16px; height: 52px; }
+.brand { font-weight: 650; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 18px; height: 18px; border-radius: 5px; background: var(--ink); display: grid; place-items: center; }
+.brand-mark::after { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--page); }
+.top .sub { color: var(--muted); font-size: 13px; }
+.top .spacer { flex: 1; }
+.btn { border: 1px solid var(--hairline); background: var(--surface); border-radius: 8px; height: 32px; padding: 0 12px;
+  cursor: pointer; color: var(--ink-2); font-size: 13.5px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.btn:hover { background: var(--surface-2); text-decoration: none; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; height: 40px; padding: 0 18px; font-size: 15px; }
+.btn.primary:hover { opacity: .9; }
+
+.hero { padding: 36px 0 20px; }
+h1 { font-size: clamp(24px, 3.4vw, 32px); line-height: 1.2; letter-spacing: -0.02em; font-weight: 650; margin: 0 0 10px; max-width: 760px; text-wrap: balance; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; font-size: 16px; }
+h2 { font-size: 17px; letter-spacing: -0.01em; margin: 0 0 4px; font-weight: 650; }
+section { padding: 8px 0 24px; }
+.card { background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: var(--shadow); }
+
+.start { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .start { grid-template-columns: 1fr; } }
+form.card { padding: 20px 22px 22px; display: grid; gap: 18px; }
+.field { display: grid; gap: 6px; }
+.field > label, legend { font-weight: 600; font-size: 14px; padding: 0; }
+.hint { color: var(--muted); font-size: 13px; margin: 0; }
+input[type=text], select { border: 1px solid var(--hairline); background: var(--page); border-radius: 9px; height: 40px; padding: 0 12px; width: 100%; }
+input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.source { display: flex; gap: 8px; flex-wrap: wrap; }
+.source label { flex: 1; min-width: 200px; border: 1px solid var(--hairline); border-radius: 10px; padding: 10px 12px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; }
+.source label:has(input:checked) { border-color: var(--accent); background: var(--accent-wash); }
+.source b { display: block; font-size: 14px; }
+.source span { color: var(--muted); font-size: 12.5px; }
+.source input { margin-top: 3px; }
+.repo-status { font-size: 13px; min-height: 19px; }
+.repo-status.ok { color: var(--good-ink); }
+.repo-status.bad { color: var(--bad-ink); }
+fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+.models { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.model { border: 1px solid var(--hairline); border-radius: 10px; padding: 9px 12px; display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.model:has(input:checked) { border-color: var(--accent); background: var(--accent-wash); }
+.model.off { opacity: .55; cursor: default; }
+.model b { font-size: 14px; font-weight: 600; display: block; }
+.model span { color: var(--muted); font-size: 12.5px; }
+.model input { margin-top: 3px; }
+.inline { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; }
+.inline .field { min-width: 160px; }
+details.commands { border: 1px solid var(--hairline); border-radius: 10px; padding: 10px 12px; }
+details.commands summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+details.commands .grid { display: grid; gap: 10px; margin-top: 10px; }
+.go { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; }
+.plan { color: var(--ink-2); font-size: 13.5px; }
+.error { color: var(--bad-ink); background: var(--bad-wash); border-radius: 9px; padding: 9px 12px; font-size: 14px; margin: 0; }
+.error:empty { display: none; }
+
+aside.card { padding: 20px 22px; }
+.checks { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; }
+.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; font-size: 14px; }
+.mark { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.mark.ok { background: var(--good-wash); color: var(--good-ink); }
+.mark.no { background: var(--bad-wash); color: var(--bad-ink); }
+.mark.wait { background: var(--warn-wash); color: var(--warn-ink); }
+.checks .fix { color: var(--muted); font-size: 12.5px; display: block; margin-top: 2px; }
+
+.runs { display: grid; gap: 12px; margin-top: 12px; }
+.run { padding: 16px 18px; display: grid; gap: 10px; }
+.run-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.run-title { font-weight: 650; font-size: 16px; }
+.run-meta { color: var(--muted); font-size: 13px; }
+.run-head .actions { margin-left: auto; display: flex; gap: 8px; }
+.phase { font-size: 12px; font-weight: 650; border-radius: 6px; padding: 2px 8px; }
+.phase.done { background: var(--good-wash); color: var(--good-ink); }
+.phase.failed { background: var(--bad-wash); color: var(--bad-ink); }
+.phase.stopped { background: var(--warn-wash); color: var(--warn-ink); }
+.phase.active { background: var(--accent-wash); color: var(--accent); }
+.detail { color: var(--ink-2); font-size: 13.5px; margin: 0; }
+.meter { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+.results { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 13.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.results b { color: var(--ink); font-weight: 600; }
+.left-out { font-size: 13px; color: var(--muted); }
+.left-out summary { cursor: pointer; }
+.left-out ul { margin: 6px 0 0; padding-left: 18px; }
+pre.log { margin: 0; max-height: 220px; overflow: auto; background: var(--page); border: 1px solid var(--hairline); border-radius: 8px; padding: 8px 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; }
+.empty { color: var(--muted); padding: 20px; text-align: center; }
+
+.how ol { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); max-width: 820px; }
+.how li { margin: 6px 0; }
+footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PR eval</div>
+    <span class="sub">Self-serve eval sandbox</span>
+    <span class="spacer"></span>
+    <button class="btn" id="theme" type="button" aria-label="Toggle color theme">Theme</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <h1>Can an open model do your team's coding work?</h1>
+    <p class="lede">Pick a GitHub repository. Its recent merged pull requests become tasks: every model gets the same request and the code as it was before the change, works on it with Claude Code in its own container, and the PR's own tests plus an AI judge decide whether it solved it. You get solve rate and cost per solved task, side by side.</p>
+  </div>
+
+  <section class="start" aria-label="Start a run">
+    <form class="card" id="form" novalidate>
+      <h2>Start a run</h2>
+
+      <div class="field">
+        <span class="sr-only" id="source-label">What to test on</span>
+        <div class="source" role="radiogroup" aria-labelledby="source-label">
+          <label><input type="radio" name="source" value="repo" checked><div><b>Your repository</b><span>Recent merged PRs from any GitHub repo you can read</span></div></label>
+          <label><input type="radio" name="source" value="sample"><div><b>The sample</b><span id="sample-text">Merged PRs from public repos, ready to go</span></div></label>
+        </div>
+      </div>
+
+      <div class="field" id="repo-field">
+        <label for="repo">GitHub repository</label>
+        <input type="text" id="repo" placeholder="owner/repo, or paste the GitHub link" autocomplete="off" spellcheck="false">
+        <div class="repo-status" id="repo-status" role="status"></div>
+      </div>
+
+      <div class="inline">
+        <div class="field">
+          <label for="limit">Pull requests</label>
+          <select id="limit"></select>
+        </div>
+        <p class="hint" style="flex:1;min-width:220px">The most recent ones that change both code and tests. Each is checked first: its tests must fail before the change and pass after it.</p>
+      </div>
+
+      <fieldset>
+        <legend>Models to compare</legend>
+        <div class="models" id="models"><span class="hint">Loading…</span></div>
+      </fieldset>
+
+      <details class="commands" id="commands">
+        <summary>Install and test commands <span class="hint" id="commands-hint">(optional for Go and Python)</span></summary>
+        <div class="grid">
+          <p class="hint">Run inside the container, in the repository's folder. <code>{test_files}</code> becomes the PR's changed test files.</p>
+          <div class="field"><label for="setup">Install</label><input type="text" id="setup" placeholder="npm ci" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="test">Test</label><input type="text" id="test" placeholder="npx vitest run {test_files}" autocomplete="off" spellcheck="false"></div>
+        </div>
+      </details>
+
+      <div class="go">
+        <button class="btn primary" id="start" type="submit">Start run</button>
+        <span class="plan" id="plan"></span>
+      </div>
+      <p class="error" id="form-error" role="alert"></p>
+    </form>
+
+    <aside class="card" aria-labelledby="ready-title">
+      <h2 id="ready-title">Ready to run?</h2>
+      <ul class="checks" id="checks"><li><span class="mark wait">…</span><span>Checking</span></li></ul>
+    </aside>
+  </section>
+
+  <section aria-labelledby="runs-title">
+    <h2 id="runs-title">Runs</h2>
+    <div class="runs" id="runs"></div>
+  </section>
+
+  <section class="how" aria-labelledby="how-title">
+    <h2 id="how-title">How a run works</h2>
+    <ol>
+      <li><b>Find.</b> The repository's recent merged pull requests that change both code and tests. The PR's text, or the issue it closes, is the request; the code just before the merge is the starting point.</li>
+      <li><b>Check.</b> Each PR's tests must fail before the change and pass after it, in the same container the models use. PRs that don't are left out: that's a setup problem, not a model's.</li>
+      <li><b>Run.</b> Each model works on each task in a fresh container through Claude Code, with GitHub and package registries blocked so it can't look up the answer.</li>
+      <li><b>Grade.</b> The PR's hidden tests run against the model's change, then an AI judge compares it with the merged change. Solved means both agree.</li>
+    </ol>
+  </section>
+  <footer>Runs are ordinary <code>pr-eval run</code> processes, so they keep going if this page is closed. The same works from a terminal: <code>pr-eval run owner/repo --models claude-opus,deepseek-v4.1-flash</code>.</footer>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") n.className = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const kid of kids.flat()) if (kid != null && kid !== false) n.append(kid instanceof Node ? kid : String(kid));
+    return n;
+  };
+  const pct = (x) => x == null ? "–" : `${Math.round(x * 100)}%`;
+  const usd = (x) => x == null ? "–" : x >= 1 ? `$${x.toFixed(2)}` : `$${x.toFixed(3)}`;
+  const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+  const ACTIVE = ["collecting", "checking", "running"];
+  const PHASE = { collecting: "Finding PRs", checking: "Checking PRs", running: "Running", done: "Done", stopped: "Stopped", failed: "Failed" };
+
+  // theme
+  try { const t = localStorage.getItem("pr-eval-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  $("theme").addEventListener("click", () => {
+    const d = document.documentElement.dataset.theme;
+    const dark = d ? d === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("pr-eval-theme", document.documentElement.dataset.theme); } catch (e) {}
+  });
+
+  async function api(path, body) {
+    const res = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({ error: `The server answered ${res.status}.` }));
+    return data;
+  }
+
+  let state = null, repoInfo = null, stopping = new Set(), formReady = false;
+  const source = () => document.querySelector("input[name=source]:checked").value;
+
+  // ---------- form ----------
+  function buildForm() {
+    const limit = $("limit");
+    for (const n of [5, 10, 20, 40]) limit.append(el("option", { value: n, selected: n === state.default_limit }, `${n} pull requests`));
+    $("sample-text").textContent = `${state.sample.tasks} merged PRs from ${state.sample.repos} public repos, ready to go`;
+    const models = $("models");
+    models.replaceChildren();
+    for (const m of state.models) {
+      const kind = m.kind === "closed" ? "Closed" : "Open";
+      const where = m.provider === "baseten" ? "Baseten" : m.provider === "anthropic" ? "Anthropic" : m.provider;
+      models.append(el("label", { class: `model${m.missing ? " off" : ""}`, title: m.missing || "" },
+        el("input", { type: "checkbox", value: m.key, checked: m.default && !m.missing, disabled: !!m.missing, onchange: plan }),
+        el("div", {}, el("b", {}, m.label), el("span", {}, m.missing ? "Needs its API key (see the checklist)" : `${kind} · ${where}`))));
+    }
+    document.querySelectorAll("input[name=source]").forEach((r) => r.addEventListener("change", () => {
+      $("repo-field").hidden = source() === "sample";
+      $("commands").hidden = source() === "sample";
+      plan();
+    }));
+    limit.addEventListener("change", plan);
+    let timer;
+    $("repo").addEventListener("input", () => { clearTimeout(timer); repoInfo = null; status("", ""); timer = setTimeout(lookUp, 500); plan(); });
+    $("form").addEventListener("submit", start);
+    $("form").addEventListener("input", () => { $("form-error").textContent = ""; });
+    formReady = true;
+    plan();
+  }
+
+  function status(text, cls) { const s = $("repo-status"); s.textContent = text; s.className = `repo-status ${cls}`; }
+
+  async function lookUp() {
+    const text = $("repo").value.trim();
+    if (!text) return;
+    status("Looking it up…", "");
+    const info = await api(`/api/repo?name=${encodeURIComponent(text)}`);
+    if ($("repo").value.trim() !== text) return;
+    repoInfo = info;
+    if (info.error) return status(info.error, "bad");
+    const what = `${info.repo} · ${info.language}${info.private ? " · private" : ""}`;
+    if (info.defaults) { status(`${what}. Ready.`, "ok"); $("commands-hint").textContent = "(optional: it has defaults)"; }
+    else {
+      status(`${what}. Tell it how to install and run the tests below.`, "bad");
+      $("commands").open = true; $("commands-hint").textContent = `(needed for ${info.language})`;
+    }
+  }
+
+  function chosenModels() { return [...document.querySelectorAll("#models input:checked")].map((i) => i.value); }
+
+  function plan() {
+    if (!formReady) return;
+    const keys = chosenModels(), n = Number($("limit").value);
+    const models = state.models.filter((m) => keys.includes(m.key));
+    let text = `${n} PRs × ${keys.length} ${keys.length === 1 ? "model" : "models"} = up to ${n * keys.length} attempts.`;
+    if (models.length && models.every((m) => m.cost_per_attempt != null)) {
+      const cost = models.reduce((s, m) => s + m.cost_per_attempt * n, 0);
+      const minutes = Math.max(...models.map((m) => m.seconds_per_attempt || 0)) * n * keys.length / 4 / 60;
+      text += ` About ${usd(cost)}${minutes ? ` and ${Math.max(5, Math.round(minutes / 5) * 5)} minutes` : ""}, going by earlier runs.`;
+    }
+    $("plan").textContent = text;
+    $("start").disabled = !keys.length || (state && state.busy);
+    if (state && state.busy) $("plan").textContent = "A run is going. You can start another when it finishes.";
+  }
+
+  async function start(e) {
+    e.preventDefault();
+    $("form-error").textContent = "";
+    const body = { sample: source() === "sample", repo: $("repo").value, limit: Number($("limit").value),
+                   models: chosenModels(), setup: $("setup").value, test: $("test").value };
+    $("start").disabled = true;
+    $("start").textContent = "Starting…";
+    const res = await api("/api/runs", body);
+    $("start").textContent = "Start run";
+    if (res.error) { $("form-error").textContent = res.error; $("start").disabled = false; return; }
+    await refresh(true);
+    document.getElementById(`run-${res.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  // ---------- checklist ----------
+  function renderChecks() {
+    const c = state.checks;
+    const baseten = state.models.find((m) => m.provider === "baseten");
+    const claude = state.models.find((m) => m.provider === "anthropic");
+    const items = [
+      [c.docker, "Docker is running", "Start Docker Desktop, or run colima start --cpu 8 --memory 12"],
+      [c.gh, "Signed in to GitHub", "Run gh auth login in a terminal (only needed for your own repository)"],
+      [c.image ? true : null, c.image ? "Trial image is built" : "Trial image builds on the first run", "A few minutes, once"],
+      [baseten && !baseten.missing, "Baseten key, for open models", "Set BASETEN_API_KEY, then restart pr-eval serve"],
+      [claude && !claude.missing, "Claude key, for Claude models", "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve"],
+      [c.judge.ok, `Judge key (${c.judge.model})`, `Set ${c.judge.env}, then restart pr-eval serve`],
+    ];
+    $("checks").replaceChildren(...items.map(([ok, label, fix]) => el("li", {},
+      el("span", { class: `mark ${ok === true ? "ok" : ok === null ? "wait" : "no"}`, "aria-hidden": "true" }, ok === true ? "✓" : ok === null ? "·" : "✗"),
+      el("span", {}, label, ok === true ? null : el("span", { class: "fix" }, fix)))));
+  }
+
+  // ---------- runs ----------
+  function renderRuns() {
+    const host = $("runs");
+    if (!state.runs.length) { host.replaceChildren(el("div", { class: "card empty" }, "No runs yet. Start one above.")); return; }
+    host.replaceChildren(...state.runs.map(runCard));
+  }
+
+  function runCard(r) {
+    const active = ACTIVE.includes(r.phase);
+    const vs = r.models.length > 2 ? `${r.models.length} models` : r.models.map((m) => m.label).join(" vs ");
+    const actions = el("div", { class: "actions" },
+      r.report ? el("a", { class: "btn", href: r.report }, "Open report") : null,
+      active ? el("button", { class: "btn", type: "button", disabled: stopping.has(r.id), onclick: () => stop(r.id) }, stopping.has(r.id) ? "Stopping…" : "Stop") : null,
+      r.resumable ? el("button", { class: "btn", type: "button", disabled: state.busy, onclick: () => resume(r.id) }, "Resume") : null);
+    const card = el("div", { class: "card run", id: `run-${r.id}` },
+      el("div", { class: "run-head" },
+        el("span", { class: "run-title" }, r.title),
+        el("span", { class: `phase ${active ? "active" : r.phase}` }, PHASE[r.phase] || r.phase),
+        el("span", { class: "run-meta" }, [r.tasks ? `${r.tasks} PR${r.tasks === 1 ? "" : "s"}` : null, vs, when(r.started)].filter(Boolean).join(" · ")),
+        actions));
+    const p = r.progress, k = r.checking;
+    let line = null, share = null;
+    if (r.phase === "checking" && k.total) {
+      line = `Checking pull requests: ${k.done} of ${k.total}. Each PR's tests have to fail before the change and pass after it.`;
+      share = k.done / k.total;
+    } else if (r.phase === "running") {
+      line = `${p.done} of ${p.total} attempts finished.`;
+      share = p.total ? p.done / p.total : 0;
+    } else if (r.phase === "stopped") {
+      line = `Stopped${p.total ? ` with ${p.done} of ${p.total} attempts finished` : ""}. Resume to carry on where it left off.`;
+    } else if (r.phase !== "done") {
+      line = r.detail;
+    }
+    if (line) card.append(el("p", { class: "detail" }, line));
+    if (share != null) card.append(el("div", { class: "meter" }, el("i", { style: `width:${100 * share}%` })));
+    const results = r.models.filter((m) => r.summary[m.key] && r.summary[m.key].valid);
+    if (results.length) card.append(el("div", { class: "results" }, results.map((m) => {
+      const s = r.summary[m.key];
+      return el("span", {}, el("b", {}, m.label), ` ${pct(s.pass_at_1)} solved (${s.solved}/${s.valid}) · ${usd(s.cost_per_solved)} per solved task`);
+    })));
+    if (r.left_out.length) card.append(el("details", { class: "left-out" },
+      el("summary", {}, `${r.left_out.length} PR${r.left_out.length === 1 ? "" : "s"} left out after the check (setup, not the models)`),
+      el("ul", {}, r.left_out.map((t) => el("li", {}, `#${t.pr}: ${t.why}`)))));
+    if (r.note) card.append(el("p", { class: "detail" }, r.note));
+    if (r.log) card.append(el("details", { class: "left-out", open: r.phase === "failed" }, el("summary", {}, "Last lines of the run's log"), el("pre", { class: "log" }, r.log)));
+    return card;
+  }
+
+  async function stop(id) {
+    stopping.add(id); renderRuns();
+    const res = await api(`/api/runs/${encodeURIComponent(id)}/stop`, {});
+    if (res.error) { stopping.delete(id); alert(res.error); }
+    refresh(true);
+  }
+  async function resume(id) {
+    const res = await api(`/api/runs/${encodeURIComponent(id)}/resume`, {});
+    if (res.error) alert(res.error);
+    refresh(true);
+  }
+
+  // ---------- polling ----------
+  let timer = null, hurryUntil = 0;  // poll quickly for a while after starting, stopping or resuming
+  async function refresh(hurry = false) {
+    clearTimeout(timer);
+    if (hurry) hurryUntil = Date.now() + 20000;
+    try {
+      state = await api("/api/state");
+      for (const id of [...stopping]) if (!ACTIVE.includes((state.runs.find((r) => r.id === id) || {}).phase)) stopping.delete(id);
+      if (!formReady) buildForm();
+      renderChecks(); renderRuns(); plan();
+    } catch (e) {
+      $("runs").replaceChildren(el("div", { class: "card empty" }, "Can't reach pr-eval serve. Is it still running?"));
+    }
+    timer = setTimeout(refresh, (state && state.busy) || Date.now() < hurryUntil ? 2500 : 15000);
+  }
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+[project]
+name = "self-serve-eval-sandbox"
+version = "0.0.1"
+description = "Replay merged PRs through Claude Code with a closed and an open model; compare pass rate and cost per solved task."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+pr-eval = "eval_sandbox.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["eval_sandbox"]
+
+[tool.setuptools.package-data]
+eval_sandbox = ["*.html"]

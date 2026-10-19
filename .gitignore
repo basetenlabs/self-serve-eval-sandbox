@@ -6,4 +6,10 @@ __pycache__/
 node_modules/
 jobs/
 results/
+# Repository clones `pr-eval collect` makes; they hold the answers, so they stay local.
+data/
 .DS_Store
+# Exported tasks carry hidden tests and merged diffs; regenerate with `pr-eval collect`.
+tasks/
+*.egg-info/
+build/
