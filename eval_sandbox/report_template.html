@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__REPORT_TITLE__</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee; --surface-3: #ebeae4;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #7a7873; --hairline: #e1e0d9; --axis: #c3c2b7;
+  --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --good: #0ca30c; --good-ink: #006300; --bad: #d03b3b; --bad-ink: #a32424; --warn: #fab219; --warn-ink: #8a5a00;
+  --good-wash: rgba(12,163,12,0.10); --bad-wash: rgba(208,59,59,0.09); --warn-wash: rgba(250,178,25,0.16);
+  --add: rgba(12,163,12,0.12); --del: rgba(208,59,59,0.10);
+  --accent: #1c5cab;
+  --shadow: 0 1px 2px rgba(11,11,11,0.04), 0 4px 16px rgba(11,11,11,0.04);
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220; --surface-3: #2c2c2a;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8f8d86; --hairline: #2c2c2a; --axis: #383835;
+    --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+    --good-ink: #3fc23f; --bad-ink: #f07070; --warn-ink: #fab219;
+    --good-wash: rgba(12,163,12,0.16); --bad-wash: rgba(208,59,59,0.16); --warn-wash: rgba(250,178,25,0.14);
+    --add: rgba(12,163,12,0.18); --del: rgba(208,59,59,0.18);
+    --accent: #86b6ef;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220; --surface-3: #2c2c2a;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8f8d86; --hairline: #2c2c2a; --axis: #383835;
+  --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  --good-ink: #3fc23f; --bad-ink: #f07070; --warn-ink: #fab219;
+  --good-wash: rgba(12,163,12,0.16); --bad-wash: rgba(208,59,59,0.16); --warn-wash: rgba(250,178,25,0.14);
+  --add: rgba(12,163,12,0.18); --del: rgba(208,59,59,0.18);
+  --accent: #86b6ef;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 640px) { .wrap { padding: 0 16px; } }
+
+/* top bar */
+.top { border-bottom: 1px solid var(--hairline); background: var(--surface); }
+.top .wrap { display: flex; align-items: center; gap: 16px; height: 52px; }
+.brand { font-weight: 650; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 18px; height: 18px; border-radius: 5px; background: var(--ink); display: grid; place-items: center; }
+.brand-mark::after { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--page); }
+.top .sub { color: var(--muted); font-size: 13px; }
+.top .spacer { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--hairline); color: var(--ink-2); background: var(--surface); white-space: nowrap; }
+.icon-btn { border: 1px solid var(--hairline); background: var(--surface); border-radius: 8px; height: 30px; padding: 0 10px; cursor: pointer; color: var(--ink-2); font-size: 13px; }
+.icon-btn:hover { background: var(--surface-2); }
+a.icon-btn { display: inline-flex; align-items: center; text-decoration: none; }
+.icon-btn[hidden] { display: none; }
+
+/* hero */
+.hero { padding: 40px 0 8px; }
+.eyebrow { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.eyebrow span + span::before { content: "·"; margin-right: 14px; color: var(--axis); }
+h1 { font-size: clamp(24px, 3.4vw, 34px); line-height: 1.2; letter-spacing: -0.02em; font-weight: 650; margin: 12px 0 10px; max-width: 920px; text-wrap: balance; }
+.lede { color: var(--ink-2); max-width: 820px; margin: 0; font-size: 16px; }
+.banner { margin: 20px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--warn-wash); color: var(--ink); font-size: 14px; display: flex; gap: 10px; align-items: baseline; }
+.banner b { color: var(--warn-ink); }
+
+/* sections */
+section { padding: 28px 0 8px; }
+h2 { font-size: 17px; letter-spacing: -0.01em; margin: 0 0 4px; font-weight: 650; }
+.section-sub { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; max-width: 760px; }
+.card { background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: var(--shadow); }
+
+/* scorecards */
+.scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+@media (min-width: 860px) { .scores { grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); } }
+.score { padding: 18px 18px 14px; position: relative; }
+.score-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.score-name { font-weight: 600; }
+.score-head .chip { margin-left: auto; }
+.leads { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 8px; }
+.lead { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--good-wash); color: var(--good-ink); }
+.hero-num { font-size: 44px; font-weight: 650; letter-spacing: -0.03em; line-height: 1; }
+.hero-num small { font-size: 18px; font-weight: 600; letter-spacing: 0; color: var(--ink-2); margin-left: 2px; }
+.hero-label { color: var(--muted); font-size: 13px; margin-top: 6px; }
+.meter { height: 6px; border-radius: 3px; background: var(--surface-3); margin: 12px 0 14px; overflow: hidden; }
+.meter > i { display: block; height: 100%; border-radius: 3px; }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; font-size: 13.5px; border-top: 1px solid var(--hairline); padding-top: 12px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; font-weight: 550; }
+.kv dd.big { font-size: 15px; }
+.ci { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* benchmark table */
+.bench-card { padding: 6px 6px 10px; }
+table.bench { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.bench th { text-align: right; font-weight: 500; color: var(--muted); font-size: 12px; padding: 10px 14px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+table.bench td { text-align: right; padding: 11px 14px; border-bottom: 1px solid var(--hairline); font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.bench th:first-child, table.bench td:first-child { text-align: left; }
+table.bench td:first-child { font-weight: 600; }
+table.bench td .sub { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.bench-foot { display: flex; align-items: center; gap: 10px; padding: 10px 8px 0; }
+
+/* charts */
+.charts { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 14px; }
+@media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+.chart-card { padding: 18px; }
+.chart-card h3 { margin: 0; font-size: 14.5px; font-weight: 600; }
+.chart-card p { margin: 2px 0 10px; color: var(--muted); font-size: 13px; }
+svg text { font-family: var(--sans); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); margin: 4px 0 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tooltip { position: fixed; pointer-events: none; z-index: 50; background: var(--surface); border: 1px solid var(--hairline);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.12); border-radius: 10px; padding: 9px 11px; font-size: 12.5px; min-width: 160px; opacity: 0; transition: opacity .08s; }
+.tooltip .tt-title { color: var(--ink-2); margin-bottom: 4px; }
+.tooltip .tt-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.tooltip .tt-row b { font-weight: 650; color: var(--ink); }
+.tooltip .key { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
+
+/* slice table */
+.slice-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.slice-table th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 0 8px 8px; border-bottom: 1px solid var(--hairline); }
+.slice-table td { padding: 7px 8px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+.slice-table tr.group td { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; padding-top: 14px; border-bottom: 0; }
+.slice-table td.label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slice-table td.label small { color: var(--muted); margin-left: 4px; }
+.slice-table { table-layout: fixed; }
+.slice-table th:first-child, .slice-table td.label { width: 32%; }
+.bar-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bar-track { flex: 1; height: 8px; border-radius: 2px; background: var(--surface-3); position: relative; min-width: 24px; }
+.bar-track > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 3px 3px 0; }
+.bar-cell b { font-weight: 600; font-variant-numeric: tabular-nums; width: 36px; flex: none; text-align: right; font-size: 12.5px; }
+
+/* task grid */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.filters select, .filters input { font: inherit; font-size: 13.5px; color: var(--ink); background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px; height: 32px; padding: 0 10px; }
+.filters input { min-width: 220px; flex: 1; max-width: 320px; }
+.filters .count { color: var(--muted); font-size: 13px; margin-left: auto; }
+.grid-wrap { overflow-x: auto; }
+table.tasks { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.tasks th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 10px 12px; border-bottom: 1px solid var(--hairline); white-space: nowrap; position: sticky; top: 0; background: var(--surface); }
+table.tasks th.m { text-align: center; }
+table.tasks td { padding: 10px 12px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+table.tasks tbody tr { cursor: pointer; }
+table.tasks tbody tr:hover td, table.tasks tbody tr:focus-visible td { background: var(--surface-2); }
+table.tasks tbody tr:focus-visible { outline: none; }
+.t-title { font-weight: 550; display: block; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-meta { color: var(--muted); font-size: 12px; }
+.pips { display: flex; gap: 4px; justify-content: center; }
+.pip { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.pip.solved { background: var(--good-wash); color: var(--good-ink); }
+.pip.failed { background: var(--bad-wash); color: var(--bad-ink); }
+.pip.invalid { background: var(--warn-wash); color: var(--warn-ink); }
+.pip.pending { background: var(--surface-3); color: var(--muted); }
+.tag { font-size: 11.5px; color: var(--ink-2); background: var(--surface-2); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.28); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 30; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 100vw); background: var(--surface); border-left: 1px solid var(--hairline);
+  transform: translateX(102%); transition: transform .2s ease; z-index: 40; display: flex; flex-direction: column; }
+.drawer.open { transform: none; }
+.drawer-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--hairline); display: flex; gap: 12px; align-items: flex-start; }
+.drawer-head h3 { margin: 2px 0 4px; font-size: 18px; line-height: 1.3; letter-spacing: -0.01em; }
+.drawer-body { overflow-y: auto; padding: 18px 22px 40px; }
+.drawer .close { margin-left: auto; }
+details.instr { border: 1px solid var(--hairline); border-radius: 10px; padding: 10px 14px; margin-bottom: 18px; background: var(--surface-2); }
+details.instr summary { cursor: pointer; font-weight: 550; font-size: 13.5px; }
+details.instr pre { white-space: pre-wrap; font: 13px/1.55 var(--sans); color: var(--ink-2); margin: 10px 0 0; }
+.attempt { border: 1px solid var(--hairline); border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
+.attempt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 11px 14px; background: var(--surface-2); }
+.attempt-head .who { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.attempt-head .stats { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; margin-left: auto; }
+.outcome { font-size: 12px; font-weight: 650; border-radius: 6px; padding: 2px 8px; display: inline-flex; gap: 5px; align-items: center; }
+.outcome.solved { background: var(--good-wash); color: var(--good-ink); }
+.outcome.failed { background: var(--bad-wash); color: var(--bad-ink); }
+.outcome.invalid { background: var(--warn-wash); color: var(--warn-ink); }
+.attempt-body { padding: 12px 14px; display: grid; gap: 8px; font-size: 13.5px; }
+.verdict-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; }
+.verdict-row .k { color: var(--muted); font-size: 12.5px; padding-top: 1px; }
+.tabs { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.tabs button { border: 1px solid var(--hairline); background: var(--surface); border-radius: 7px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; color: var(--ink-2); }
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+pre.code { margin: 6px 0 0; max-height: 440px; overflow: auto; background: var(--page); border: 1px solid var(--hairline); border-radius: 8px; font: 12px/1.5 var(--mono); padding: 8px 0; }
+pre.code span { display: block; padding: 0 12px; white-space: pre; min-height: 1.5em; }
+pre.code .add { background: var(--add); }
+pre.code .del { background: var(--del); }
+pre.code .hunk { color: var(--accent); }
+pre.code .file { font-weight: 700; color: var(--ink); background: var(--surface-2); }
+
+/* method */
+.method { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.method .card { padding: 16px 18px; font-size: 13.5px; color: var(--ink-2); }
+.method h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
+.method ul { margin: 0; padding-left: 18px; }
+.method li { margin: 3px 0; }
+.price-table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.price-table th, .price-table td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--hairline); }
+.price-table th:first-child, .price-table td:first-child { text-align: left; }
+.price-table th { color: var(--muted); font-weight: 500; }
+footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
+.empty { color: var(--muted); padding: 24px; text-align: center; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PR eval</div>
+    <span class="sub">Self-serve eval sandbox</span>
+    <span class="spacer"></span>
+    <a class="icon-btn" id="home" href="/" hidden>All runs</a>
+    <span class="chip" id="run-chip"></span>
+    <button class="icon-btn" id="theme" type="button" aria-label="Toggle color theme">Theme</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div class="eyebrow" id="eyebrow"></div>
+    <h1 id="headline"></h1>
+    <p class="lede" id="lede"></p>
+    <div id="banners"></div>
+  </div>
+
+  <section aria-labelledby="h-scores">
+    <h2 id="h-scores">Models</h2>
+    <p class="section-sub">Same harness, same tasks, same settings. The model is the only thing that changes.</p>
+    <div class="scores" id="scores"></div>
+  </section>
+
+  <section aria-labelledby="h-bench">
+    <h2 id="h-bench">Quality vs. cost benchmark table</h2>
+    <p class="section-sub">The table from the open-model evaluation guide, filled in from this run. Teams usually read it as pass rate first, then cost per successful task, then wall clock.</p>
+    <div class="card bench-card">
+      <div class="grid-wrap"><table class="bench" id="bench"></table></div>
+      <div class="bench-foot"><button class="icon-btn" id="copy-md" type="button">Copy as Markdown</button><span class="t-meta" id="copy-status" role="status"></span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-charts">
+    <h2 id="h-charts">Quality and cost</h2>
+    <p class="section-sub">Up and to the left is better. Break results down by task type before choosing one model for everything: the cheaper model may be enough for some kinds of work.</p>
+    <div class="charts">
+      <div class="card chart-card">
+        <h3>Solve rate vs. cost per solved task</h3>
+        <p>One point per model.</p>
+        <div id="scatter"></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Solve rate by task type</h3>
+        <p>Share of valid attempts solved; the number of tasks in each group is in parentheses.</p>
+        <div class="legend" id="slice-legend"></div>
+        <div class="grid-wrap"><table class="slice-table" id="slices"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-tasks">
+    <h2 id="h-tasks">Tasks</h2>
+    <p class="section-sub">Each square is one attempt: <span class="pip solved" style="display:inline-grid;width:18px;height:18px">✓</span> solved, <span class="pip failed" style="display:inline-grid;width:18px;height:18px">✗</span> failed, <span class="pip invalid" style="display:inline-grid;width:18px;height:18px">!</span> invalid (setup, provider or judge broke; not counted). Select a task for the request, both diffs, the test result and the judge's reason.</p>
+    <div class="filters">
+      <label class="sr-only" for="f-search">Search tasks</label>
+      <input id="f-search" type="search" placeholder="Search title or repo">
+      <label class="sr-only" for="f-lang">Language</label>
+      <select id="f-lang"></select>
+      <label class="sr-only" for="f-repo">Repository</label>
+      <select id="f-repo"></select>
+      <label class="sr-only" for="f-show">Show</label>
+      <select id="f-show">
+        <option value="all">All tasks</option>
+        <option value="split">Models disagree</option>
+        <option value="unsolved">Nobody solved</option>
+        <option value="invalid">Has invalid attempts</option>
+      </select>
+      <span class="count" id="task-count"></span>
+    </div>
+    <div class="card grid-wrap"><table class="tasks" id="tasks"></table></div>
+  </section>
+
+  <section aria-labelledby="h-method">
+    <h2 id="h-method">How this was measured</h2>
+    <p class="section-sub">Read this before quoting a number.</p>
+    <div class="method" id="method"></div>
+  </section>
+
+  <footer id="footer"></footer>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title" tabindex="-1">
+  <div class="drawer-head">
+    <div>
+      <div class="t-meta" id="d-meta"></div>
+      <h3 id="d-title"></h3>
+      <a id="d-link" target="_blank" rel="noopener">View the merged PR</a>
+    </div>
+    <button class="icon-btn close" id="d-close" type="button">Close</button>
+  </div>
+  <div class="drawer-body" id="d-body"></div>
+</aside>
+<div class="tooltip" id="tooltip" role="status"></div>
+
+<script id="report-data" type="application/json">__REPORT_DATA__</script>
+<script>
+(() => {
+  "use strict";
+  const DATA = JSON.parse(document.getElementById("report-data").textContent);
+  const models = DATA.models;
+  const S = DATA.summary;
+  const tasks = DATA.tasks;
+  const trials = DATA.trials;
+  const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5"];
+  const color = (i) => `var(${SLOTS[i % SLOTS.length]})`;
+  const modelIndex = Object.fromEntries(models.map((m, i) => [m.key, i]));
+
+  // ---------- helpers ----------
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") n.className = v;
+      else if (k === "style") n.setAttribute("style", v);
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const kid of kids.flat()) if (kid != null && kid !== false) n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    return n;
+  };
+  const svg = (tag, attrs = {}) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+  const pct = (x, d = 0) => x == null ? "–" : `${(x * 100).toFixed(d)}%`;
+  const usd = (x) => x == null ? "–" : x >= 100 ? `$${x.toFixed(0)}` : x >= 1 ? `$${x.toFixed(2)}` : `$${x.toFixed(3)}`;
+  const dur = (s) => s == null ? "–" : s < 90 ? `${Math.round(s)}s` : s < 3600 ? `${(s / 60).toFixed(1)} min` : `${(s / 3600).toFixed(1)} h`;
+  const compact = (n) => n == null ? "–" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${Math.round(n)}`;
+  const ratio = (x) => x >= 10 ? x.toFixed(0) : x.toFixed(1);
+  function wilson(k, n) {
+    if (!n) return null;
+    const z = 1.96, p = k / n, d = 1 + z * z / n;
+    const c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+    return [Math.max(0, c - h), Math.min(1, c + h)];
+  }
+  const taskById = Object.fromEntries(tasks.map((t) => [t.id, t]));
+  const trialsFor = (taskId, modelKey) => trials.filter((t) => t.task_id === taskId && t.model === modelKey).sort((a, b) => a.attempt - b.attempt);
+
+  // ---------- theme ----------
+  const themeBtn = document.getElementById("theme");
+  try { const saved = localStorage.getItem("pr-eval-theme"); if (saved) document.documentElement.dataset.theme = saved; } catch (e) {}
+  themeBtn.addEventListener("click", () => {
+    const dark = document.documentElement.dataset.theme
+      ? document.documentElement.dataset.theme === "dark"
+      : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("pr-eval-theme", document.documentElement.dataset.theme); } catch (e) {}
+  });
+
+  // ---------- header + headline ----------
+  const run = DATA.run;
+  const repos = [...new Set(tasks.map((t) => t.repo))];
+  document.getElementById("run-chip").textContent = run.run_id;
+  if (location.protocol.startsWith("http")) document.getElementById("home").hidden = false;  // served by pr-eval serve
+  const eyebrow = document.getElementById("eyebrow");
+  [`Claude Code ${run.harness_version || ""}`.trim(),
+   `${tasks.length} merged PRs from ${repos.length} ${repos.length === 1 ? "repo" : "repos"}`,
+   `${run.attempts} ${run.attempts === 1 ? "attempt" : "attempts"} per task`,
+   run.judge ? `Judge: ${run.judge.model}${run.judge.prompt_version ? ` (prompt v${run.judge.prompt_version})` : ""}` : "Tests only, no judge",
+   (() => {
+     const day = (d) => new Date(d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+     const last = trials.map((t) => t.finished_at).filter(Boolean).sort().pop();
+     return last && day(last) !== day(run.created_at) ? `${day(run.created_at)} to ${day(last)}` : day(run.created_at);
+   })()]
+    .forEach((s) => eyebrow.append(el("span", {}, s)));
+
+  const closed = models.find((m) => m.kind === "closed" && S[m.key].valid);
+  const opens = models.filter((m) => m.kind === "open" && S[m.key].valid);
+  const headline = document.getElementById("headline");
+  const lede = document.getElementById("lede");
+  if (closed && opens.length) {
+    // The report's question: can an open model do this work for less? So the headline names the
+    // cheapest open model that solves at least as many as the closed one, else the strongest.
+    const strongest = [...opens].sort((a, b) => (S[b.key].pass_at_1 - S[a.key].pass_at_1) || ((S[a.key].cost_per_solved ?? 1e9) - (S[b.key].cost_per_solved ?? 1e9)))[0];
+    const matching = opens.filter((m) => S[m.key].pass_at_1 >= S[closed.key].pass_at_1 - 1e-9 && S[m.key].cost_per_solved != null)
+      .sort((a, b) => S[a.key].cost_per_solved - S[b.key].cost_per_solved);
+    const best = matching[0] || strongest;
+    const c = S[closed.key], o = S[best.key];
+    const rel = c.pass_at_1 ? o.pass_at_1 / c.pass_at_1 : null;
+    const cheaper = c.cost_per_solved && o.cost_per_solved ? c.cost_per_solved / o.cost_per_solved : null;
+    let quality;
+    if (!c.solved && !o.solved) quality = `Neither ${closed.label} nor ${best.label} has solved a task yet`;
+    else if (rel == null) quality = `${best.label} solved ${pct(o.pass_at_1)} of attempts`;
+    else if (o.solved > c.solved) quality = `${best.label} solved more tasks than ${closed.label}`;
+    else if (o.solved === c.solved) quality = `${best.label} solved as many tasks as ${closed.label}`;
+    else quality = `${best.label} reached ${pct(rel)} of ${closed.label}'s solve rate`;
+    let cost = "";
+    if (cheaper != null && c.solved && o.solved) cost = cheaper >= 2 ? `, ${ratio(cheaper)}× cheaper per solved task` : cheaper >= 1.05 ? ` for ${pct(1 - 1 / cheaper)} less per solved task` : cheaper <= 0.95 ? `, but cost ${ratio(1 / cheaper)}× more per solved task` : " at about the same cost per solved task";
+    headline.textContent = `${quality}${cost}.`;
+    const closedSolved = new Set(trials.filter((t) => t.model === closed.key && t.outcome === "solved").map((t) => t.task_id));
+    const openSolved = new Set(trials.filter((t) => t.model === best.key && t.outcome === "solved").map((t) => t.task_id));
+    const onlyClosed = [...closedSolved].filter((t) => !openSolved.has(t)).length;
+    const onlyOpen = [...openSolved].filter((t) => !closedSolved.has(t)).length;
+    lede.textContent = `${closed.label}: ${pct(c.pass_at_1)} of attempts solved, ${usd(c.cost_per_solved)} per solved task. ` +
+      `${best.label}: ${pct(o.pass_at_1)}, ${usd(o.cost_per_solved)}. ` +
+      (onlyClosed || onlyOpen ? `${onlyClosed} ${onlyClosed === 1 ? "task" : "tasks"} only ${closed.label} solved, ${onlyOpen} only ${best.label} solved.` : "Both solved the same tasks.") +
+      (strongest !== best && S[strongest.key].pass_at_1 > o.pass_at_1 ? ` The highest open-model solve rate was ${strongest.label}'s, ${pct(S[strongest.key].pass_at_1)} at ${usd(S[strongest.key].cost_per_solved)} per solved task.` : "");
+  } else {
+    const ranked = models.filter((m) => S[m.key].valid).sort((a, b) => S[b.key].pass_at_1 - S[a.key].pass_at_1);
+    headline.textContent = ranked.length ? `${ranked[0].label} solved ${pct(S[ranked[0].key].pass_at_1)} of attempts.` : "No finished attempts yet.";
+    lede.textContent = "Add a closed and an open model to the same run to get a head-to-head answer.";
+  }
+  const banners = document.getElementById("banners");
+  const expected = (run.tasks || []).length * models.length * (run.attempts || 1);
+  if (!DATA.complete) banners.append(el("div", { class: "banner" }, el("b", {}, "In progress"), `${trials.length} of ${expected} attempts had finished at ${new Date(DATA.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. The run rewrites this page as attempts finish; reload for the latest.`));
+  if (run.note) banners.append(el("div", { class: "banner" }, el("b", {}, "Note"), run.note));
+  if (tasks.length < 30) banners.append(el("div", { class: "banner" }, el("b", {}, "Small sample"), `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}. Differences of a few points are noise at this size; the ranges under each solve rate show how wide the uncertainty is.`));
+
+  // ---------- scorecards ----------
+  const scores = document.getElementById("scores");
+  scores.style.setProperty("--cols", models.length <= 4 ? models.length : Math.ceil(models.length / 2));
+  const scored = models.filter((m) => S[m.key].valid);
+  const topRate = Math.max(...scored.map((m) => S[m.key].pass_at_1 ?? -1));
+  const lowCost = Math.min(...scored.map((m) => S[m.key].cost_per_solved ?? Infinity));
+  const leads = (key) => scored.length < 2 ? [] : [
+    ...(S[key].pass_at_1 === topRate ? ["Highest solve rate"] : []),
+    ...(S[key].cost_per_solved === lowCost ? ["Lowest cost per solved task"] : [])];
+  models.forEach((m, i) => {
+    const s = S[m.key];
+    const ci = wilson(s.solved, s.valid);
+    scores.append(el("div", { class: "card score" },
+      el("div", { class: "score-head" },
+        el("span", { class: "swatch", style: `background:${color(i)}` }),
+        el("span", { class: "score-name" }, m.label),
+        el("span", { class: "chip" }, m.kind === "closed" ? "Closed" : `Open · ${m.provider === "baseten" ? "Baseten" : m.provider}`)),
+      leads(m.key).length ? el("div", { class: "leads" }, leads(m.key).map((t) => el("span", { class: "lead" }, t))) : null,
+      el("div", { class: "hero-num" }, s.pass_at_1 == null ? "–" : Math.round(s.pass_at_1 * 100), s.pass_at_1 == null ? null : el("small", {}, "%")),
+      el("div", { class: "hero-label" }, `solve rate · ${s.solved} of ${s.valid} valid attempts`, ci ? el("span", { class: "ci" }, ` · 95% range ${pct(ci[0])}–${pct(ci[1])}`) : null),
+      el("div", { class: "meter", role: "presentation" }, el("i", { style: `width:${(s.pass_at_1 || 0) * 100}%;background:${color(i)}` })),
+      el("dl", { class: "kv" },
+        el("dt", {}, "Cost per solved task"), el("dd", { class: "big" }, usd(s.cost_per_solved)),
+        el("dt", {}, "Tasks solved at least once"), el("dd", {}, `${s.tasks_solved} / ${s.tasks}`),
+        el("dt", {}, "Cost per attempt"), el("dd", {}, usd(s.cost_per_attempt)),
+        el("dt", {}, "Median time per attempt"), el("dd", {}, dur(s.median_seconds)),
+        el("dt", {}, "Median turns"), el("dd", {}, s.median_turns == null ? "–" : Math.round(s.median_turns)),
+        el("dt", {}, "Tokens per attempt (in / out)"), el("dd", {}, `${compact(s.mean_input_tokens)} / ${compact(s.mean_output_tokens)}`),
+        el("dt", {}, "Passed tests, judge said no"), el("dd", {}, String(s.judge_disagreements || 0)),
+        el("dt", {}, "Hit the time limit"), el("dd", {}, String(s.agent_timeouts || 0)),
+        el("dt", {}, "Invalid attempts"), el("dd", {}, s.invalid ? String(s.invalid) : "0"))));
+  });
+
+  // ---------- guide benchmark table ----------
+  (function bench() {
+    const multi = (run.attempts || 1) > 1;
+    const cols = ["Model", "Resolved / pass rate", ...(multi ? [`Solved in ${run.attempts} tries (pass@${run.attempts})`] : []), "Output tokens", "Wall-clock", "Cost per successful task"];
+    const rows = models.map((m) => {
+      const s = S[m.key];
+      return [m.label, `${s.solved}/${s.valid} ${pct(s.pass_at_1)}`, ...(multi ? [`${s.tasks_solved}/${s.tasks} ${s.tasks ? pct(s.tasks_solved / s.tasks) : "–"}`] : []),
+        compact(s.mean_output_tokens), dur(s.median_seconds), usd(s.cost_per_solved)];
+    });
+    const table = document.getElementById("bench");
+    table.append(el("thead", {}, el("tr", {}, cols.map((c) => el("th", {}, c)))));
+    table.append(el("tbody", {}, rows.map((r, i) => el("tr", {}, r.map((v, j) => el("td", {}, j === 0 ? [el("span", { class: "swatch", style: `background:${color(i)};display:inline-block;margin-right:8px` }), v, el("span", { class: "sub" }, models[i].kind === "closed" ? "closed" : "open")] : v))))));
+    const md = [`| ${cols.join(" | ")} |`, `| ${cols.map(() => "----").join(" | ")} |`, ...rows.map((r) => `| ${r.join(" | ")} |`),
+      "", `Claude Code ${run.harness_version || ""}, ${tasks.length} merged PRs from ${repos.length} ${repos.length === 1 ? "repo" : "repos"}, ${run.attempts} attempt(s) each. Output tokens: mean per attempt. Wall-clock: median per attempt. Cost: all valid attempts / solved attempts.`].join("\n");
+    const status = document.getElementById("copy-status");
+    document.getElementById("copy-md").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(md); status.textContent = "Copied"; }
+      catch (e) { status.textContent = "Copy failed; select the table instead"; }
+      setTimeout(() => { status.textContent = ""; }, 2500);
+    });
+  })();
+
+  // ---------- tooltip ----------
+  const tip = document.getElementById("tooltip");
+  function showTip(evt, title, rows) {
+    tip.replaceChildren(el("div", { class: "tt-title" }, title), ...rows.map(([k, v, c]) =>
+      el("div", { class: "tt-row" }, el("span", {}, c ? el("span", { class: "key", style: `background:${c};margin-right:6px` }) : null, k), el("b", {}, v))));
+    const r = evt.target.getBoundingClientRect ? evt.target.getBoundingClientRect() : { left: evt.clientX, top: evt.clientY, width: 0 };
+    const x = (evt.clientX ?? r.left + r.width / 2) + 14, y = (evt.clientY ?? r.top) + 14;
+    tip.style.left = `${Math.min(x, innerWidth - 220)}px`; tip.style.top = `${Math.min(y, innerHeight - 140)}px`; tip.style.opacity = 1;
+  }
+  const hideTip = () => { tip.style.opacity = 0; };
+
+  // ---------- scatter: solve rate vs cost per solved ----------
+  (function scatter() {
+    const host = document.getElementById("scatter");
+    const pts = models.map((m, i) => ({ m, i, s: S[m.key] })).filter((p) => p.s.pass_at_1 != null && p.s.cost_per_solved != null);
+    if (!pts.length) { host.append(el("div", { class: "empty" }, "No solved attempts yet.")); return; }
+    const W = 460, H = 300, L = 48, R = 20, T = 14, B = 40;
+    const maxX = Math.max(...pts.map((p) => p.s.cost_per_solved)) * 1.25 || 1;
+    const niceStep = (span) => { const raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw)); return [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw); };
+    const step = niceStep(maxX), xMax = Math.ceil(maxX / step) * step;
+    const x = (v) => L + (v / xMax) * (W - L - R), y = (v) => T + (1 - v) * (H - T - B);
+    const legend = el("div", { class: "legend" });
+    pts.forEach((p) => legend.append(el("span", {}, el("span", { class: "swatch", style: `background:${color(p.i)}` }), p.m.label)));
+    host.append(legend);
+    const placed = [], dots = [];
+    const hits = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+    // A label keeps well clear of every other dot, so it can't be read as that dot's label.
+    const fits = (box, own) => box.x0 >= L && box.x1 <= W - 4 && box.y0 >= 0 && !placed.some((b) => hits(box, b)) &&
+      !dots.some((d) => d !== own && hits(box, { x0: d.x0 - 10, x1: d.x1 + 10, y0: d.y0 - 3, y1: d.y1 + 3 }));
+    const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img", "aria-label": "Scatter plot of solve rate against cost per solved task" });
+    for (let v = 0; v <= 1.0001; v += 0.25) {
+      g.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--hairline)", "stroke-width": 1 }));
+      const t = svg("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }); t.textContent = `${v * 100}%`; g.append(t);
+    }
+    for (let v = 0; v <= xMax + 1e-9; v += step) {
+      const t = svg("text", { x: x(v), y: H - B + 18, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }); t.textContent = v === 0 ? "$0" : step >= 1 ? `$${v.toFixed(0)}` : step >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`; g.append(t);
+    }
+    g.append(svg("line", { x1: L, x2: W - R, y1: y(0), y2: y(0), stroke: "var(--axis)", "stroke-width": 1 }));
+    const xl = svg("text", { x: (L + W - R) / 2, y: H - 4, "text-anchor": "middle", "font-size": 11.5, fill: "var(--ink-2)" }); xl.textContent = "Cost per solved task"; g.append(xl);
+    pts.forEach((p) => { p.dot = { x0: x(p.s.cost_per_solved) - 7, x1: x(p.s.cost_per_solved) + 7, y0: y(p.s.pass_at_1) - 7, y1: y(p.s.pass_at_1) + 7 }; dots.push(p.dot); placed.push(p.dot); });
+    pts.forEach((p) => {
+      const cx = x(p.s.cost_per_solved), cy = y(p.s.pass_at_1);
+      const grp = svg("g", { tabindex: 0, role: "img", "aria-label": `${p.m.label}: ${pct(p.s.pass_at_1)} solve rate, ${usd(p.s.cost_per_solved)} per solved task` });
+      grp.append(svg("circle", { cx, cy, r: 14, fill: "transparent" }));
+      grp.append(svg("circle", { cx, cy, r: 6, fill: color(p.i), stroke: "var(--surface)", "stroke-width": 2 }));
+      // Direct-label only where the label clears every other one; the legend and tooltip carry the rest.
+      const width = p.m.label.length * 6.8;
+      const mid = Math.min(Math.max(cx - width / 2, L), W - 4 - width);  // centred, kept inside the plot
+      const spots = [[cx + 11, cy - 8], [cx - 11 - width, cy - 8], [mid, cy - 24], [mid, cy + 9],
+                     [cx + 6, cy - 23], [cx + 6, cy + 8], [cx - 6 - width, cy - 23], [cx - 6 - width, cy + 8]];
+      for (const [x0, y0] of spots) {
+        const box = { x0, x1: x0 + width, y0, y1: y0 + 15 };
+        if (!fits(box, p.dot)) continue;
+        placed.push(box);
+        const lab = svg("text", { x: x0, y: y0 + 12, "font-size": 12, "font-weight": 600, fill: "var(--ink)" });
+        lab.textContent = p.m.label; grp.append(lab);
+        break;
+      }
+      const rows = [["Solve rate", pct(p.s.pass_at_1)], ["Cost per solved task", usd(p.s.cost_per_solved)], ["Solved", `${p.s.solved} / ${p.s.valid}`]];
+      grp.addEventListener("pointermove", (e) => showTip(e, p.m.label, rows));
+      grp.addEventListener("pointerleave", hideTip);
+      grp.addEventListener("focus", (e) => { const b = e.target.getBoundingClientRect(); showTip({ clientX: b.right, clientY: b.top, target: e.target }, p.m.label, rows); });
+      grp.addEventListener("blur", hideTip);
+      g.append(grp);
+    });
+    host.append(g);
+  })();
+
+  // ---------- slice table ----------
+  (function slices() {
+    const legend = document.getElementById("slice-legend");
+    models.forEach((m, i) => legend.append(el("span", {}, el("span", { class: "swatch", style: `background:${color(i)}` }), m.label)));
+    const table = document.getElementById("slices");
+    table.append(el("thead", {}, el("tr", {}, el("th", {}, "Group"), ...models.map((m) => el("th", {}, m.label)))));
+    const body = el("tbody");
+    let current = null;
+    DATA.slices.forEach((sl) => {
+      if (sl.dimension !== current) { current = sl.dimension; body.append(el("tr", { class: "group" }, el("td", { colspan: models.length + 1 }, sl.dimension))); }
+      body.append(el("tr", {}, el("td", { class: "label", title: sl.value }, sl.value, el("small", {}, `(${sl.tasks})`)),
+        ...models.map((m, i) => {
+          const s = sl.models[m.key];
+          const cell = el("div", { class: "bar-cell", tabindex: 0 },
+            el("div", { class: "bar-track" }, el("i", { style: `width:${(s.pass_at_1 || 0) * 100}%;background:${color(i)}` })),
+            el("b", {}, pct(s.pass_at_1)));
+          const rows = [["Solve rate", pct(s.pass_at_1), color(i)], ["Solved / valid", `${s.solved} / ${s.valid}`], ["Cost per solved", usd(s.cost_per_solved)]];
+          cell.addEventListener("pointermove", (e) => showTip(e, `${m.label} · ${sl.value}`, rows));
+          cell.addEventListener("pointerleave", hideTip);
+          return el("td", {}, cell);
+        })));
+    });
+    table.append(body);
+  })();
+
+  // ---------- task grid ----------
+  const fSearch = document.getElementById("f-search"), fLang = document.getElementById("f-lang"), fRepo = document.getElementById("f-repo"), fShow = document.getElementById("f-show");
+  fLang.append(el("option", { value: "" }, "All languages"), ...[...new Set(tasks.map((t) => t.language).filter(Boolean))].sort().map((l) => el("option", { value: l }, l)));
+  fRepo.append(el("option", { value: "" }, "All repositories"), ...repos.sort().map((r) => el("option", { value: r }, r)));
+  const grid = document.getElementById("tasks");
+  grid.append(el("thead", {}, el("tr", {}, el("th", {}, "Task"), el("th", {}, "Language"), el("th", {}, "Size"),
+    ...models.map((m, i) => el("th", { class: "m" }, el("span", { class: "swatch", style: `background:${color(i)};display:inline-block;margin-right:6px` }), m.label)))));
+  const gridBody = el("tbody");
+  grid.append(gridBody);
+  const outcomeGlyph = { solved: "✓", failed: "✗", invalid: "!" };
+  function taskState(t) {
+    const solvedBy = models.filter((m) => trialsFor(t.id, m.key).some((r) => r.outcome === "solved")).length;
+    const ran = models.filter((m) => trialsFor(t.id, m.key).some((r) => r.outcome !== "invalid")).length;
+    const invalid = trials.some((r) => r.task_id === t.id && r.outcome === "invalid");
+    return { split: solvedBy > 0 && solvedBy < ran, unsolved: ran > 0 && solvedBy === 0, invalid };
+  }
+  function renderGrid() {
+    const q = fSearch.value.trim().toLowerCase();
+    const rows = tasks.filter((t) => (!fLang.value || t.language === fLang.value) && (!fRepo.value || t.repo === fRepo.value) &&
+      (!q || `${t.title} ${t.repo} ${t.pr}`.toLowerCase().includes(q)) && (fShow.value === "all" || taskState(t)[fShow.value]));
+    gridBody.replaceChildren(...rows.map((t) => {
+      const tr = el("tr", { tabindex: 0, onclick: () => openTask(t.id), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTask(t.id); } } },
+        el("td", {}, el("span", { class: "t-title", title: t.title }, t.title), el("span", { class: "t-meta" }, `${t.repo} #${t.pr ?? ""}`)),
+        el("td", {}, el("span", { class: "tag" }, t.language || "–")),
+        el("td", {}, el("span", { class: "tag" }, t.size ? `${t.size} · ${t.lines_changed} lines` : "–")),
+        ...models.map((m) => {
+          const ts = trialsFor(t.id, m.key);
+          const pips = ts.map((r) => el("span", { class: `pip ${r.outcome}`, title: `Attempt ${r.attempt}: ${r.outcome}${r.invalid_reason ? ` (${r.invalid_reason})` : ""}` }, outcomeGlyph[r.outcome] || "·"));
+          for (let k = ts.length; k < (run.attempts || 1); k++) pips.push(el("span", { class: "pip pending", title: "Not run yet" }, "·"));
+          return el("td", {}, el("div", { class: "pips" }, pips));
+        }));
+      return tr;
+    }));
+    document.getElementById("task-count").textContent = `${rows.length} of ${tasks.length} tasks`;
+  }
+  [fSearch, fLang, fRepo, fShow].forEach((c) => c.addEventListener("input", renderGrid));
+  renderGrid();
+
+  // ---------- drawer ----------
+  const drawer = document.getElementById("drawer"), scrim = document.getElementById("scrim");
+  let lastFocus = null;
+  function codeBlock(text) {
+    const pre = el("pre", { class: "code" });
+    if (!text) { pre.append(el("span", {}, "(empty)")); return pre; }
+    text.split("\n").forEach((line) => {
+      const cls = line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
+      pre.append(el("span", { class: cls }, line));
+    });
+    return pre;
+  }
+  function attemptCard(t, r, mi) {
+    const a = r.agent || {};
+    const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") : "";
+    const views = { "Agent's diff": r.patch, "Merged diff": t.reference_patch, "Test output": r.verifier_tail, "Agent's last message": a.final_message };
+    const viewer = el("div");
+    const tabs = el("div", { class: "tabs", role: "group", "aria-label": "Attempt details" });
+    const show = (name) => { viewer.replaceChildren(codeBlock(views[name])); [...tabs.children].forEach((b) => b.setAttribute("aria-pressed", b.textContent === name ? "true" : "false")); };
+    Object.keys(views).forEach((name) => tabs.append(el("button", { type: "button", "aria-pressed": "false", onclick: () => show(name) }, name)));
+    const body = el("div", { class: "attempt-body" });
+    if (r.outcome === "invalid") body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Why invalid"), el("span", {}, r.invalid_reason || "unknown")));
+    if (a.timed_out) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Time limit"), el("span", {}, `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`)));
+    if (r.tests) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Hidden tests"), el("span", {}, `${r.tests.passed ? "Passed" : "Failed"}${r.tests.summary ? ` · ${r.tests.summary}` : ""}`)));
+    if (r.judge) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Judge"), el("span", {}, r.judge.error ? `Error: ${r.judge.error}` : `${r.judge.verdict === "pass" ? "Pass" : "Fail"} · ${r.judge.reason || ""}`)));
+    if (r.diff) body.append(el("div", { class: "verdict-row" }, el("span", { class: "k" }, "Change"), el("span", {}, `${r.diff.files} files, +${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`)));
+    body.append(tabs, viewer);
+    return el("div", { class: "attempt" },
+      el("div", { class: "attempt-head" },
+        el("span", { class: "who" }, el("span", { class: "swatch", style: `background:${color(mi)}` }), models[mi].label, el("span", { class: "t-meta" }, `attempt ${r.attempt}`)),
+        el("span", { class: `outcome ${r.outcome}` }, el("span", { "aria-hidden": "true" }, outcomeGlyph[r.outcome] || ""), el("span", {}, r.outcome[0].toUpperCase() + r.outcome.slice(1))),
+        el("span", { class: "stats" }, el("span", { title: a.cost_source === "rebuilt-partial" ? "Stopped at the time limit; cost rebuilt from the agent's log, missing some output tokens" : a.cost_source === "rebuilt" ? "Stopped at the time limit; cost rebuilt from the agent's log" : "" },
+            a.cost_source === "rebuilt-partial" ? "≥ " : "", usd(a.cost_usd)),
+          el("span", { title: a.retry_wait_seconds ? `${dur(a.seconds)} including ${dur(a.retry_wait_seconds)} waiting on provider retries` : "" },
+            dur(a.working_seconds ?? a.seconds), a.api_retries ? ` (+${dur(a.retry_wait_seconds)} retry waits)` : ""), a.num_turns == null ? null : el("span", {}, `${a.num_turns} turns`), el("span", {}, `${compact(a.tokens && a.tokens.output)} out`))),
+      body);
+  }
+  const scopeText = (s) => !s ? "the PR's tests" : s.startsWith("the ") ? s : `the ${s}`;
+  function openTask(id) {
+    const t = taskById[id];
+    lastFocus = document.activeElement;
+    document.getElementById("d-meta").textContent = `${t.repo} #${t.pr ?? ""} · ${t.language || ""} · ${t.size || ""}${t.lines_changed ? `, ${t.lines_changed} lines in ${t.files_changed} files` : ""} · merged ${t.merged_at ? t.merged_at.slice(0, 10) : "?"}`;
+    document.getElementById("d-title").textContent = t.title;
+    const link = document.getElementById("d-link"); link.href = t.url || "#";
+    const body = document.getElementById("d-body");
+    body.replaceChildren(...[
+      el("details", { class: "instr" }, el("summary", {}, "What the agent was asked to do"), el("pre", {}, t.instruction || "")),
+      el("div", { class: "t-meta", style: "margin:-8px 0 14px" }, `Verified with ${scopeText(t.test_scope)}, then the judge.`),
+      taskState(t).unsolved ? el("div", { class: "banner", style: "margin:0 0 14px" }, el("b", {}, "No model solved this"),
+        "Check the task before blaming the models: PR tests sometimes assert details, such as an exact error message, that the request never states.") : null,
+      ...models.flatMap((m, mi) => trialsFor(id, m.key).map((r) => attemptCard(t, r, mi))),
+    ].filter(Boolean));  // replaceChildren would print a null as the text "null"
+    body.querySelectorAll(".attempt .tabs button:first-child").forEach((b) => b.click());
+    drawer.classList.add("open"); scrim.classList.add("open"); drawer.focus();
+  }
+  function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove("open"); if (lastFocus) lastFocus.focus(); }
+  document.getElementById("d-close").addEventListener("click", closeDrawer);
+  scrim.addEventListener("click", closeDrawer);
+  addEventListener("keydown", (e) => { if (e.key === "Escape" && drawer.classList.contains("open")) closeDrawer(); });
+
+  // ---------- method ----------
+  const method = document.getElementById("method");
+  const priceRows = models.flatMap((m) => Object.entries(m.prices || {}).filter(([id]) => id === m.model).map(([id, p]) => el("tr", {},
+    el("td", {}, m.label), el("td", {}, `$${p.input.toFixed(2)}`), el("td", {}, p.cached_input != null ? `$${p.cached_input.toFixed(2)}` : "–"), el("td", {}, `$${p.output.toFixed(2)}`))));
+  method.append(
+    el("div", { class: "card" }, el("h3", {}, "Tasks"), el("ul", {},
+      el("li", {}, "Each task is a merged pull request. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point."),
+      el("li", {}, "The merged diff and the PR's tests stay outside the container until the agent stops. GitHub, package registries and Claude Code's web tools are blocked while it works."),
+      el("li", {}, "Before any model ran, every task was checked in the same container image: the PR's tests fail on the base commit and pass with the merged change."))),
+    el("div", { class: "card" }, el("h3", {}, "Scoring"), el("ul", {},
+      el("li", {}, "Solved means the PR's hidden tests pass and the judge agrees the change does what was asked. The judge catches changes that game or edit the tests."),
+      el("li", {}, "Invalid attempts (setup, provider, verifier or judge errors) are reported but never counted as failures."),
+      el("li", {}, "Cost per solved task is all spend on valid attempts divided by solved attempts, so failures are paid for."),
+      (() => {
+        const rebuilt = models.reduce((n, m) => n + (S[m.key].rebuilt_cost_attempts || 0), 0);
+        const partial = models.filter((m) => S[m.key].partial_cost_attempts);
+        if (!rebuilt) return null;
+        return el("li", {}, `${rebuilt} ${rebuilt === 1 ? "attempt" : "attempts"} hit the time limit before Claude Code reported usage; their cost is rebuilt from the agent's log.` +
+          (partial.length ? ` For ${partial.map((m) => `${S[m.key].partial_cost_attempts} ${m.label}`).join(" and ")} ${partial.length === 1 && S[partial[0].key].partial_cost_attempts === 1 ? "attempt" : "attempts"}, the log lacks some output tokens, so that cost is a little low.` : ""));
+      })(),
+      el("li", {}, "Time is wall clock for the agent alone. Setup, tests and the time Claude Code spent backing off from provider rate limits are excluded; the attempt details show the waits."))),
+    el("div", { class: "card" }, el("h3", {}, "Prices (USD per million tokens)"),
+      el("table", { class: "price-table" }, el("thead", {}, el("tr", {}, el("th", {}, "Model"), el("th", {}, "Input"), el("th", {}, "Cached"), el("th", {}, "Output"))), el("tbody", {}, priceRows)),
+      el("p", { style: "margin:8px 0 0;font-size:12.5px" }, "Open models are priced from Baseten Model APIs list prices. Claude is priced at Anthropic list rates as Claude Code reports them, including cache writes. Judge tokens are not included.")),
+    el("div", { class: "card" }, el("h3", {}, "Caveats"), el("ul", {},
+      el("li", {}, "A recent merge date does not prove a model never saw the change. Check each model's training cutoff."),
+      el("li", {}, "The results hold for these repositories and these kinds of change. Check how close they are to your own work before generalizing."),
+      el("li", {}, `Effort is set per model (${models.map((m) => `${m.label}: ${m.effort}`).join(", ")}). Open models get it from the proxy, because Baseten's Anthropic-compatible endpoint ignores it.`))));
+
+  document.getElementById("footer").textContent = `Generated ${new Date(DATA.generated_at).toLocaleString()} by pr-eval · run ${run.run_id} · image ${run.image} · data in report.json next to this file.`;
+})();
+</script>
+</body>
+</html>

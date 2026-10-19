@@ -1,0 +1,81 @@
+# Models `pr-eval run --models` can name, and what each costs.
+#
+# Prices are USD per million tokens. Claude Code prices every model at Anthropic list
+# rates, so open models are priced from this table. Claude models take Claude Code's own
+# figure, which knows the 1-hour cache writes its usage report doesn't break out; their
+# rates here price attempts stopped at the time limit, which never report a cost.
+# Check the numbers before quoting a cost:
+#   Anthropic  https://www.anthropic.com/pricing (API list rates)
+#   Baseten    https://www.baseten.co/pricing/ (Model APIs)
+#
+# provider = "anthropic": Claude Code talks to the Anthropic API directly, authenticated
+#   by ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
+# provider = "baseten": Claude Code talks to the translating proxy inside the trial
+#   container, which forwards to Baseten Model APIs with BASETEN_API_KEY and forces
+#   `effort` on every request (Baseten's Anthropic-compatible layer ignores effort).
+# max_concurrent (optional) caps how many attempts of one model run at once, for a
+#   provider that rate-limits the key. Time spent in retry backoff is excluded from the
+#   report's wall clock either way.
+
+[defaults]
+effort = "high"
+
+[models.claude-opus]
+label = "Claude Opus 5.5"
+kind = "closed"
+provider = "anthropic"
+model = "claude-opus-5-5"
+# Claude Code sends some background requests to its small model; price them too.
+# cache_write is the 5-minute cache; Claude Code mostly writes the 1-hour one, which
+# costs twice the input rate (cache_write_1h).
+prices."claude-opus-5-5" = { input = 4.00, cache_write = 5.00, cache_write_1h = 8.00, cached_input = 0.20, output = 20.00 }
+prices."claude-haiku-4-5" = { input = 1.00, cache_write = 1.25, cache_write_1h = 2.00, cached_input = 0.10, output = 5.00 }
+prices."claude-haiku-5-5" = { input = 0.10, cache_write = 0.125, cache_write_1h = 0.20, cached_input = 0.01, output = 0.50 }
+prices."claude-sonnet-5-5" = { input = 2.00, cache_write = 2.50, cache_write_1h = 4.00, cached_input = 0.20, output = 10.00 }
+
+[models."glm-5.3"]
+label = "GLM-5.3"
+kind = "open"
+provider = "baseten"
+model = "zai-org/GLM-5.3"
+prices."zai-org/GLM-5.3" = { input = 1.40, cached_input = 0.14, output = 4.40 }
+
+[models.kimi-k3]
+label = "Kimi K3"
+kind = "open"
+provider = "baseten"
+model = "moonshotai/Kimi-K3"
+# Baseten returned 429s with three or four Kimi K3 attempts at once (2026-10-16).
+max_concurrent = 2
+prices."moonshotai/Kimi-K3" = { input = 3.00, cached_input = 0.30, output = 15.00 }
+
+[models.muse-spark]
+label = "Muse Spark Open"
+kind = "open"
+provider = "baseten"
+model = "meta-models/muse-spark-open"
+# Baseten returned 429s with eight attempts at once across models (2026-10-19).
+max_concurrent = 2
+prices."meta-models/muse-spark-open" = { input = 1.25, cached_input = 0.15, output = 4.25 }
+
+[models."deepseek-v4.1-flash"]
+label = "DeepSeek V4.1 Flash"
+kind = "open"
+provider = "baseten"
+model = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+prices."deepseek-ai/DeepSeek-V4.1-Flash-1017" = { input = 0.30, cached_input = 0.007, output = 1.20 }
+
+[models."nemotron-3.5-super"]
+label = "Nemotron 3.5 Super"
+kind = "open"
+provider = "baseten"
+model = "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B"
+prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_input = 0.04, output = 0.50 }
+
+# The judge compares the agent's diff with the merged diff. Any OpenAI-compatible Chat
+# Completions endpoint works; `api_key_env` names the variable holding its key.
+[judge]
+model = "gpt-6.1-sol"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+# Judge tokens are reported separately: they are the cost of grading, not of the work.
