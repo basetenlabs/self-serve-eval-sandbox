@@ -49,7 +49,7 @@ It prints one line per attempt and keeps the report current. Stop it with Ctrl-C
 
 ## How it works
 
-1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point; the merged diff and the PR's tests are kept aside as the answer.
+1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point; the merged diff and the PR's tests are kept aside as the answer. When those tests call something the PR added by name, or a function whose parameters it changed, the request lists those signatures (never the code), so a correct fix isn't failed for naming a helper differently.
 2. **Run.** Each attempt gets a fresh container. Claude Code works on the request with the model under test; open models on Baseten go through a small proxy in the container that sets the same reasoning effort on every request. GitHub, package registries and Claude Code's web tools are blocked while the agent works.
 3. **Grade.** The agent's diff is saved, then the PR's hidden tests run against its code (its own test changes are set aside, so a test it wrote can't clash with the PR's), then an LLM judge compares its whole diff with the merged one and gives a one-sentence reason. Solved means the tests pass and the judge agrees.
 4. **Report.** One HTML page per run, plus `report.json`: solve rate, cost per solved task, time and tokens, results by language, change size and repository, and every attempt's diff, test output and judge reason.
