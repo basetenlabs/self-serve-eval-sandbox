@@ -291,6 +291,25 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(task.meta["task"]["base_sha"], self.base)
         self.assertEqual(task.meta["task"]["instruction_source"], "linked-issue")
         self.assertTrue(task.instruction.startswith("# Fix double\n\ndouble() returns its input\n\n"))
+        self.assertNotIn("## Names the tests use", task.instruction)  # the tests call nothing new
+
+    def test_the_request_gives_the_names_the_tests_call_but_never_the_code(self):
+        (self.repo / "lib.py").write_text("def double(x):\n    return x\n\n\ndef label(x) -> str | None:\n    return None\n")
+        self.git("commit", "-qam", "more base")
+        (self.repo / "lib.py").write_text("def double(x, times=2):\n    return _scale(x, times)\n\n\n"
+                                          "def _scale(x, by):\n    return by * x\n\n\n"
+                                          "def label(x) -> str:\n    return 'the answer'\n")
+        (self.repo / "tests" / "test_lib.py").write_text("assert double(2) == _scale(2, 2) and label(1)\n")
+        self.git("commit", "-qam", "fix, squash-merged")
+        self.pr["merge_commit_sha"] = self.git("rev-parse", "HEAD")
+        names = tasks.load(self.export()).instruction.split("## Names the tests use", 1)[1]
+        self.assertIn("- `lib.py`: `def double(x, times=2)`", names)  # its parameters changed
+        self.assertIn("- `lib.py`: `def _scale(x, by)`", names)  # new, and the tests call it
+        self.assertNotIn("label", names)  # only its return type changed, which is the behavior under test
+        self.assertNotIn("return", names)
+        self.assertEqual(list(tasks.signatures(['var Host = "https://example.com"', "func (t *T) add(ctx context.Context,",
+                                                "\tname string) error {"])),
+                         [("Host", "var Host"), ("add", "func (t *T) add(ctx context.Context, name string) error")])
 
     def test_own_commands_and_changed_test_files(self):
         task = tasks.load(self.export(setup="make deps", test="pytest {test_files}"))

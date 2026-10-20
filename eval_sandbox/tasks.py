@@ -4,7 +4,7 @@ A task folder is what one trial needs and nothing more:
 
     tasks/<id>/
       task.toml                  metadata, setup and test commands, timeouts
-      instruction.md             what the agent is asked to do (PR or linked-issue text)
+      instruction.md             what the agent is asked to do (PR or issue text, names the tests call)
       environment/source.tar     the repository at the PR's base commit, no .git
       tests/files/...            the PR's test files at the merged commit   (hidden)
       tests/deleted.txt          test files the PR removed                  (hidden)
@@ -47,6 +47,12 @@ MAINTENANCE = re.compile(r"\b(bump|dependabot|renovate|release|changelog|typo|re
                          r"formatting|linting|translations?)\b", re.I)
 CLOSES_ISSUE = re.compile(r"\b(?:fix(?:es|ed)?|clos(?:e[sd]?|ing)|resolv(?:e[sd]?|ing))\s+"
                           r"(?:(?:https://github.com/([^/\s]+/[^/\s]+)/issues/)|(?:(\w[\w.-]*/[\w.-]+))?#)(\d+)", re.I)
+# A line that defines a name: a function, method, class or type (group 1), or a top-level
+# variable or constant (group 2). Go, Python, JavaScript/TypeScript and Rust.
+DEFINITION = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+|export\s+(?:default\s+)?)?(?:async\s+)?"
+    r"(?:func\s+(?:\([^)]*\)\s*)?|def\s+|fn\s+|function\*?\s+|class\s+|interface\s+|struct\s+|enum\s+|trait\s+)(\w+)"
+    r"|^(?:export\s+)?(?:type|var|const|let)\s+(\w+)")
 
 
 @dataclass
@@ -207,6 +213,69 @@ def changed_files(mirror: Path, base: str, reference: str) -> list[dict]:
     return files
 
 
+def signatures(lines: list[str]):
+    """(name, signature) for each definition in these lines: the definition line, plus the
+    lines that finish its parameter list, without the body, and without a variable's value."""
+    for i, line in enumerate(lines):
+        match = DEFINITION.match(line)
+        if not match:
+            continue
+        parts = [line.strip()]
+        while sum(p.count("(") - p.count(")") for p in parts) > 0 and i + len(parts) < len(lines) and len(parts) < 8:
+            parts.append(lines[i + len(parts)].strip())
+        text = " ".join(parts)
+        yield match[1] or match[2], (text.split("=", 1)[0] if match[2] else text).rstrip(" {:=")
+
+
+def parameters(name: str, signature: str) -> str:
+    """The parameter list that follows the name, or "" if there is none."""
+    rest = re.split(rf"\b{re.escape(name)}\b", signature, maxsplit=1)[-1]
+    start, depth = rest.find("("), 0
+    for i, char in enumerate(rest[start:] if start >= 0 else ""):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0:
+            return rest[start:start + i + 1]
+    return ""
+
+
+def interface(mirror: Path, base: str, reference: str, paths: list[str], tests: str, text: str) -> list[str]:
+    """What the PR's tests call by name that the request doesn't give away.
+
+    Tests often call helpers the PR itself added, or functions whose parameters it changed;
+    a correct fix that names or orders them differently can't even compile against those
+    tests. So, like SWE-bench Pro, the request lists their signatures: names the PR added
+    and functions whose parameters it changed, leaving out a parameterless name (a constant,
+    a type) the request already mentions. Never a body or a value, and nothing for a change
+    to a return type alone, which would describe the behavior the tests check.
+    """
+    diff = git(mirror, "diff", "-U0", "--no-renames", base, reference, "--", *paths).decode(errors="replace")
+    hunks, path = [], None
+    for line in diff.splitlines():
+        if line.startswith(("--- a/", "--- /dev/null")):
+            continue
+        if line.startswith(("+++ b/", "+++ /dev/null")):
+            path = line[6:] if line.startswith("+++ b/") else None
+        elif line.startswith("@@"):
+            hunks.append((path, [], []))
+        elif hunks and line[:1] in ("-", "+"):
+            hunks[-1][1 if line[0] == "-" else 2].append(line[1:])
+    removed = {name: sig for _, gone, _ in hunks for name, sig in signatures(gone)}
+    found, seen = [], set()
+    for path, _, added in hunks:
+        for name, sig in signatures(added):
+            used = re.compile(rf"\b{re.escape(name)}\b")
+            if not path or name in seen or not used.search(tests):
+                continue
+            if name in removed:
+                if parameters(name, removed[name]) == parameters(name, sig):
+                    continue  # same parameters: nothing a test could trip over
+            elif used.search(text) and not parameters(name, sig):
+                continue  # the request already names it, and there are no parameters to get wrong
+            seen.add(name)
+            found.append(f"- `{path}`: `{sig}`")
+    return found
+
+
 TEST_SH = """#!/usr/bin/env bash
 # Harbor-style verifier: overlay the PR's tests, run the suite, write the reward.
 set -uo pipefail
@@ -254,6 +323,12 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     text, source = request(repo, pr)
     if len(text.strip()) < MIN_REQUEST_CHARS:
         raise Skip("the PR and its issue say too little to work from")
+    hidden = {p: git(mirror, "show", f"{reference}:{p}") for p in test_paths if p in present}
+    names = interface(mirror, base, reference, [f["path"] for f in files if f["role"] == "implementation"],
+                      "\n".join(hidden[p].decode(errors="replace") for p in runnable), text)
+    if names:
+        text = (text.strip() + "\n\n## Names the tests use\n\nTests for this change call these by name, so give "
+                "them these names and parameters. Everything else about them is up to you.\n\n" + "\n".join(names))
 
     task_id = f"{repo.replace('/', '__')}-{pr['number']}"
     tmp = out / f".{task_id}.partial"
@@ -261,11 +336,10 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     for folder in ("environment", "tests/files", "solution"):
         (tmp / folder).mkdir(parents=True)
     (tmp / "environment" / "source.tar").write_bytes(git(mirror, "archive", "--format=tar", base))
-    for path in test_paths:
-        if path in present:
-            target = tmp / "tests" / "files" / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(git(mirror, "show", f"{reference}:{path}"))
+    for path, content in hidden.items():
+        target = tmp / "tests" / "files" / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
     deleted = [p for p in test_paths if p not in present]
     (tmp / "tests" / "deleted.txt").write_text("".join(p + "\n" for p in deleted))
     (tmp / "tests" / "test.sh").write_text(TEST_SH.format(test=commands["test"]))
