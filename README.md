@@ -6,7 +6,20 @@ Status: v0. Claude Code is the only harness.
 
 ## Quickstart
 
-You need Docker with room for four containers at once (Docker Desktop with 8 CPUs and 12 GB under Settings > Resources, or `colima start --cpu 8 --memory 12`), Python 3.12+, the GitHub CLI (`gh auth login`), and three keys:
+You need Python 3.12+, the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for four sandboxes at once (create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**). No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
+
+One-time setup (replace `dedicated-eval-workspace` with the new workspace's name):
+
+```bash
+curl -fsSL https://blaxel.ai/install.sh | BL_INSTALL_SETUP=false sh
+bl login dedicated-eval-workspace
+mkdir -p ~/.config/pr-eval
+printf '%s\n' '{"workspace":"dedicated-eval-workspace"}' > ~/.config/pr-eval/blaxel.json
+```
+
+Alternatively, set `PR_EVAL_BLAXEL_WORKSPACE` or pass `--workspace dedicated-eval-workspace` to `pr-eval serve` or a cloud command. The saved JSON contains only the workspace name, never credentials. There is no fallback to the CLI's current workspace, and `main` is rejected. Authentication uses your Blaxel login or `BL_API_KEY` from the environment. See the [Blaxel CLI install guide](https://docs.blaxel.ai/cli-reference/introduction).
+
+You also need three provider keys:
 
 | Variable | For |
 | --- | --- |
@@ -15,7 +28,7 @@ You need Docker with room for four containers at once (Docker Desktop with 8 CPU
 | `OPENAI_API_KEY` | the judge (`gpt-6.1-sol`, set in `configs/models.toml`); the key needs access to that model |
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+python3 -m venv .venv && source .venv/bin/activate && pip install -e .  # includes the Blaxel Python SDK
 pr-eval serve
 ```
 
@@ -25,13 +38,19 @@ pr-eval serve
 2. choose how many pull requests (the most recent that change code and tests, up to 400 lines each) and which models to compare (Claude Opus 5.5 and DeepSeek V4.1 Flash to start),
 3. press **Start run** and watch it go: finding PRs, checking them, then running each model. Stop and Resume are on the run.
 
-When it finishes, **Open report** shows solve rate and cost per solved task side by side, with every attempt's diff, test output and the judge's reason. The checklist on the page says what's missing before you start: Docker, the GitHub login, or a key. The first run builds the Docker image, which takes a few minutes once.
+When it finishes, **Open report** shows solve rate and cost per solved task side by side, with every attempt's diff, test output and the judge's reason. The checklist on the page says what's missing before you start: the dedicated Blaxel connection, build CLI, GitHub login, or a key. The first run builds the trial image remotely on Blaxel, which takes a few minutes once.
 
 Private repositories work through your own `gh` login (the sample needs it too). Go and Python repositories have default install and test commands. For anything else, open **Install and test commands** and say how, for example `npm ci` and `npx vitest run {test_files}`, where `{test_files}` becomes the PR's changed test files. Changing the commands and starting again sets the PRs up afresh. The trial image has Go, Node and Python; another language's toolchain goes in `docker/Dockerfile`, and dependencies from a private registry need their access in the install command.
 
-Before any model runs, each PR is checked in the same container the models use: its tests have to fail without the change and pass with it. PRs that don't are left out, because that's a setup problem, not the model's.
+Before any model runs, each PR is checked in the same Blaxel image the models use: its tests have to fail without the change and pass with it. PRs that don't are left out, because that's a setup problem, not the model's.
 
-Where your code goes: the repository is cloned into `data/repos/` and each attempt works in a local Docker container. The code the agent reads goes to the model being tested (Anthropic or Baseten), and the diffs go to the judge (OpenAI). Nothing else leaves the machine.
+### Where your code goes
+
+The repository clone stays in local `data/repos/`. Each attempt uploads its base snapshot and setup instructions to a fresh sandbox in your dedicated Blaxel workspace; after the agent stops and its sandbox is deleted, its diff and hidden tests are uploaded to a fresh verifier sandbox for grading. Reference patches are uploaded only to separate task-validation sandboxes. The agent never shares a sandbox with the hidden answer. Execution artifacts are downloaded into local `jobs/`, and the page and HTML reports stay on this machine. Code the agent reads also goes to the model being tested (Anthropic or Baseten), and diffs go to the judge (OpenAI). This is cloud execution, not local-only processing.
+
+Sandboxes are deleted after use, including failed attempts. `--keep-sandboxes` retains verifier sandboxes for debugging; agent sandboxes are always deleted before hidden tests are uploaded. Ctrl-C or **Stop** cleans up that run's sandboxes. If the process is killed, use `pr-eval cleanup --workspace dedicated-eval-workspace`, optionally with `--run-id <run>`, to delete leftover eval sandboxes in that workspace. Cleanup does not delete other resources or the reusable trial image. Kept verifier sandboxes retain uploaded code and hidden tests until deleted; treat transcripts and local reports as sensitive too.
+
+The sandbox uses Blaxel's enforced proxy firewall with a provider-only allowlist during agent execution, plus non-root API isolation. These firewall features are currently in public preview and run on Mark 3.0 infrastructure. Setup commands are trusted: they run with network access to install dependencies before the allowlist is narrowed. This does not defend against a malicious setup command that downloads the answer into the starting files or leaves an already-open network connection behind.
 
 On a Mac you can keep the Claude token in the Keychain instead of the environment: `security add-generic-password -a "$USER" -s pr-eval-claude-code-oauth-token -w`. Keys only ever come from the environment or the Keychain, never from files.
 
@@ -45,19 +64,21 @@ pr-eval run                                   # the sample tasks instead (10 of 
 pr-eval run your-org/your-repo --pr 123 --pr 456   # exactly these PRs (up to 1,600 lines each)
 ```
 
-It prints one line per attempt and keeps the report current. Stop it with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`; the same command with `--attempts 3` adds attempts to a finished run, and with `--models kimi-k3` adds a model on the same tasks.
+It prints one line per attempt and keeps the report current. Stop it with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`; the same command with `--attempts 3` adds attempts to a finished run, and with `--models kimi-k3` adds a model on the same tasks. Resume restores the recorded Blaxel workspace, immutable image reference and region, rather than switching to the current defaults. The default image name includes a hash of its build files; each run resolves that name to an immutable registry reference before validation. Old Docker runs remain readable as reports but cannot be resumed or retested on Blaxel: start a new run.
+
+`--memory 4096` sets memory per sandbox in MiB; `--region us-pdx-1` selects the Blaxel region, and `--concurrency 4` controls parallel attempts. After changing `docker/Dockerfile`, run `pr-eval build-image`; validation is tied to the workspace and image identity so a rebuilt image is checked afresh.
 
 ## How it works
 
 1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point; the merged diff and the PR's tests are kept aside as the answer. When those tests call something the PR added by name, or a function whose parameters it changed, the request lists those signatures (never the code), so a correct fix isn't failed for naming a helper differently.
-2. **Run.** Each attempt gets a fresh container. Claude Code works on the request with the model under test; open models on Baseten go through a small proxy in the container that sets the same reasoning effort on every request. GitHub, package registries and Claude Code's web tools are blocked while the agent works.
-3. **Grade.** The agent's diff is saved, then the PR's hidden tests run against its code (its own test changes are set aside, so a test it wrote can't clash with the PR's), then an LLM judge compares its whole diff with the merged one and gives a one-sentence reason. Solved means the tests pass and the judge agrees.
+2. **Run.** Each attempt gets a fresh Blaxel sandbox. Claude Code works on the request with the model under test; open models on Baseten go through a small proxy in the sandbox that sets the same reasoning effort on every request. GitHub, package registries and Claude Code's web tools are blocked while the agent works.
+3. **Grade.** The agent's diff is saved and its sandbox deleted, then a fresh verifier sandbox runs the PR's hidden tests against its code (its own test changes are set aside, so a test it wrote can't clash with the PR's), then an LLM judge compares its whole diff with the merged one and gives a one-sentence reason. Solved means the tests pass and the judge agrees.
 4. **Report.** One HTML page per run, plus `report.json`: solve rate, cost per solved task, time and tokens, results by language, change size and repository, and every attempt's diff, test output and judge reason.
 
 ## What the numbers mean
 
 - **Solve rate**: solved attempts / valid attempts. The 95% range is shown next to it; with a few dozen tasks, differences of a few points are noise.
-- **Cost per solved task**: all spend on valid attempts / solved attempts, so a model that fails often pays for its failures. Judge tokens are not included.
+- **Cost per solved task**: model spend on valid attempts / solved attempts, so a model that fails often pays for its failures. Judge tokens and Blaxel compute are not included.
 - **Invalid attempts**: setup, provider, test-run or judge errors. Reported, never counted as failures.
 - A merge date after a model's training cutoff makes memorization less likely, not impossible.
 
@@ -76,13 +97,13 @@ It prints one line per attempt and keeps the report current. Stop it with Ctrl-C
 | `pr-eval validate` | check task folders in the trial image without running a model |
 | `pr-eval rejudge jobs/<run>` | grade a finished run again with another judge model |
 | `pr-eval retest jobs/<run>` | rerun a finished run's hidden tests from its saved diffs (no model calls) |
-| `pr-eval cleanup` | remove containers a killed run left behind |
-| `pr-eval build-image` | rebuild the trial image, e.g. for another Claude Code version |
+| `pr-eval cleanup` | remove eval sandboxes a killed run left behind in the dedicated workspace |
+| `pr-eval build-image` | rebuild the trial image remotely on Blaxel, e.g. for another Claude Code version |
 
 `pr-eval <command> --help` lists the options. `tasks/`, `jobs/` and `data/` are generated and gitignored: tasks carry the hidden tests and merged diffs, and jobs carry transcripts.
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests     # no Docker, network or keys needed
+python3 -m unittest discover -s tests     # no cloud, network or keys needed
 ```

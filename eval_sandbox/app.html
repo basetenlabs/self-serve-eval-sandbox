@@ -152,7 +152,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
 <main class="wrap">
   <div class="hero">
     <h1>Can an open model do your team's coding work?</h1>
-    <p class="lede">Pick a GitHub repository. Its recent merged pull requests become tasks: every model gets the same request and the code as it was before the change, works on it with Claude Code in its own container, and the PR's own tests plus an AI judge decide whether it solved it. You get solve rate and cost per solved task, side by side.</p>
+    <p class="lede">Pick a GitHub repository. Its recent merged pull requests become tasks: every model gets the same request and the code as it was before the change, works on it with Claude Code in its own Blaxel sandbox, and the PR's own tests plus an AI judge decide whether it solved it. You get solve rate and cost per solved task, side by side.</p>
   </div>
 
   <section class="start" aria-label="Start a run">
@@ -189,7 +189,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
       <details class="commands" id="commands">
         <summary>Install and test commands <span class="hint" id="commands-hint">(optional for Go and Python)</span></summary>
         <div class="grid">
-          <p class="hint">Run inside the container, in the repository's folder. <code>{test_files}</code> becomes the PR's changed test files.</p>
+          <p class="hint">Run inside the Blaxel sandbox, in the repository's folder. <code>{test_files}</code> becomes the PR's changed test files.</p>
           <div class="field"><label for="setup">Install</label><input type="text" id="setup" placeholder="npm ci" autocomplete="off" spellcheck="false"></div>
           <div class="field"><label for="test">Test</label><input type="text" id="test" placeholder="npx vitest run {test_files}" autocomplete="off" spellcheck="false"></div>
         </div>
@@ -217,11 +217,12 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     <h2 id="how-title">How a run works</h2>
     <ol>
       <li><b>Find.</b> The repository's recent merged pull requests that change both code and tests. The PR's text, or the issue it closes, is the request; the code just before the merge is the starting point.</li>
-      <li><b>Check.</b> Each PR's tests must fail before the change and pass after it, in the same container the models use. PRs that don't are left out: that's a setup problem, not a model's.</li>
-      <li><b>Run.</b> Each model works on each task in a fresh container through Claude Code, with GitHub and package registries blocked so it can't look up the answer.</li>
-      <li><b>Grade.</b> The PR's hidden tests run against the model's change, then an AI judge compares it with the merged change. Solved means both agree.</li>
+      <li><b>Check.</b> Each PR's tests must fail before the change and pass after it, in the same Blaxel image the models use. PRs that don't are left out: that's a setup problem, not a model's.</li>
+      <li><b>Run.</b> Each model works on each task in a fresh Blaxel sandbox through Claude Code, with GitHub and package registries blocked so it can't look up the answer.</li>
+      <li><b>Grade.</b> After deleting the agent's sandbox, a fresh verifier sandbox runs the PR's hidden tests against the model's change, then an AI judge compares it with the merged change. Solved means both agree.</li>
     </ol>
   </section>
+  <p class="hint">Repository snapshots and execution artifacts are uploaded to your dedicated Blaxel workspace. Reports stay on this machine; code also goes to the model provider and diffs to the judge. Agent sandboxes are always deleted before verification; verifier sandboxes are deleted unless explicitly kept for debugging.</p>
   <footer>Runs are ordinary <code>pr-eval run</code> processes, so they keep going if this page is closed. The same works from a terminal: <code>pr-eval run owner/repo --models claude-opus,deepseek-v4.1-flash</code>.</footer>
 </main>
 
@@ -347,9 +348,10 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     const baseten = state.models.find((m) => m.provider === "baseten");
     const claude = state.models.find((m) => m.provider === "anthropic");
     const items = [
-      [c.docker, "Docker is running", "Start Docker Desktop, or run colima start --cpu 8 --memory 12"],
+      [c.blaxel, "Dedicated Blaxel workspace is connected", c.blaxel_problem || "Configure PR_EVAL_BLAXEL_WORKSPACE or ~/.config/pr-eval/blaxel.json, then restart pr-eval serve"],
+      [c.bl_cli, "Blaxel CLI is installed", "Install the Blaxel CLI (bl): runs use it to build and find the trial image"],
       [c.gh, "Signed in to GitHub", "Run gh auth login in a terminal, then reload this page"],
-      [c.image ? true : null, c.image ? "Trial image is built" : "Trial image builds on the first run", "A few minutes, once"],
+      [c.image ? true : null, c.image ? "Blaxel trial image is built" : "Trial image builds remotely on the first run", "A few minutes, once"],
       [baseten && !baseten.missing, "Baseten key, for open models", "Set BASETEN_API_KEY, then restart pr-eval serve"],
       [claude && !claude.missing, "Claude key, for Claude models", "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve"],
       [c.judge.ok, `Judge key (${c.judge.model})`, c.judge.problem || `Set ${c.judge.env}, then restart pr-eval serve`],

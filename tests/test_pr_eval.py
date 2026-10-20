@@ -96,7 +96,7 @@ class AgentScriptTest(unittest.TestCase):
         self.assertIn("--disallowedTools WebFetch,WebSearch", script)
         self.assertEqual(env["ANTHROPIC_BASE_URL"], f"http://127.0.0.1:{runner.PROXY_PORT}")
         self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "zai-org/GLM-5.3")
-        self.assertNotIn("BASETEN_API_KEY=", script)  # the key arrives by name through docker exec -e
+        self.assertNotIn("BASETEN_API_KEY=", script)  # the key arrives through the process environment
 
     def test_anthropic_talks_to_anthropic(self):
         script, env = runner.agent_script(anthropic_model())
@@ -108,8 +108,10 @@ class AgentScriptTest(unittest.TestCase):
         self.assertIn("--include-partial-messages", runner.agent_script(anthropic_model())[0])
 
     def test_lookups_of_the_answer_are_blocked(self):
-        for host in ("github.com", "api.github.com", "raw.githubusercontent.com", "pypi.org", "registry.npmjs.org"):
-            self.assertIn(host, runner.BLOCKED_HOSTS)
+        from unittest import mock
+        with mock.patch.object(runner.runtime, "restrict_network") as restrict:
+            runner.block_lookups("trial", ["api.anthropic.com"])
+        restrict.assert_called_once_with("trial", ["api.anthropic.com"])
 
 
 class ParsingTest(unittest.TestCase):
@@ -360,8 +362,11 @@ class PatchCaptureTest(unittest.TestCase):
             baseline = local_sh(None, "git rev-parse HEAD", timeout=9)[1].strip()
             # What Muse Spark did: a branch of its own, the fix committed, plus one uncommitted file
             local_sh(None, f"git checkout -qb fix && echo new > a.txt && {git} commit -qam fix && echo b > b.txt", timeout=9)
-            with mock.patch.object(runner, "sh", local_sh):
-                patch, numstat = runner.capture_patch("unused", baseline)
+            def local_download(container, remote, local, **_):  # the patch file, byte for byte
+                local.write_bytes((Path(d) / remote.removeprefix("/workspace/")).read_bytes())
+            with mock.patch.object(runner, "sh", local_sh), \
+                    mock.patch.object(runner.runtime, "download", side_effect=local_download):
+                patch, numstat = runner.capture_patch("unused", baseline, Path(d) / "agent.patch")
         self.assertIn("+new", patch)
         self.assertIn("b.txt", patch)
         self.assertEqual(runner.diff_stats(numstat)["files"], 2)
@@ -398,8 +403,10 @@ class PipelineTest(unittest.TestCase):
                          (["claude-opus", "glm-5.3", "muse-spark"], ["muse-spark"]))
 
     def job(self, d, request):
-        return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
-                                tasks_dir=Path(d) / "tasks")
+        from unittest import mock
+        with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
+            return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
+                                    tasks_dir=Path(d) / "tasks")
 
     def test_a_run_says_why_it_failed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -419,7 +426,7 @@ class PipelineTest(unittest.TestCase):
                     mock.patch.object(runner, "cleanup") as cleanup, contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(pipeline.execute(job, [baseten_model()], runner.Settings()), 130)
             meta = pipeline.Job(job.path).meta
-        cleanup.assert_called_once_with("r1")  # containers of the stopped run are removed
+        cleanup.assert_called_once_with("r1", workspace="test-eval")  # only this run's sandbox workspace
         self.assertEqual(meta["status"]["phase"], "stopped")
         self.assertEqual(meta["request"]["repos"], ["o/r"])  # what resume needs to start over
         self.assertEqual(meta["tasks"], [])
@@ -448,6 +455,7 @@ class AppTest(unittest.TestCase):
             dead = jobs / "dead"  # says it is running, but its process is gone
             dead.mkdir()
             (dead / "run.json").write_text(json.dumps({"run_id": "dead", "request": {"repos": ["o/r"]}, "tasks": [],
+                                                       "backend": "blaxel", "workspace": "test-eval",
                                                        "models": [], "status": {"phase": "running", "pid": 999999}}))
             (dead / "log.txt").write_text("cloning o/r\nTraceback: boom\n")
             page = app.App(jobs)
@@ -504,6 +512,64 @@ class ReportTest(unittest.TestCase):
             record = report.trial_record(trial_dir)
         self.assertEqual(record["agent"]["working_seconds"], 70)
         self.assertEqual(report.summarize([record])["median_seconds"], 70)
+
+    def test_pages_hide_docker_wording(self):
+        page = app.PAGE.read_text()
+        self.assertNotIn("Docker", page)
+        self.assertIn('c.blaxel, "Dedicated Blaxel workspace is connected"', page)
+        self.assertNotIn('${run.image}', report.TEMPLATE.read_text())
+
+    def test_report_header_omits_judge_metadata(self):
+        template = report.TEMPLATE.read_text()
+        header = template.split("// ---------- header + headline ----------", 1)[1].split("const closed =", 1)[0]
+        self.assertNotIn("run.judge", header)
+        self.assertNotIn("Tests only, no judge", header)
+        self.assertIn("if (r.judge)", template)  # keep verdicts in the attempt details
+
+    def test_total_timing_distinguishes_parallel_work_from_elapsed_time(self):
+        trials = [
+            {"started_at": "2026-10-20T00:00:00+00:00", "finished_at": "2026-10-20T00:00:10+00:00",
+             "agent": {"seconds": 8, "working_seconds": 6}},
+            {"started_at": "2026-10-20T00:00:05+00:00", "finished_at": "2026-10-20T00:00:15+00:00",
+             "agent": {"seconds": 9, "working_seconds": 7}, "outcome": "invalid"},
+        ]
+        timing = report.summarize_timing(trials)
+        self.assertEqual(timing["elapsed_seconds"], 15)  # parallel spans are not added together
+        self.assertEqual(timing["total_working_seconds"], 13)  # waits excluded; invalid work still took time
+        self.assertEqual(timing["timed_attempts"], 2)
+        run = report.summarize_timing(trials, "2026-10-19T23:59:55+00:00")
+        self.assertEqual(run["elapsed_seconds"], 20)  # includes setup before the first attempt
+
+    def test_total_timing_does_not_invent_missing_measurements(self):
+        self.assertIsNone(report.summarize_timing([])["elapsed_seconds"])
+        self.assertIsNone(report.summarize_timing([])["total_working_seconds"])
+        partial = report.summarize_timing([
+            {"started_at": "2026-10-20T00:00:00+00:00", "finished_at": "2026-10-20T00:00:10+00:00",
+             "agent": {"seconds": 8}},
+            {"agent": None},
+        ])
+        self.assertIsNone(partial["elapsed_seconds"])
+        self.assertEqual(partial["total_working_seconds"], 8)
+        self.assertEqual((partial["timed_attempts"], partial["attempts"]), (1, 2))
+
+    def test_report_has_ranked_cards_and_three_way_task_comparison(self):
+        template = report.TEMPLATE.read_text()
+        self.assertIn('<ol class="scores" id="scores">', template)
+        self.assertIn('rankedModels.forEach((m, rank)', template)
+        self.assertIn('metric("Total elapsed time', template)
+        self.assertNotIn('Whole run elapsed', template)
+        self.assertNotIn('id="run-timing"', template)
+        self.assertNotIn('id="lede"', template)
+        self.assertNotIn('id="h-scores"', template)
+        self.assertNotIn("Ranked by solve rate, then", template)
+        self.assertNotIn("Agent time adds up work across all attempts", template)
+        for metric in ("pass_at_1", "cost_per_solved", "median_seconds"):
+            self.assertIn(f'data-metric="{metric}"', template)
+        self.assertIn('aria-describedby="metric-hint"', template)
+        self.assertIn('<section aria-labelledby="h-slices" hidden>', template)
+        self.assertIn('<section aria-labelledby="h-tasks" hidden>', template)
+        self.assertNotIn('How this was measured', template)
+        self.assertNotIn('document.getElementById("method")', template)
 
     def test_report_builds_from_a_job_directory(self):
         with tempfile.TemporaryDirectory() as d:

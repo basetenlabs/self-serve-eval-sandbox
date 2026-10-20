@@ -12,11 +12,11 @@ A task folder is what one trial needs and nothing more:
       solution/reference.patch   the merged diff, for the judge             (hidden)
 
 Only `environment/` and `instruction.md` ever reach the agent. The rest is copied into
-the trial container after the agent has finished.
+a fresh verifier sandbox after the agent has finished.
 
 Pull requests come from GitHub through the `gh` CLI, so private repositories work with
 whatever access `gh auth login` gave. Each repository is cloned once, bare, into
-data/repos/; the clone never enters a trial container.
+data/repos/; the clone never enters a sandbox.
 """
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def recipe(repo: str, language: str, test_paths: list[str], package_json: dict |
     """Default setup and test commands for a repository; `--setup` and `--test` override them.
 
     The tests run are the repository's default suite, except where that suite needs more
-    than one container (Hono: only the PR's changed test files).
+    than one sandbox (Hono: only the PR's changed test files).
     """
     if language == "Go":
         return {"setup": "go mod download && go build ./... >/dev/null",

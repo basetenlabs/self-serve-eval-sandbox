@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-from . import app, config, pipeline, report, runner, tasks
+from . import app, config, pipeline, report, runner, runtime, tasks
 
 
 def csv(value: str) -> list[str]:
@@ -25,6 +26,7 @@ def cmd_run(args) -> int:
         # A resumed run keeps its own tasks. --attempts may grow it and --models may add
         # models, so a new model is compared on the same tasks without rerunning the others.
         job = pipeline.Job(args.resume)
+        pipeline.restore_execution(job.meta, runner.Settings(workspace=args.workspace))
         keys, added = pipeline.resumed_models(job.meta, args.models)
         try:
             models, judge = pipeline.preflight(keys, args.judge, args.models_config)
@@ -41,10 +43,12 @@ def cmd_run(args) -> int:
         request = pipeline.Request(repos=args.repos, prs=args.pr, limit=args.limit, since=args.since, setup=args.setup,
                                    test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task)
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
-                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks)
+                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks,
+                               workspace=args.workspace, region=args.region)
     print(f"run {job.id} -> {job.path}")
-    settings = runner.Settings(image=args.image, concurrency=args.concurrency, cpus=args.cpus, memory=args.memory,
-                               agent_timeout=args.agent_timeout, judge=judge, keep_containers=args.keep_containers)
+    settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
+                               region=args.region, workspace=args.workspace, agent_timeout=args.agent_timeout,
+                               judge=judge, keep_sandboxes=args.keep_sandboxes)
     return pipeline.execute(job, models, settings, skip_check=args.skip_validation)
 
 
@@ -68,7 +72,8 @@ def cmd_collect(args) -> int:
 def cmd_validate(args) -> int:
     pipeline.ensure_image(args.image)
     selected = tasks.discover(args.tasks, args.task)
-    settings = runner.Settings(image=args.image, concurrency=args.concurrency)
+    settings = runner.Settings(image=runtime.resolve_image(args.image), concurrency=args.concurrency,
+                               workspace=runtime.workspace())
     counts: dict[str, int] = {}
 
     def checked(record, done, total):
@@ -98,10 +103,12 @@ def cmd_rejudge(args) -> int:
 
 
 def cmd_retest(args) -> int:
-    pipeline.ensure_image(args.image)
     meta = json.loads((args.job / "run.json").read_text())
+    settings = runner.Settings(concurrency=args.concurrency, workspace=args.workspace)
+    pipeline.restore_execution(meta, settings)
+    pipeline.ensure_image(settings.image)
+    settings.image = runtime.resolve_image(settings.image)
     tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
-    settings = runner.Settings(image=args.image, concurrency=args.concurrency)
     changed = []
 
     def retested(r, done, total):
@@ -127,8 +134,8 @@ def cmd_build_image(args) -> int:
 
 
 def cmd_cleanup(args) -> int:
-    removed = runner.cleanup(args.run_id)
-    print(f"removed {len(removed)} container(s)")
+    removed = runner.cleanup(args.run_id, workspace=runtime.workspace())
+    print(f"removed {len(removed)} sandbox(es)")
     return 0
 
 
@@ -166,11 +173,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
     r.add_argument("--judge", default="default", help="'none' to score on tests only, or a judge model id")
     r.add_argument("--concurrency", type=int, default=4, help="attempts at once (default 4)")
-    r.add_argument("--cpus", default="2", help="CPUs per container (default 2)")
-    r.add_argument("--memory", default="4g", help="memory per container (default 4g)")
+    r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096)")
+    r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
     r.add_argument("--agent-timeout", type=int, help="seconds per attempt (default 1800)")
     r.add_argument("--skip-validation", action="store_true", help="run tasks without checking them first")
-    r.add_argument("--keep-containers", action="store_true", help="leave trial containers for debugging")
+    r.add_argument("--keep-sandboxes", action="store_true", help="keep verifier sandboxes for debugging (agent sandboxes are always deleted)")
     r.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     r.add_argument("--image", default=runner.DEFAULT_IMAGE)
     r.add_argument("--jobs", type=Path, default=pipeline.DEFAULT_JOBS)
@@ -207,20 +214,27 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("job", type=Path)
     t.add_argument("--concurrency", type=int, default=2)
     t.add_argument("--force", action="store_true", help="also attempts already retested")
-    t.add_argument("--image", default=runner.DEFAULT_IMAGE)
     t.set_defaults(func=cmd_retest)
 
-    k = sub.add_parser("cleanup", help="remove trial containers a killed run left behind")
+    k = sub.add_parser("cleanup", help="remove trial sandboxes a killed run left behind")
     k.add_argument("--run-id")
     k.set_defaults(func=cmd_cleanup)
 
-    b = sub.add_parser("build-image", help="rebuild the Docker image trials run in")
+    b = sub.add_parser("build-image", help="rebuild the Blaxel trial image remotely")
     b.add_argument("--image", default=runner.DEFAULT_IMAGE)
     b.add_argument("--claude-code-version", help="default: the version pinned in docker/Dockerfile")
     b.set_defaults(func=cmd_build_image)
 
+    for command in (s, r, v, t, k, b):
+        command.add_argument("--workspace", help="dedicated Blaxel workspace (or PR_EVAL_BLAXEL_WORKSPACE / saved config)")
+
     args = p.parse_args(argv)
-    return args.func(args)
+    if getattr(args, "workspace", None):
+        os.environ["PR_EVAL_BLAXEL_WORKSPACE"] = args.workspace
+    try:
+        return args.func(args)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

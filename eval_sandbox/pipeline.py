@@ -12,13 +12,12 @@ from __future__ import annotations
 import json
 import os
 import platform
-import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, report, runner, tasks
+from . import config, report, runner, runtime, tasks
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JOBS = ROOT / "jobs"
@@ -105,7 +104,9 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
 
 def new_job(request: Request, models: list[config.Model], judge: config.Judge | None, *, attempts: int = 1,
             name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
-            tasks_dir: Path = tasks.DEFAULT_TASKS) -> Job:
+            tasks_dir: Path = tasks.DEFAULT_TASKS, workspace: str | None = None,
+            region: str = "us-pdx-1") -> Job:
+    workspace = workspace or runtime.workspace()
     run_id = name or default_name(request)
     path = jobs_dir / run_id
     if (path / "run.json").exists():
@@ -113,7 +114,8 @@ def new_job(request: Request, models: list[config.Model], judge: config.Judge | 
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
     runner.write_json(path / "run.json", {
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
-        "harness_version": None, "image": image, "attempts": attempts, "models": [m.as_dict() for m in models],
+        "harness_version": None, "backend": "blaxel", "workspace": workspace, "image": image, "region": region,
+        "attempts": attempts, "models": [m.as_dict() for m in models],
         "judge": {"model": judge.model, "base_url": judge.base_url} if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
@@ -142,20 +144,24 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
     try:
+        restore_execution(job.meta, settings)
         if job.meta.get("tasks"):  # resumed after the check: keep the same tasks
             selected = tasks.discover(tasks_dir, job.meta["tasks"])
-            prepare_image(job, settings.image)
+            settings.image = prepare_image(job, settings.image)
+            if not skip_check and len(check(job, selected, settings)) != len(selected):
+                raise SystemExit("The original task set no longer passes validation; start a new run.")
         else:
             request = Request(**job.meta.get("request") or {})
             job.status("collecting", f"Finding merged pull requests in {request.describe()}")
             candidates = find_tasks(request, tasks_dir)
             if not candidates:
                 raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
-            prepare_image(job, settings.image)
+            settings.image = prepare_image(job, settings.image)
             job.meta["candidates"] = [t.id for t in candidates]
             selected = candidates if skip_check else check(job, candidates, settings)
             job.meta["tasks"] = [t.id for t in selected]
-        job.meta["harness_version"] = job.meta.get("harness_version") or image_claude_version(settings.image)
+        job.meta["harness_version"] = (job.meta.get("harness_version")
+                                       or image_claude_version(settings.image, settings.region, job.id))
         attempts = job.meta.get("attempts", 1)
         job.status("running", f"Running {len(selected)} tasks x {len(models)} models"
                               + (f" x {attempts} attempts" if attempts > 1 else ""))
@@ -165,7 +171,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
         job.status("done", f"Finished. Report: {path}")
         return 0
     except KeyboardInterrupt:
-        runner.cleanup(job.id)
+        runner.cleanup(job.id, workspace=settings.workspace)
         job.status("stopped", "Stopped. Resume to finish the attempts that hadn't finished: "
                               f"pr-eval run --resume {job.path}")
         rebuild_quietly(job)
@@ -187,8 +193,8 @@ def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> 
         print(f"  [{done}/{total}] {record['task_id']}: {record['status']}", flush=True)
 
     runner.validate_all(candidates, settings, job.id, on_result=checked)
-    kept = [t for t in candidates if runner.validation_status(t) == "valid"]
-    job.meta["left_out"] = {t.id: runner.validation_status(t) for t in candidates if t not in kept}
+    kept = [t for t in candidates if runner.validation_status(t, settings) == "valid"]
+    job.meta["left_out"] = {t.id: runner.validation_status(t, settings) for t in candidates if t not in kept}
     if job.meta["left_out"]:
         print(f"leaving out {len(job.meta['left_out'])} task(s) that failed the check (a setup problem, "
               f"not a model's): {', '.join(job.meta['left_out'])}")
@@ -222,47 +228,57 @@ def rebuild_quietly(job: Job) -> None:
         print(f"(report not rebuilt: {exc})")
 
 
+def restore_execution(meta: dict, settings: runner.Settings) -> None:
+    """Keep resumed work in its original backend, workspace and image."""
+    if meta.get("backend") != "blaxel" or not meta.get("workspace") or not meta.get("image"):
+        raise SystemExit("This run predates the Blaxel backend; start a new run instead of resuming a Docker run.")
+    if settings.workspace and settings.workspace != meta["workspace"]:
+        raise SystemExit("The requested workspace differs from this run's recorded Blaxel workspace.")
+    settings.workspace = meta["workspace"]
+    settings.image = meta["image"]
+    settings.region = meta.get("region", "us-pdx-1")
+    os.environ["PR_EVAL_BLAXEL_WORKSPACE"] = settings.workspace
+
+
 def build_image(image: str, claude_code_version: str | None = None) -> int:
-    argv = ["docker", "build", "-t", image]
-    if claude_code_version:
-        argv += ["--build-arg", f"CLAUDE_CODE_VERSION={claude_code_version}"]
-    return subprocess.run([*argv, str(ROOT / "docker")]).returncode
-
-
-def docker_running() -> bool:
     try:
-        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        runtime.check_connection()
+        return runtime.build_image(image, claude_code_version)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def image_exists(image: str) -> bool:
-    return subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0
+    return runtime.image_exists(image)
 
 
-def prepare_image(job: Job, image: str) -> None:
-    if docker_running() and not image_exists(image):
-        job.status("checking", "Building the trial image: first run only, a few minutes")
-    ensure_image(image)
+def prepare_image(job: Job, image: str) -> str:
+    ensure_image(image, job)
+    resolved = runtime.resolve_image(image)
+    job.meta.setdefault("image_source", image)
+    job.meta["image"] = resolved
+    job.save()
+    return resolved
 
 
-def ensure_image(image: str) -> None:
-    """Fail early and plainly without Docker, and build the trial image on first use."""
-    if not docker_running():
-        raise SystemExit("Docker isn't running. Start Docker Desktop, or `colima start --cpu 8 --memory 12`.")
-    if not image_exists(image):
-        print(f"building the trial image {image} (first run only, a few minutes)", flush=True)
-        if build_image(image):
-            raise SystemExit("docker build failed; see the output above")
-
-
-def image_claude_version(image: str) -> str | None:
+def ensure_image(image: str, job: Job | None = None) -> None:
+    """Check the dedicated workspace and build the trial template remotely on first use."""
     try:
-        out = subprocess.run(["docker", "run", "--rm", image, "claude", "--version"],
-                             capture_output=True, timeout=120, check=True).stdout.decode()
-        return out.split()[0]
-    except (subprocess.SubprocessError, OSError, IndexError):
-        return None
+        runtime.check_connection()
+        if not image_exists(image):
+            detail = f"Building the Blaxel trial image {image} remotely (first run only, a few minutes)"
+            if job:
+                job.status("checking", detail)
+            else:
+                print(detail, flush=True)
+            if build_image(image):
+                raise SystemExit("Blaxel image build failed; see the output above")
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def image_claude_version(image: str, region: str = "us-pdx-1", run_id: str = "image-probe") -> str | None:
+    return runtime.image_claude_version(image, region, run_id)
 
 
 def resumed_models(meta: dict, requested: list[str] | None) -> tuple[list[str], list[str]]:

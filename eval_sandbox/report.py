@@ -1,6 +1,6 @@
 """One-page report for a finished run: report.json plus a self-contained report.html.
 
-Definitions (also printed on the page):
+Definitions:
 - An attempt is *valid* unless setup, the harness, the provider, the verifier or the
   judge broke. Invalid attempts are reported separately and never count as failures.
 - *Solve rate* (pass@1) is solved attempts / valid attempts.
@@ -42,6 +42,26 @@ def median(values):
     return statistics.median(values) if values else None
 
 
+def summarize_timing(trials: list[dict], started_at: str | None = None) -> dict:
+    """Elapsed span is wall clock; summed agent time can overlap across trials."""
+    starts = [datetime.fromisoformat(t["started_at"]) for t in trials if t.get("started_at")]
+    finishes = [datetime.fromisoformat(t["finished_at"]) for t in trials if t.get("finished_at")]
+    start = datetime.fromisoformat(started_at) if started_at else min(starts, default=None)
+    finish = max(finishes, default=None)
+    complete = len(starts) == len(finishes) == len(trials)
+    working = [(t.get("agent") or {}).get("working_seconds", (t.get("agent") or {}).get("seconds"))
+               for t in trials]
+    known = [seconds for seconds in working if seconds is not None]
+    return {
+        "started_at": start.isoformat() if start else None,
+        "finished_at": finish.isoformat() if finish else None,
+        "elapsed_seconds": max(0, (finish - start).total_seconds()) if complete and start and finish else None,
+        "total_working_seconds": sum(known) if known else None,
+        "timed_attempts": len(known),
+        "attempts": len(trials),
+    }
+
+
 def summarize(trials: list[dict]) -> dict:
     valid = [t for t in trials if t["outcome"] in ("solved", "failed")]
     solved = [t for t in valid if t["outcome"] == "solved"]
@@ -54,6 +74,7 @@ def summarize(trials: list[dict]) -> dict:
     tokens = [a.get("tokens") or {} for a in agent]
     return {
         "attempts": len(trials), "valid": len(valid), "invalid": len(trials) - len(valid),
+        "timing": summarize_timing(trials),
         "solved": len(solved),
         "pass_at_1": len(solved) / len(valid) if valid else None,
         "tasks": len(by_task),
@@ -142,6 +163,7 @@ def build_data(job_dir: Path) -> dict:
 
     return {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "run": meta, "models": models, "summary": per_model, "slices": slices,
+            "timing": summarize_timing(trials, meta.get("created_at")),
             "tasks": list(task_meta.values()), "trials": trials,
             "complete": len(trials) == len(meta.get("tasks", [])) * len(models) * meta.get("attempts", 1)}
 
