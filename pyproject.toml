@@ -3,7 +3,7 @@ name = "self-serve-eval-sandbox"
 version = "0.0.1"
 description = "Replay merged PRs through Claude Code with a closed and an open model; compare pass rate and cost per solved task."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["blaxel==0.4.19"]
 
 [project.scripts]
 pr-eval = "eval_sandbox.cli:main"

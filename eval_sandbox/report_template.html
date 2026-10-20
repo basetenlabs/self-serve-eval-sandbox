@@ -74,7 +74,6 @@ a.icon-btn { display: inline-flex; align-items: center; text-decoration: none; }
 .eyebrow { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .eyebrow span + span::before { content: "·"; margin-right: 14px; color: var(--axis); }
 h1 { font-size: clamp(24px, 3.4vw, 34px); line-height: 1.2; letter-spacing: -0.02em; font-weight: 650; margin: 12px 0 10px; max-width: 920px; text-wrap: balance; }
-.lede { color: var(--ink-2); max-width: 820px; margin: 0; font-size: 16px; }
 .banner { margin: 20px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--warn-wash); color: var(--ink); font-size: 14px; display: flex; gap: 10px; align-items: baseline; }
 .banner b { color: var(--warn-ink); }
 
@@ -84,26 +83,42 @@ h2 { font-size: 17px; letter-spacing: -0.01em; margin: 0 0 4px; font-weight: 650
 .section-sub { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; max-width: 760px; }
 .card { background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: var(--shadow); }
 
-/* scorecards */
-.scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
-@media (min-width: 860px) { .scores { grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); } }
-.score { padding: 18px 18px 14px; position: relative; }
-.score-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+/* ranked model cards */
+.scores { display: grid; gap: 10px; list-style: none; padding: 0; margin: 0; }
+.score { padding: 20px 24px; }
+.score-main { display: grid; grid-template-columns: 32px minmax(220px, 1.5fr) repeat(3, minmax(130px, 1fr)); align-items: center; gap: 20px; }
+.rank { font-size: 20px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.score:first-child { border-color: var(--good-ink); }
+.score:first-child .rank { color: var(--good-ink); }
 .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-.score-name { font-weight: 600; }
-.score-head .chip { margin-left: auto; }
-.leads { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 8px; }
-.lead { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--good-wash); color: var(--good-ink); }
-.hero-num { font-size: 44px; font-weight: 650; letter-spacing: -0.03em; line-height: 1; }
-.hero-num small { font-size: 18px; font-weight: 600; letter-spacing: 0; color: var(--ink-2); margin-left: 2px; }
-.hero-label { color: var(--muted); font-size: 13px; margin-top: 6px; }
-.meter { height: 6px; border-radius: 3px; background: var(--surface-3); margin: 12px 0 14px; overflow: hidden; }
-.meter > i { display: block; height: 100%; border-radius: 3px; }
-.kv { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; font-size: 13.5px; border-top: 1px solid var(--hairline); padding-top: 12px; }
+.score-head { display: flex; align-items: center; gap: 8px; }
+.score-name { font-weight: 650; font-size: 16px; margin: 0; }
+.model-kind { color: var(--muted); font-size: 12px; margin: 3px 0 0 18px; }
+.leads { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 0 18px; }
+.lead { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; background: var(--good-wash); color: var(--good-ink); }
+.score-metric { min-width: 0; }
+.metric-label { font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+.metric-value { font-size: 28px; font-weight: 650; letter-spacing: -.035em; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.metric-note { display: block; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.score-details { margin: 12px 0 0 52px; font-size: 12px; color: var(--muted); }
+.score-details summary { cursor: pointer; width: fit-content; }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; font-size: 13px; border-top: 1px solid var(--hairline); padding-top: 12px; max-width: 540px; }
 .kv dt { color: var(--ink-2); }
-.kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; font-weight: 550; }
-.kv dd.big { font-size: 15px; }
-.ci { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; font-weight: 550; color: var(--ink); }
+@media (max-width: 860px) {
+  .score-main { grid-template-columns: 28px 1fr 1fr 1fr; gap: 16px 12px; }
+  .score-identity { grid-column: 2 / -1; }
+  .score-metric:nth-child(3) { grid-column: 2; }
+  .score-details { margin-left: 40px; }
+  .metric-value { font-size: 24px; }
+}
+@media (max-width: 480px) {
+  .score { padding: 16px 12px; }
+  .score-main { grid-template-columns: 22px 1fr 1fr 1fr; gap: 14px 8px; }
+  .score-details { margin-left: 30px; }
+  .metric-value { font-size: 21px; }
+  .metric-label, .metric-note { font-size: 11px; }
+}
 
 /* benchmark table */
 .bench-card { padding: 6px 6px 10px; }
@@ -116,8 +131,8 @@ table.bench td .sub { color: var(--muted); font-weight: 400; margin-left: 6px; }
 .bench-foot { display: flex; align-items: center; gap: 10px; padding: 10px 8px 0; }
 
 /* charts */
-.charts { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 14px; }
-@media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+#scatter { max-width: 660px; margin: 0 auto; }
+#scatter svg { display: block; max-height: 340px; }
 .chart-card { padding: 18px; }
 .chart-card h3 { margin: 0; font-size: 14.5px; font-weight: 600; }
 .chart-card p { margin: 2px 0 10px; color: var(--muted); font-size: 13px; }
@@ -131,19 +146,32 @@ svg text { font-family: var(--sans); }
 .tooltip .tt-row b { font-weight: 650; color: var(--ink); }
 .tooltip .key { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
 
-/* slice table */
-.slice-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.slice-table th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 0 8px 8px; border-bottom: 1px solid var(--hairline); }
-.slice-table td { padding: 7px 8px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
-.slice-table tr.group td { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; padding-top: 14px; border-bottom: 0; }
-.slice-table td.label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.slice-table td.label small { color: var(--muted); margin-left: 4px; }
-.slice-table { table-layout: fixed; }
-.slice-table th:first-child, .slice-table td.label { width: 32%; }
-.bar-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.bar-track { flex: 1; height: 8px; border-radius: 2px; background: var(--surface-3); position: relative; min-width: 24px; }
-.bar-track > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 3px 3px 0; }
-.bar-cell b { font-weight: 600; font-variant-numeric: tabular-nums; width: 36px; flex: none; text-align: right; font-size: 12.5px; }
+/* task-type comparison */
+.slice-wrap { overflow-x: auto; border-radius: 14px; }
+.slice-table { width: 100%; min-width: 900px; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 13.5px; }
+.slice-table th, .slice-table td { padding: 16px; border-bottom: 1px solid var(--hairline); text-align: left; vertical-align: middle; }
+.slice-table thead th { background: var(--surface-2); font-size: 12px; font-weight: 600; color: var(--ink-2); vertical-align: top; }
+.slice-table thead th:first-child { width: 23%; }
+.slice-table thead th.task-total { width: 7%; text-align: right; }
+.slice-table .model-heading { display: flex; align-items: flex-start; gap: 8px; }
+.slice-table .model-heading .swatch { margin-top: 4px; }
+.slice-table .group th { padding: 10px 16px; background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
+.slice-table .row-label { font-weight: 550; overflow-wrap: anywhere; }
+.slice-table .task-total { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.slice-table .result { font-variant-numeric: tabular-nums; }
+.slice-table .result.best { background: var(--good-wash); }
+.slice-table .rate { display: block; font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
+.slice-table .best .rate { color: var(--good-ink); }
+.slice-table .fraction { display: block; font-size: 11.5px; line-height: 1.45; color: var(--muted); margin-top: 2px; }
+.slice-table tbody:last-child tr:last-child > * { border-bottom: 0; }
+.slice-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.metric-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 10px; }
+.metric-tabs button { border: 0; background: transparent; color: var(--ink-2); padding: 7px 12px; font-size: 13px; border-radius: 7px; cursor: pointer; }
+.metric-tabs button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
+.metric-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.metric-hint { font-size: 12px; margin-bottom: 12px; }
+.slice-key { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
+.slice-key .swatch { background: var(--good-wash); border: 1px solid var(--good-ink); }
 
 /* task grid */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
@@ -202,16 +230,6 @@ pre.code .del { background: var(--del); }
 pre.code .hunk { color: var(--accent); }
 pre.code .file { font-weight: 700; color: var(--ink); background: var(--surface-2); }
 
-/* method */
-.method { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
-.method .card { padding: 16px 18px; font-size: 13.5px; color: var(--ink-2); }
-.method h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
-.method ul { margin: 0; padding-left: 18px; }
-.method li { margin: 3px 0; }
-.price-table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.price-table th, .price-table td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--hairline); }
-.price-table th:first-child, .price-table td:first-child { text-align: left; }
-.price-table th { color: var(--muted); font-weight: 500; }
 footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -233,19 +251,16 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   <div class="hero">
     <div class="eyebrow" id="eyebrow"></div>
     <h1 id="headline"></h1>
-    <p class="lede" id="lede"></p>
     <div id="banners"></div>
   </div>
 
-  <section aria-labelledby="h-scores">
-    <h2 id="h-scores">Models</h2>
-    <p class="section-sub">Same harness, same tasks, same settings. The model is the only thing that changes.</p>
-    <div class="scores" id="scores"></div>
+  <section aria-label="Model rankings">
+    <ol class="scores" id="scores"></ol>
   </section>
 
   <section aria-labelledby="h-bench">
-    <h2 id="h-bench">Quality vs. cost benchmark table</h2>
-    <p class="section-sub">The table from the open-model evaluation guide, filled in from this run. Teams usually read it as pass rate first, then cost per successful task, then wall clock.</p>
+    <h2 id="h-bench">Success, cost, and speed</h2>
+    <p class="section-sub">The same ranking in a compact table. Compare how often each model solves a task, what it costs, and how long a typical attempt takes.</p>
     <div class="card bench-card">
       <div class="grid-wrap"><table class="bench" id="bench"></table></div>
       <div class="bench-foot"><button class="icon-btn" id="copy-md" type="button">Copy as Markdown</button><span class="t-meta" id="copy-status" role="status"></span></div>
@@ -254,23 +269,28 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
 
   <section aria-labelledby="h-charts">
     <h2 id="h-charts">Quality and cost</h2>
-    <p class="section-sub">Up and to the left is better. Break results down by task type before choosing one model for everything: the cheaper model may be enough for some kinds of work.</p>
-    <div class="charts">
-      <div class="card chart-card">
-        <h3>Solve rate vs. cost per solved task</h3>
-        <p>One point per model.</p>
-        <div id="scatter"></div>
+    <p class="section-sub">One point per model. Higher solve rate and lower cost is better: look toward the top left.</p>
+    <div class="card chart-card"><div id="scatter"></div></div>
+  </section>
+
+  <section aria-labelledby="h-slices" hidden>
+    <h2 id="h-slices">Results by task type</h2>
+    <p class="section-sub" id="slice-description">Compare models within each language, change size, or repository. Choose what matters: success, cost, or speed.</p>
+    <div class="slice-toolbar">
+      <div class="metric-tabs" role="group" aria-label="Task-type comparison metric">
+        <button type="button" data-metric="pass_at_1" aria-pressed="true">Solve rate</button>
+        <button type="button" data-metric="cost_per_solved" aria-pressed="false">Cost per solved task</button>
+        <button type="button" data-metric="median_seconds" aria-pressed="false">Time per attempt</button>
       </div>
-      <div class="card chart-card">
-        <h3>Solve rate by task type</h3>
-        <p>Share of valid attempts solved; the number of tasks in each group is in parentheses.</p>
-        <div class="legend" id="slice-legend"></div>
-        <div class="grid-wrap"><table class="slice-table" id="slices"></table></div>
-      </div>
+      <span class="slice-key"><span class="swatch" aria-hidden="true"></span>Best in row, including ties</span>
+    </div>
+    <p class="section-sub metric-hint" id="metric-hint" aria-live="polite"></p>
+    <div class="card slice-wrap" role="region" aria-labelledby="h-slices" tabindex="0">
+      <table class="slice-table" id="slices" aria-labelledby="h-slices" aria-describedby="metric-hint"></table>
     </div>
   </section>
 
-  <section aria-labelledby="h-tasks">
+  <section aria-labelledby="h-tasks" hidden>
     <h2 id="h-tasks">Tasks</h2>
     <p class="section-sub">Each square is one attempt: <span class="pip solved" style="display:inline-grid;width:18px;height:18px">✓</span> solved, <span class="pip failed" style="display:inline-grid;width:18px;height:18px">✗</span> failed, <span class="pip invalid" style="display:inline-grid;width:18px;height:18px">!</span> invalid (setup, provider or judge broke; not counted). Select a task for the request, both diffs, the test result and the judge's reason.</p>
     <div class="filters">
@@ -290,12 +310,6 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
       <span class="count" id="task-count"></span>
     </div>
     <div class="card grid-wrap"><table class="tasks" id="tasks"></table></div>
-  </section>
-
-  <section aria-labelledby="h-method">
-    <h2 id="h-method">How this was measured</h2>
-    <p class="section-sub">Read this before quoting a number.</p>
-    <div class="method" id="method"></div>
   </section>
 
   <footer id="footer"></footer>
@@ -327,6 +341,10 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5"];
   const color = (i) => `var(${SLOTS[i % SLOTS.length]})`;
   const modelIndex = Object.fromEntries(models.map((m, i) => [m.key, i]));
+  const rankedModels = [...models].sort((a, b) =>
+    (S[b.key].pass_at_1 ?? -1) - (S[a.key].pass_at_1 ?? -1) ||
+    (S[a.key].cost_per_solved ?? Infinity) - (S[b.key].cost_per_solved ?? Infinity) ||
+    (S[a.key].timing?.elapsed_seconds ?? Infinity) - (S[b.key].timing?.elapsed_seconds ?? Infinity));
 
   // ---------- helpers ----------
   const el = (tag, attrs = {}, ...kids) => {
@@ -349,6 +367,12 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   const pct = (x, d = 0) => x == null ? "–" : `${(x * 100).toFixed(d)}%`;
   const usd = (x) => x == null ? "–" : x >= 100 ? `$${x.toFixed(0)}` : x >= 1 ? `$${x.toFixed(2)}` : `$${x.toFixed(3)}`;
   const dur = (s) => s == null ? "–" : s < 90 ? `${Math.round(s)}s` : s < 3600 ? `${(s / 60).toFixed(1)} min` : `${(s / 3600).toFixed(1)} h`;
+  const elapsed = (seconds) => {
+    if (seconds == null) return "–";
+    const minutes = Math.floor(seconds / 60), days = Math.floor(minutes / 1440), hours = Math.floor(minutes / 60) % 24;
+    if (!minutes) return `${Math.round(seconds)}s`;
+    return [days ? `${days}d` : null, hours ? `${hours}h` : null, minutes % 60 ? `${minutes % 60}m` : null].filter(Boolean).join(" ");
+  };
   const compact = (n) => n == null ? "–" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${Math.round(n)}`;
   const ratio = (x) => x >= 10 ? x.toFixed(0) : x.toFixed(1);
   function wilson(k, n) {
@@ -380,7 +404,6 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   [`Claude Code ${run.harness_version || ""}`.trim(),
    `${tasks.length} merged PRs from ${repos.length} ${repos.length === 1 ? "repo" : "repos"}`,
    `${run.attempts} ${run.attempts === 1 ? "attempt" : "attempts"} per task`,
-   run.judge ? `Judge: ${run.judge.model}${run.judge.prompt_version ? ` (prompt v${run.judge.prompt_version})` : ""}` : "Tests only, no judge",
    (() => {
      const day = (d) => new Date(d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
      const last = trials.map((t) => t.finished_at).filter(Boolean).sort().pop();
@@ -391,7 +414,6 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   const closed = models.find((m) => m.kind === "closed" && S[m.key].valid);
   const opens = models.filter((m) => m.kind === "open" && S[m.key].valid);
   const headline = document.getElementById("headline");
-  const lede = document.getElementById("lede");
   if (closed && opens.length) {
     // The report's question: can an open model do this work for less? So the headline names the
     // cheapest open model that solves at least as many as the closed one, else the strongest.
@@ -411,72 +433,72 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
     let cost = "";
     if (cheaper != null && c.solved && o.solved) cost = cheaper >= 2 ? `, ${ratio(cheaper)}× cheaper per solved task` : cheaper >= 1.05 ? ` for ${pct(1 - 1 / cheaper)} less per solved task` : cheaper <= 0.95 ? `, but cost ${ratio(1 / cheaper)}× more per solved task` : " at about the same cost per solved task";
     headline.textContent = `${quality}${cost}.`;
-    const closedSolved = new Set(trials.filter((t) => t.model === closed.key && t.outcome === "solved").map((t) => t.task_id));
-    const openSolved = new Set(trials.filter((t) => t.model === best.key && t.outcome === "solved").map((t) => t.task_id));
-    const onlyClosed = [...closedSolved].filter((t) => !openSolved.has(t)).length;
-    const onlyOpen = [...openSolved].filter((t) => !closedSolved.has(t)).length;
-    lede.textContent = `${closed.label}: ${pct(c.pass_at_1)} of attempts solved, ${usd(c.cost_per_solved)} per solved task. ` +
-      `${best.label}: ${pct(o.pass_at_1)}, ${usd(o.cost_per_solved)}. ` +
-      (onlyClosed || onlyOpen ? `${onlyClosed} ${onlyClosed === 1 ? "task" : "tasks"} only ${closed.label} solved, ${onlyOpen} only ${best.label} solved.` : "Both solved the same tasks.") +
-      (strongest !== best && S[strongest.key].pass_at_1 > o.pass_at_1 ? ` The highest open-model solve rate was ${strongest.label}'s, ${pct(S[strongest.key].pass_at_1)} at ${usd(S[strongest.key].cost_per_solved)} per solved task.` : "");
   } else {
     const ranked = models.filter((m) => S[m.key].valid).sort((a, b) => S[b.key].pass_at_1 - S[a.key].pass_at_1);
     headline.textContent = ranked.length ? `${ranked[0].label} solved ${pct(S[ranked[0].key].pass_at_1)} of attempts.` : "No finished attempts yet.";
-    lede.textContent = "Add a closed and an open model to the same run to get a head-to-head answer.";
   }
   const banners = document.getElementById("banners");
   const expected = (run.tasks || []).length * models.length * (run.attempts || 1);
   if (!DATA.complete) banners.append(el("div", { class: "banner" }, el("b", {}, "In progress"), `${trials.length} of ${expected} attempts had finished at ${new Date(DATA.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. The run rewrites this page as attempts finish; reload for the latest.`));
   if (run.note) banners.append(el("div", { class: "banner" }, el("b", {}, "Note"), run.note));
-  if (tasks.length < 30) banners.append(el("div", { class: "banner" }, el("b", {}, "Small sample"), `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}. Differences of a few points are noise at this size; the ranges under each solve rate show how wide the uncertainty is.`));
+  if (tasks.length < 30) banners.append(el("div", { class: "banner" }, el("b", {}, "Small sample"), `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}. Differences of a few points are noise at this size; the ranges in More metrics show how wide the uncertainty is.`));
 
-  // ---------- scorecards ----------
+  // ---------- ranked model cards ----------
   const scores = document.getElementById("scores");
-  scores.style.setProperty("--cols", models.length <= 4 ? models.length : Math.ceil(models.length / 2));
-  const scored = models.filter((m) => S[m.key].valid);
+  const scored = rankedModels.filter((m) => S[m.key].valid);
   const topRate = Math.max(...scored.map((m) => S[m.key].pass_at_1 ?? -1));
   const lowCost = Math.min(...scored.map((m) => S[m.key].cost_per_solved ?? Infinity));
+  const fastest = Math.min(...scored.map((m) => S[m.key].timing?.elapsed_seconds ?? Infinity));
   const leads = (key) => scored.length < 2 ? [] : [
     ...(S[key].pass_at_1 === topRate ? ["Highest solve rate"] : []),
-    ...(S[key].cost_per_solved === lowCost ? ["Lowest cost per solved task"] : [])];
-  models.forEach((m, i) => {
-    const s = S[m.key];
+    ...(S[key].cost_per_solved === lowCost ? ["Lowest cost"] : []),
+    ...(S[key].timing?.elapsed_seconds === fastest ? ["Shortest elapsed"] : [])];
+  const metric = (label, value, note) => el("div", { class: "score-metric" },
+    el("div", { class: "metric-label" }, label), el("div", { class: "metric-value" }, value),
+    el("span", { class: "metric-note" }, note));
+  rankedModels.forEach((m, rank) => {
+    const s = S[m.key], i = modelIndex[m.key];
     const ci = wilson(s.solved, s.valid);
-    scores.append(el("div", { class: "card score" },
-      el("div", { class: "score-head" },
-        el("span", { class: "swatch", style: `background:${color(i)}` }),
-        el("span", { class: "score-name" }, m.label),
-        el("span", { class: "chip" }, m.kind === "closed" ? "Closed" : `Open · ${m.provider === "baseten" ? "Baseten" : m.provider}`)),
-      leads(m.key).length ? el("div", { class: "leads" }, leads(m.key).map((t) => el("span", { class: "lead" }, t))) : null,
-      el("div", { class: "hero-num" }, s.pass_at_1 == null ? "–" : Math.round(s.pass_at_1 * 100), s.pass_at_1 == null ? null : el("small", {}, "%")),
-      el("div", { class: "hero-label" }, `solve rate · ${s.solved} of ${s.valid} valid attempts`, ci ? el("span", { class: "ci" }, ` · 95% range ${pct(ci[0])}–${pct(ci[1])}`) : null),
-      el("div", { class: "meter", role: "presentation" }, el("i", { style: `width:${(s.pass_at_1 || 0) * 100}%;background:${color(i)}` })),
-      el("dl", { class: "kv" },
-        el("dt", {}, "Cost per solved task"), el("dd", { class: "big" }, usd(s.cost_per_solved)),
-        el("dt", {}, "Tasks solved at least once"), el("dd", {}, `${s.tasks_solved} / ${s.tasks}`),
-        el("dt", {}, "Cost per attempt"), el("dd", {}, usd(s.cost_per_attempt)),
-        el("dt", {}, "Median time per attempt"), el("dd", {}, dur(s.median_seconds)),
-        el("dt", {}, "Median turns"), el("dd", {}, s.median_turns == null ? "–" : Math.round(s.median_turns)),
-        el("dt", {}, "Tokens per attempt (in / out)"), el("dd", {}, `${compact(s.mean_input_tokens)} / ${compact(s.mean_output_tokens)}`),
-        el("dt", {}, "Passed tests, judge said no"), el("dd", {}, String(s.judge_disagreements || 0)),
-        el("dt", {}, "Hit the time limit"), el("dd", {}, String(s.agent_timeouts || 0)),
-        el("dt", {}, "Invalid attempts"), el("dd", {}, s.invalid ? String(s.invalid) : "0"))));
+    scores.append(el("li", { class: "card score", "data-model": m.key },
+      el("div", { class: "score-main" },
+        el("span", { class: "rank", "aria-label": `Rank ${rank + 1}` }, String(rank + 1).padStart(2, "0")),
+        el("div", { class: "score-identity" },
+          el("div", { class: "score-head" }, el("span", { class: "swatch", style: `background:${color(i)}` }), el("h3", { class: "score-name" }, m.label)),
+          el("p", { class: "model-kind" }, m.kind === "closed" ? "Closed model" : `Open model · ${m.provider === "baseten" ? "Baseten" : m.provider}`),
+          leads(m.key).length ? el("div", { class: "leads" }, leads(m.key).map((t) => el("span", { class: "lead" }, t))) : null),
+        metric("Solve rate ↑", pct(s.pass_at_1), `${s.solved} / ${s.valid} attempts solved`),
+        metric("Cost per solved task ↓", usd(s.cost_per_solved), "Includes failed attempts"),
+        metric("Total elapsed time ↓", elapsed(s.timing?.elapsed_seconds),
+          `${s.timing?.timed_attempts < s.attempts ? "≥ " : ""}${elapsed(s.timing?.total_working_seconds)} agent time · ${s.attempts} attempts`)),
+      el("details", { class: "score-details" }, el("summary", {}, "More metrics"),
+        el("dl", { class: "kv" },
+          el("dt", {}, "95% solve-rate range"), el("dd", {}, ci ? `${pct(ci[0])}–${pct(ci[1])}` : "–"),
+          el("dt", {}, "Tasks solved at least once"), el("dd", {}, `${s.tasks_solved} / ${s.tasks}`),
+          el("dt", {}, "Cost per attempt"), el("dd", {}, usd(s.cost_per_attempt)),
+          el("dt", {}, "Median time per valid attempt"), el("dd", {}, dur(s.median_seconds)),
+          el("dt", {}, "First attempt"), el("dd", {}, s.timing?.started_at ? new Date(s.timing.started_at).toLocaleString() : "–"),
+          el("dt", {}, "Last result"), el("dd", {}, s.timing?.finished_at ? new Date(s.timing.finished_at).toLocaleString() : "–"),
+          el("dt", {}, "Median turns"), el("dd", {}, s.median_turns == null ? "–" : Math.round(s.median_turns)),
+          el("dt", {}, "Tokens per attempt (in / out)"), el("dd", {}, `${compact(s.mean_input_tokens)} / ${compact(s.mean_output_tokens)}`),
+          el("dt", {}, "Passed tests, judge said no"), el("dd", {}, String(s.judge_disagreements || 0)),
+          el("dt", {}, "Hit the time limit"), el("dd", {}, String(s.agent_timeouts || 0)),
+          el("dt", {}, "Invalid attempts"), el("dd", {}, String(s.invalid || 0))))));
   });
 
   // ---------- guide benchmark table ----------
   (function bench() {
     const multi = (run.attempts || 1) > 1;
-    const cols = ["Model", "Resolved / pass rate", ...(multi ? [`Solved in ${run.attempts} tries (pass@${run.attempts})`] : []), "Output tokens", "Wall-clock", "Cost per successful task"];
-    const rows = models.map((m) => {
+    const cols = ["Model", "Resolved / pass rate", ...(multi ? [`Solved in ${run.attempts} tries (pass@${run.attempts})`] : []), "Total elapsed time", "Time per attempt (median)", "Cost per successful task"];
+    const rows = rankedModels.map((m) => {
       const s = S[m.key];
       return [m.label, `${s.solved}/${s.valid} ${pct(s.pass_at_1)}`, ...(multi ? [`${s.tasks_solved}/${s.tasks} ${s.tasks ? pct(s.tasks_solved / s.tasks) : "–"}`] : []),
-        compact(s.mean_output_tokens), dur(s.median_seconds), usd(s.cost_per_solved)];
+        elapsed(s.timing?.elapsed_seconds), dur(s.median_seconds), usd(s.cost_per_solved)];
     });
     const table = document.getElementById("bench");
     table.append(el("thead", {}, el("tr", {}, cols.map((c) => el("th", {}, c)))));
-    table.append(el("tbody", {}, rows.map((r, i) => el("tr", {}, r.map((v, j) => el("td", {}, j === 0 ? [el("span", { class: "swatch", style: `background:${color(i)};display:inline-block;margin-right:8px` }), v, el("span", { class: "sub" }, models[i].kind === "closed" ? "closed" : "open")] : v))))));
+    table.append(el("tbody", {}, rows.map((r, i) => el("tr", {}, r.map((v, j) => el("td", {}, j === 0 ? [el("span", { class: "swatch", style: `background:${color(modelIndex[rankedModels[i].key])};display:inline-block;margin-right:8px` }), v, el("span", { class: "sub" }, rankedModels[i].kind === "closed" ? "closed" : "open")] : v))))));
     const md = [`| ${cols.join(" | ")} |`, `| ${cols.map(() => "----").join(" | ")} |`, ...rows.map((r) => `| ${r.join(" | ")} |`),
-      "", `Claude Code ${run.harness_version || ""}, ${tasks.length} merged PRs from ${repos.length} ${repos.length === 1 ? "repo" : "repos"}, ${run.attempts} attempt(s) each. Output tokens: mean per attempt. Wall-clock: median per attempt. Cost: all valid attempts / solved attempts.`].join("\n");
+      "", `Claude Code ${run.harness_version || ""}, ${tasks.length} merged PRs from ${repos.length} ${repos.length === 1 ? "repo" : "repos"}, ${run.attempts} attempt(s) each. Total elapsed: first attempt to last result, including waits and pauses. Time per attempt: median agent time. Cost: all valid attempts / solved attempts.`].join("\n");
     const status = document.getElementById("copy-status");
     document.getElementById("copy-md").addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(md); status.textContent = "Copied"; }
@@ -553,29 +575,48 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
     host.append(g);
   })();
 
-  // ---------- slice table ----------
+  // ---------- task-type comparison ----------
   (function slices() {
-    const legend = document.getElementById("slice-legend");
-    models.forEach((m, i) => legend.append(el("span", {}, el("span", { class: "swatch", style: `background:${color(i)}` }), m.label)));
     const table = document.getElementById("slices");
-    table.append(el("thead", {}, el("tr", {}, el("th", {}, "Group"), ...models.map((m) => el("th", {}, m.label)))));
-    const body = el("tbody");
-    let current = null;
-    DATA.slices.forEach((sl) => {
-      if (sl.dimension !== current) { current = sl.dimension; body.append(el("tr", { class: "group" }, el("td", { colspan: models.length + 1 }, sl.dimension))); }
-      body.append(el("tr", {}, el("td", { class: "label", title: sl.value }, sl.value, el("small", {}, `(${sl.tasks})`)),
-        ...models.map((m, i) => {
-          const s = sl.models[m.key];
-          const cell = el("div", { class: "bar-cell", tabindex: 0 },
-            el("div", { class: "bar-track" }, el("i", { style: `width:${(s.pass_at_1 || 0) * 100}%;background:${color(i)}` })),
-            el("b", {}, pct(s.pass_at_1)));
-          const rows = [["Solve rate", pct(s.pass_at_1), color(i)], ["Solved / valid", `${s.solved} / ${s.valid}`], ["Cost per solved", usd(s.cost_per_solved)]];
-          cell.addEventListener("pointermove", (e) => showTip(e, `${m.label} · ${sl.value}`, rows));
-          cell.addEventListener("pointerleave", hideTip);
-          return el("td", {}, cell);
-        })));
-    });
-    table.append(body);
+    const buttons = [...document.querySelectorAll("[data-metric]")];
+    const metrics = {
+      pass_at_1: { format: pct, higher: true, hint: "Higher is better. Each cell shows the percentage solved, with solved / valid attempts below. Invalid attempts are excluded." },
+      cost_per_solved: { format: usd, higher: false, hint: "Lower is better. Cost includes failed attempts and is divided by solved attempts. A dash means no task was solved." },
+      median_seconds: { format: dur, higher: false, hint: "Lower is better. Median agent time per valid attempt, including failed attempts. Setup, grading, and provider retry waits are excluded." },
+    };
+    function render(key) {
+      const metric = metrics[key];
+      buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.metric === key)));
+      document.getElementById("metric-hint").textContent = metric.hint;
+      table.replaceChildren(el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "Task group"),
+        el("th", { scope: "col", class: "task-total" }, "Tasks"),
+        ...rankedModels.map((m) => el("th", { scope: "col" }, el("span", { class: "model-heading" },
+          el("span", { class: "swatch", style: `background:${color(modelIndex[m.key])}`, "aria-hidden": "true" }), m.label))))));
+      let current = null, body;
+      DATA.slices.forEach((sl) => {
+        if (sl.dimension !== current) {
+          current = sl.dimension;
+          body = el("tbody");
+          body.append(el("tr", { class: "group" }, el("th", { scope: "rowgroup", colspan: rankedModels.length + 2 }, sl.dimension)));
+          table.append(body);
+        }
+        const values = rankedModels.map((m) => sl.models[m.key]).filter((s) => s?.valid && s[key] != null).map((s) => s[key]);
+        const best = values.length ? (metric.higher ? Math.max(...values) : Math.min(...values)) : null;
+        const label = sl.dimension === "Change size" ? sl.value.charAt(0).toUpperCase() + sl.value.slice(1) : sl.value;
+        body.append(el("tr", {}, el("th", { scope: "row", class: "row-label" }, label),
+          el("td", { class: "task-total" }, sl.tasks),
+          ...rankedModels.map((m) => {
+            const s = sl.models[m.key];
+            const value = s?.valid ? s[key] : null;
+            const leading = value != null && best != null && Math.abs(value - best) < 1e-9;
+            return el("td", { class: `result${leading ? " best" : ""}` },
+              el("span", { class: "rate" }, metric.format(value), leading ? el("span", { class: "sr-only" }, " (best in row)") : null),
+              el("span", { class: "fraction" }, s?.valid ? (key === "pass_at_1" ? `${s.solved} / ${s.valid} solved` : `${pct(s.pass_at_1)} solved · ${s.valid} attempts`) : "No valid attempts"));
+          })));
+      });
+    }
+    buttons.forEach((button) => button.addEventListener("click", () => render(button.dataset.metric)));
+    render("pass_at_1");
   })();
 
   // ---------- task grid ----------
@@ -584,7 +625,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   fRepo.append(el("option", { value: "" }, "All repositories"), ...repos.sort().map((r) => el("option", { value: r }, r)));
   const grid = document.getElementById("tasks");
   grid.append(el("thead", {}, el("tr", {}, el("th", {}, "Task"), el("th", {}, "Language"), el("th", {}, "Size"),
-    ...models.map((m, i) => el("th", { class: "m" }, el("span", { class: "swatch", style: `background:${color(i)};display:inline-block;margin-right:6px` }), m.label)))));
+    ...rankedModels.map((m) => el("th", { class: "m" }, el("span", { class: "swatch", style: `background:${color(modelIndex[m.key])};display:inline-block;margin-right:6px` }), m.label)))));
   const gridBody = el("tbody");
   grid.append(gridBody);
   const outcomeGlyph = { solved: "✓", failed: "✗", invalid: "!" };
@@ -603,7 +644,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
         el("td", {}, el("span", { class: "t-title", title: t.title }, t.title), el("span", { class: "t-meta" }, `${t.repo} #${t.pr ?? ""}`)),
         el("td", {}, el("span", { class: "tag" }, t.language || "–")),
         el("td", {}, el("span", { class: "tag" }, t.size ? `${t.size} · ${t.lines_changed} lines` : "–")),
-        ...models.map((m) => {
+        ...rankedModels.map((m) => {
           const ts = trialsFor(t.id, m.key);
           const pips = ts.map((r) => el("span", { class: `pip ${r.outcome}`, title: `Attempt ${r.attempt}: ${r.outcome}${r.invalid_reason ? ` (${r.invalid_reason})` : ""}` }, outcomeGlyph[r.outcome] || "·"));
           for (let k = ts.length; k < (run.attempts || 1); k++) pips.push(el("span", { class: "pip pending", title: "Not run yet" }, "·"));
@@ -668,7 +709,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
       el("div", { class: "t-meta", style: "margin:-8px 0 14px" }, `Verified with ${scopeText(t.test_scope)}, then the judge.`),
       taskState(t).unsolved ? el("div", { class: "banner", style: "margin:0 0 14px" }, el("b", {}, "No model solved this"),
         "Check the task before blaming the models: PR tests sometimes assert details, such as an exact error message, that the request never states.") : null,
-      ...models.flatMap((m, mi) => trialsFor(id, m.key).map((r) => attemptCard(t, r, mi))),
+      ...rankedModels.flatMap((m) => trialsFor(id, m.key).map((r) => attemptCard(t, r, modelIndex[m.key]))),
     ].filter(Boolean));  // replaceChildren would print a null as the text "null"
     body.querySelectorAll(".attempt .tabs button:first-child").forEach((b) => b.click());
     drawer.classList.add("open"); scrim.classList.add("open"); drawer.focus();
@@ -678,36 +719,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   scrim.addEventListener("click", closeDrawer);
   addEventListener("keydown", (e) => { if (e.key === "Escape" && drawer.classList.contains("open")) closeDrawer(); });
 
-  // ---------- method ----------
-  const method = document.getElementById("method");
-  const priceRows = models.flatMap((m) => Object.entries(m.prices || {}).filter(([id]) => id === m.model).map(([id, p]) => el("tr", {},
-    el("td", {}, m.label), el("td", {}, `$${p.input.toFixed(2)}`), el("td", {}, p.cached_input != null ? `$${p.cached_input.toFixed(2)}` : "–"), el("td", {}, `$${p.output.toFixed(2)}`))));
-  method.append(
-    el("div", { class: "card" }, el("h3", {}, "Tasks"), el("ul", {},
-      el("li", {}, "Each task is a merged pull request. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point."),
-      el("li", {}, "The merged diff and the PR's tests stay outside the container until the agent stops. GitHub, package registries and Claude Code's web tools are blocked while it works."),
-      el("li", {}, "Before any model ran, every task was checked in the same container image: the PR's tests fail on the base commit and pass with the merged change."))),
-    el("div", { class: "card" }, el("h3", {}, "Scoring"), el("ul", {},
-      el("li", {}, "Solved means the PR's hidden tests pass and the judge agrees the change does what was asked. The judge catches changes that game or edit the tests."),
-      el("li", {}, "Invalid attempts (setup, provider, verifier or judge errors) are reported but never counted as failures."),
-      el("li", {}, "Cost per solved task is all spend on valid attempts divided by solved attempts, so failures are paid for."),
-      (() => {
-        const rebuilt = models.reduce((n, m) => n + (S[m.key].rebuilt_cost_attempts || 0), 0);
-        const partial = models.filter((m) => S[m.key].partial_cost_attempts);
-        if (!rebuilt) return null;
-        return el("li", {}, `${rebuilt} ${rebuilt === 1 ? "attempt" : "attempts"} hit the time limit before Claude Code reported usage; their cost is rebuilt from the agent's log.` +
-          (partial.length ? ` For ${partial.map((m) => `${S[m.key].partial_cost_attempts} ${m.label}`).join(" and ")} ${partial.length === 1 && S[partial[0].key].partial_cost_attempts === 1 ? "attempt" : "attempts"}, the log lacks some output tokens, so that cost is a little low.` : ""));
-      })(),
-      el("li", {}, "Time is wall clock for the agent alone. Setup, tests and the time Claude Code spent backing off from provider rate limits are excluded; the attempt details show the waits."))),
-    el("div", { class: "card" }, el("h3", {}, "Prices (USD per million tokens)"),
-      el("table", { class: "price-table" }, el("thead", {}, el("tr", {}, el("th", {}, "Model"), el("th", {}, "Input"), el("th", {}, "Cached"), el("th", {}, "Output"))), el("tbody", {}, priceRows)),
-      el("p", { style: "margin:8px 0 0;font-size:12.5px" }, "Open models are priced from Baseten Model APIs list prices. Claude is priced at Anthropic list rates as Claude Code reports them, including cache writes. Judge tokens are not included.")),
-    el("div", { class: "card" }, el("h3", {}, "Caveats"), el("ul", {},
-      el("li", {}, "A recent merge date does not prove a model never saw the change. Check each model's training cutoff."),
-      el("li", {}, "The results hold for these repositories and these kinds of change. Check how close they are to your own work before generalizing."),
-      el("li", {}, `Effort is set per model (${models.map((m) => `${m.label}: ${m.effort}`).join(", ")}). Open models get it from the proxy, because Baseten's Anthropic-compatible endpoint ignores it.`))));
-
-  document.getElementById("footer").textContent = `Generated ${new Date(DATA.generated_at).toLocaleString()} by pr-eval · run ${run.run_id} · image ${run.image} · data in report.json next to this file.`;
+  document.getElementById("footer").textContent = `Generated ${new Date(DATA.generated_at).toLocaleString()} by pr-eval · run ${run.run_id} · data in report.json next to this file.`;
 })();
 </script>
 </body>

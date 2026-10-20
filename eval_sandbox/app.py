@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import config, pipeline, runner, tasks
+from . import config, pipeline, runner, runtime, tasks
 
 PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -81,14 +81,21 @@ class App:
                 "busy": any(r["phase"] in pipeline.ACTIVE for r in runs)}
 
     def checks(self, judge: config.Judge) -> dict:
-        """Docker, GitHub and the judge's key; cached briefly, since `docker info` is slow."""
+        """Dedicated Blaxel workspace, build CLI and GitHub; cache remote checks briefly."""
         when, cached = self.checked
         if time.monotonic() - when > 15:
-            docker = pipeline.docker_running()
+            problem = None
+            image = False
+            bl_cli = bool(shutil.which("bl"))
+            try:
+                runtime.check_connection()
+                image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
+            except RuntimeError as exc:
+                problem = str(exc)
             gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
-            cached = {"docker": docker, "gh": gh, "image": docker and pipeline.image_exists(runner.DEFAULT_IMAGE)}
+            cached = {"blaxel": problem is None, "blaxel_problem": problem,
+                      "bl_cli": bl_cli, "gh": gh, "image": image, "judge": judge.problem()}
             self.checked = (time.monotonic(), cached)
-            cached["judge"] = judge.problem()
         return {**cached, "judge": {"model": judge.model, "env": judge.api_key_env, "ok": not cached["judge"],
                                     "problem": cached["judge"]}}
 
@@ -153,7 +160,8 @@ class App:
                          for t, s in (meta.get("left_out") or {}).items()],
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
             "log": tail(log) if phase in ("failed", "stopped") else None,
-            "resumable": phase in ("stopped", "failed") and bool(meta.get("request") or run_tasks),
+            "resumable": phase in ("stopped", "failed") and meta.get("backend") == "blaxel"
+                         and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
         }
 
     def estimates(self, runs: list[dict]) -> dict[str, dict]:
@@ -192,8 +200,10 @@ class App:
         if state["busy"]:
             return {"error": "A run is already going. Let it finish, or stop it, before starting another."}
         checks = state["checks"]
-        if not checks["docker"]:
-            return {"error": "Docker isn't running. Start Docker Desktop, or run: colima start --cpu 8 --memory 12"}
+        if not checks["blaxel"]:
+            return {"error": checks["blaxel_problem"]}
+        if not checks["bl_cli"]:
+            return {"error": "Install the Blaxel CLI (bl): runs use it to build and find the trial image."}
         sample = bool(form.get("sample"))
         repo = None if sample else parse_repo(str(form.get("repo") or ""))
         if not sample and not repo:
@@ -240,7 +250,7 @@ class App:
             pid = (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
         if not alive(pid):
             return {"error": "That run's process has already ended."}
-        os.kill(pid, signal.SIGINT)  # the run removes its containers and marks itself stopped
+        os.kill(pid, signal.SIGINT)  # the run removes its sandboxes and marks itself stopped
         return {"ok": True}
 
     def resume(self, run_id: str) -> dict:

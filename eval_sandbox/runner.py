@@ -1,24 +1,17 @@
-"""Run tasks through Claude Code in Docker, one container per trial.
+"""Run Claude Code trials in dedicated Blaxel sandboxes.
 
-A trial is one (task, model, attempt). Its container lives for the whole trial:
-
-1. the repository at the PR's base commit is copied in and committed as the baseline,
-2. the setup command installs dependencies,
-3. Claude Code works on the instruction (for Baseten models, through the translating
-   proxy started inside the same container),
-4. the agent's diff is saved, then the hidden tests are copied in and run,
-5. the container is removed and the judge compares the diff with the merged one.
-
-The hidden tests and the merged diff never enter the container before the agent stops.
+A trial is one (task, model, attempt). Setup installs dependencies, then a
+creation-time proxy firewall limits egress to the selected model provider.
+The agent's patch is saved and its entire sandbox deleted. A fresh sandbox
+repeats setup, applies the patch and runs hidden tests. The reference patch
+is used only by separate validation sandboxes and the host-side judge.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
 import secrets
 import shlex
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,11 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import judge as judge_mod
+from . import runtime
 from .config import BASETEN_URL, Judge, Model, credential_env
 from .tasks import TEST_FILE, Task
 from .tasks import load as load_task
 
-DEFAULT_IMAGE = "eval-sandbox-runner:dev"
+DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
 PROXY_PORT = 18787
 LABEL = "pr-eval"
 # Set when a run is interrupted: attempts cut short then are dropped, not saved as invalid,
@@ -56,18 +50,7 @@ HARNESS_ENV = {
     "IS_SANDBOX": "1",
 }
 
-# The merged PR is one search away, and an agent will look (GLM-5.3 fetched
-# github.com/<repo>/pull/<n>/files in the first smoke run). After setup, before the agent
-# starts, these resolve to nowhere; Claude Code's web tools are switched off as well.
-# Hostname-level only: it stops the obvious lookups, not a determined agent with raw IPs.
-BLOCKED_HOSTS = (
-    "github.com www.github.com api.github.com raw.githubusercontent.com codeload.github.com "
-    "objects.githubusercontent.com gist.github.com gist.githubusercontent.com "
-    "patch-diff.githubusercontent.com github.githubassets.com gitlab.com bitbucket.org "
-    "sourcegraph.com grep.app pypi.org files.pythonhosted.org registry.npmjs.org "
-    "registry.yarnpkg.com proxy.golang.org sum.golang.org pkg.go.dev goproxy.io "
-    "deps.dev libraries.io unpkg.com cdn.jsdelivr.net"
-).split()
+# Egress is enforced by the Blaxel proxy firewall, not hostname overrides.
 DISALLOWED_TOOLS = "WebFetch,WebSearch"
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -90,33 +73,18 @@ def write_json(path: Path, data: dict) -> None:
 class Settings:
     image: str = DEFAULT_IMAGE
     concurrency: int = 4
-    cpus: str = "2"
-    memory: str = "4g"
+    memory: int = 4096
+    region: str = "us-pdx-1"
+    workspace: str | None = None
     agent_timeout: int | None = None   # overrides the task's own
     judge: Judge | None = None
-    keep_containers: bool = False
+    keep_sandboxes: bool = False
 
 
-def docker(*args: str, timeout: int = 120, check=True) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", *args], capture_output=True, timeout=timeout, check=check)
-
-
-def exec_argv(container: str, script: str, env_names=(), user: str = "agent") -> list[str]:
-    """`docker exec` for a bash script in the trial's /workspace."""
-    argv = ["docker", "exec", "-u", user, "-w", "/workspace"]
-    for name in env_names:
-        argv += ["-e", name]  # by name only: the value comes from our environment, so secrets never appear in argv
-    return [*argv, container, "bash", "-c", script]
-
-
-def sh(container: str, script: str, *, timeout: int, user="agent") -> tuple[int, str, bool]:
-    """Run a bash script in the trial container. Returns (exit code, output, timed out)."""
-    try:
-        p = subprocess.run(exec_argv(container, script, user=user), capture_output=True, timeout=timeout)
-        return p.returncode, (p.stdout + p.stderr).decode(errors="replace"), False
-    except subprocess.TimeoutExpired as exc:
-        out = ((exc.stdout or b"") + (exc.stderr or b"")).decode(errors="replace")
-        return -1, out, True
+def sh(container: str, script: str, *, timeout: int) -> tuple[int, str, bool]:
+    """Run through the authenticated Blaxel API as the image's unprivileged user."""
+    result = runtime.execute(container, script, timeout=timeout)
+    return result.code, result.stdout + result.stderr, result.timed_out
 
 
 def trial_name(task: Task, model: Model, attempt: int) -> str:
@@ -152,26 +120,15 @@ def agent_script(model: Model) -> tuple[str, dict[str, str]]:
 
 
 def run_agent(container: str, model: Model, secrets_env: dict, log_path: Path, timeout: int) -> dict:
-    """Run Claude Code headless, streaming its JSON events to `log_path`."""
+    """Run Claude Code remotely and collect the durable stream log."""
     script, env_vars = agent_script(model)
-    env = {**os.environ, **env_vars, **secrets_env}
-    argv = exec_argv(container, script, env_names=[*env_vars, *secrets_env])
     started = time.monotonic()
-    timed_out = False
-    with open(log_path, "wb") as out, open(log_path.with_suffix(".stderr"), "wb") as err:
-        process = subprocess.Popen(argv, stdout=out, stderr=err, env=env)
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            docker("exec", container, "pkill", "-f", "claude", check=False)
-            try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+    result = runtime.execute(container, script, env={**env_vars, **secrets_env}, timeout=timeout,
+                             stdout_path="/logs/agent.jsonl", stderr_path="/logs/agent.stderr")
+    log_path.write_text(result.stdout)
+    log_path.with_suffix(".stderr").write_text(result.stderr)
     compact_stream(log_path)
-    return {"exit_code": process.returncode, "timed_out": timed_out,
+    return {"exit_code": result.code, "timed_out": result.timed_out,
             "seconds": round(time.monotonic() - started, 1), **summarize_stream(log_path)}
 
 
@@ -324,20 +281,23 @@ def agent_cost(model: Model, model_usage: dict) -> tuple[float | None, str]:
     return model.price(model_usage), "price-table"
 
 
-def block_lookups(container: str) -> None:
-    hosts = "\n".join(f"0.0.0.0 {h}\n:: {h}" for h in BLOCKED_HOSTS)
-    sh(container, f"printf '%s\\n' {shlex.quote(hosts)} >> /etc/hosts", timeout=30, user="root")
+def block_lookups(container: str, domains: list[str] | None = None) -> None:
+    """Narrow the creation-time enforced proxy to the selected provider."""
+    runtime.restrict_network(container, domains or ["api.anthropic.com", "inference.baseten.co"])
 
 
 def container_name(run_id: str) -> str:
-    return f"pr-eval-{run_id}-{secrets.token_hex(4)}"
+    slug = re.sub(r"[^a-z0-9-]", "-", run_id.lower()).strip("-")[:42]
+    return f"pr-eval-{slug or 'trial'}-{secrets.token_hex(4)}"
 
 
 def start_container(name: str, run_id: str, settings: Settings) -> None:
-    """A trial container, labelled with its run so `pr-eval cleanup` can find it."""
-    docker("run", "-d", "--name", name, "--label", f"{LABEL}={run_id}",
-           "--cpus", settings.cpus, "--memory", settings.memory, "--pids-limit", "4096",
-           "--cap-drop", "ALL", "--security-opt", "no-new-privileges", settings.image, "sleep", "infinity")
+    """Create a fresh, labelled Blaxel sandbox with a six-hour TTL."""
+    if STOPPING.is_set():
+        raise runtime.RuntimeError("Run is stopping; no new sandbox is created.")
+    runtime.create(name, run_id, settings)
+    if STOPPING.is_set():  # the stop's cleanup may have listed sandboxes before this one existed
+        raise runtime.RuntimeError("Run is stopping; the caller deletes this sandbox.")
 
 
 def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | None, dict]:
@@ -346,7 +306,7 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
     Returns (invalid reason or None, setup stats). The baseline includes whatever setup
     wrote outside .gitignore, so the agent's diff is only the agent's.
     """
-    docker("cp", str(task.path / "environment" / "source.tar"), f"{container}:/tmp/source.tar")
+    runtime.upload(container, task.path / "environment" / "source.tar", "/tmp/source.tar")
     commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
     code, out, _ = sh(container, f"tar -xf /tmp/source.tar -C /workspace && git init -q -b main && "
                                  f"git add -A && {commit} base", timeout=300)
@@ -360,23 +320,33 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
     stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
     if code != 0:
         return ("setup-timeout" if timed_out else "setup-error"), stats
-    sh(container, f"git add -A && {commit} setup", timeout=120)
+    code, out, timed_out = sh(container, f"git add -A && {commit} setup", timeout=120)
+    if code or timed_out:
+        return "setup-commit-error", stats
     code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
     if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
         return "workspace-error", stats
     stats["baseline"] = out.strip()
-    block_lookups(container)
+    block_lookups(container, ["blocked.invalid"])
     return None, stats
 
 
-def capture_patch(container: str, baseline: str) -> tuple[str, str]:
+def capture_patch(container: str, baseline: str, local: Path) -> tuple[str, str]:
     """The agent's change as (binary patch, numstat), measured from the setup commit.
 
     Not from HEAD: some agents commit their work, on a branch of their own, and a diff
-    against HEAD would then be empty.
+    against HEAD would then be empty. The exact bytes go to `local`, since the verifier
+    applies that file: decoded command output could carry git warnings or mangled text.
     """
-    _, patch, _ = sh(container, f"git add -A && git diff --cached --binary {baseline}", timeout=120)
-    _, numstat, _ = sh(container, f"git diff --cached --numstat {baseline}", timeout=60)
+    code, _, timed_out = sh(container, f"git add -A && git diff --cached --binary {baseline} >.git/pr-eval.patch",
+                            timeout=120)
+    if code or timed_out:
+        raise runtime.RuntimeError("Could not capture the agent patch.")
+    runtime.download(container, "/workspace/.git/pr-eval.patch", local)
+    patch = local.read_bytes().decode(errors="replace")
+    code, numstat, timed_out = sh(container, f"git diff --cached --numstat {baseline}", timeout=60)
+    if code or timed_out:
+        raise runtime.RuntimeError("Could not capture patch statistics.")
     return patch, numstat
 
 
@@ -388,7 +358,9 @@ def set_aside_agent_tests(container: str, baseline: str) -> list[str]:
     of the PR's stops the package compiling, and a correct fix reads as a failure. The
     judge still sees the agent's whole diff, tests included. Expects the agent's work staged.
     """
-    _, out, _ = sh(container, f"git diff --cached --name-status --no-renames -z {baseline}", timeout=60)
+    code, out, timed_out = sh(container, f"git diff --cached --name-status --no-renames -z {baseline}", timeout=60)
+    if code or timed_out:
+        raise runtime.RuntimeError("Could not inspect agent test changes.")
     fields = out.split("\0")
     changed = [(status, path) for status, path in zip(fields[::2], fields[1::2], strict=False) if TEST_FILE.search(path)]
     if changed:
@@ -399,13 +371,15 @@ def set_aside_agent_tests(container: str, baseline: str) -> list[str]:
             script.append("rm -f -- " + " ".join(map(shlex.quote, added)))
         if others:
             script.append(f"git checkout -q {baseline} -- " + " ".join(map(shlex.quote, others)))
-        sh(container, " && ".join(script), timeout=120)
+        code, _, timed_out = sh(container, " && ".join(script), timeout=120)
+        if code or timed_out:
+            raise runtime.RuntimeError("Could not set aside agent test changes.")
     return [path for _, path in changed]
 
 
 def run_tests(container: str, task: Task, log_path: Path) -> dict:
     """Copy the hidden tests in and run them. Only ever called after the agent has stopped."""
-    docker("cp", str(task.path / "tests"), f"{container}:/tests")
+    runtime.upload(container, task.path / "tests", "/tests")
     started = time.monotonic()
     timeout = int(task.meta["verifier"].get("timeout_sec", 900))
     code, out, timed_out = sh(container, "bash /tests/test.sh", timeout=timeout)
@@ -417,58 +391,84 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
 def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: str, settings: Settings) -> dict:
     trial_dir.mkdir(parents=True, exist_ok=True)
     container = container_name(run_id)
+    verifier = container_name(run_id)
     result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
               "model_id": model.model, "attempt": attempt, "started_at": now(), "outcome": None,
-              "invalid_reason": None}
+              "invalid_reason": None, **environment_identity(settings),
+              "agent_sandbox": container, "verifier_sandbox": verifier}
     agent_timeout = settings.agent_timeout or int(task.meta["agent"].get("timeout_sec", 1800))
+    alive = []
 
     def finish(outcome: str, reason: str | None = None) -> dict:
         result["outcome"], result["invalid_reason"] = outcome, reason
         result["finished_at"] = now()
         if STOPPING.is_set():
             result["outcome"] = "interrupted"
-            return result
-        write_json(trial_dir / "result.json", result)
+        else:
+            write_json(trial_dir / "result.json", result)
         return result
 
     try:
         secrets_env = credential_env(model)
+        alive.append(container)  # reconcile by exact name even if allocation times out
         start_container(container, run_id, settings)
         reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
-
+        block_lookups(container, ["api.anthropic.com"] if model.provider == "anthropic"
+                      else ["inference.baseten.co"])
         prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
         (trial_dir / "prompt.md").write_text(prompt)
-        docker("cp", str(trial_dir / "prompt.md"), f"{container}:/tmp/instruction.md")
+        runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         agent = run_agent(container, model, secrets_env, trial_dir / "agent.jsonl", agent_timeout)
-        docker("cp", f"{container}:/logs/proxy.log", str(trial_dir / "proxy.log"), check=False)
+        runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         result["agent"] = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
-
         if "subtype" not in agent and not agent["timed_out"]:
             return finish("invalid", "agent-crashed")
         if agent.get("is_error") and PROVIDER_ERROR.search(agent.get("final_message", "")):
-            return finish("invalid", "provider-error")  # the provider gave up on the model, not the reverse
-
-        patch, numstat = capture_patch(container, result["setup"]["baseline"])
-        (trial_dir / "agent.patch").write_text(patch)
+            return finish("invalid", "provider-error")
+        patch, numstat = capture_patch(container, result["setup"]["baseline"], trial_dir / "agent.patch")
         result["diff"] = diff_stats(numstat)
 
-        set_aside = set_aside_agent_tests(container, result["setup"]["baseline"])
-        tests = run_tests(container, task, trial_dir / "verifier.log")
+        # A finished top-level process is not proof its detached children stopped.
+        # Destroy the entire agent VM BEFORE any hidden tests leave this host.
+        runtime.delete(container)
+        alive.remove(container)
+        alive.append(verifier)
+        start_container(verifier, run_id, settings)
+        verify_dir = trial_dir / "verification"
+        verify_dir.mkdir(exist_ok=True)
+        reason, setup = prepare_workspace(verifier, task, verify_dir)
+        if reason:
+            return finish("invalid", "verifier-" + reason)
+        runtime.upload(verifier, trial_dir / "agent.patch", "/tmp/agent.patch")
+        if patch.strip():
+            code, _, timed_out = sh(verifier, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
+            if code or timed_out:
+                return finish("invalid", "verifier-apply-error")
+        set_aside = set_aside_agent_tests(verifier, setup["baseline"])
+        tests = run_tests(verifier, task, trial_dir / "verifier.log")
         test_output = tests.pop("output")
         result["tests"] = {**tests, "set_aside": set_aside}
         if tests["timed_out"]:
             return finish("invalid", "verifier-timeout")
-    except subprocess.TimeoutExpired as exc:
-        return finish("invalid", f"docker-timeout: {' '.join(map(str, exc.cmd[:3]))}")
-    except subprocess.CalledProcessError as exc:
-        (trial_dir / "error.log").write_text((exc.stderr or b"").decode(errors="replace"))
-        return finish("invalid", "docker-error")
+    except (runtime.RuntimeError, OSError) as exc:
+        (trial_dir / "error.log").write_text(str(exc))
+        return finish("invalid", "sandbox-error")
     finally:
-        if not settings.keep_containers:
-            docker("rm", "-f", container, check=False, timeout=120)
+        for name in alive:
+            # Debug retention is only for a verifier, never a live agent VM.
+            if name == verifier and settings.keep_sandboxes:
+                result["retained_sandbox"] = verifier
+                continue
+            try:
+                runtime.delete(name)
+            except runtime.RuntimeError as exc:
+                result["cleanup_error"] = str(exc)
+                finish("invalid", "sandbox-cleanup-error")
 
+    if result.get("cleanup_error"):
+        return finish("invalid", "sandbox-cleanup-error")
     if not patch.strip():
         result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
         return finish("failed")
@@ -503,7 +503,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
     log_dir = task.path / "validation"
     log_dir.mkdir(exist_ok=True)
     container = container_name(run_id)
-    record = {"task_id": task.id, "image": settings.image, "checked_at": now(), "status": None}
+    record = {"task_id": task.id, **environment_identity(settings), "checked_at": now(), "status": None}
     try:
         start_container(container, run_id, settings)
         reason, record["setup"] = prepare_workspace(container, task, log_dir)
@@ -512,7 +512,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
             return record
         base = run_tests(container, task, log_dir / "base.log")
         sh(container, "git reset -q --hard && git clean -qfd", timeout=120)
-        docker("cp", str(task.path / "solution" / "reference.patch"), f"{container}:/tmp/reference.patch")
+        runtime.upload(container, task.path / "solution" / "reference.patch", "/tmp/reference.patch")
         code, out, _ = sh(container, "git apply --whitespace=nowarn /tmp/reference.patch", timeout=120)
         if code != 0:
             (log_dir / "apply.log").write_text(out)
@@ -530,28 +530,41 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
         else:
             record["status"] = "valid"
         return record
-    except (subprocess.SubprocessError, OSError) as exc:
-        record["status"] = f"docker-error: {exc}"
+    except (runtime.RuntimeError, OSError) as exc:
+        record["status"] = f"sandbox-error: {exc}"
         return record
     finally:
-        docker("rm", "-f", container, check=False, timeout=120)
+        try:
+            runtime.delete(container)
+        except runtime.RuntimeError as exc:  # says nothing about the task; `pr-eval cleanup` removes it
+            record["cleanup_error"] = str(exc)
         if not STOPPING.is_set():  # a check cut short by a stop proves nothing; run it again next time
             write_json(log_dir / "result.json", record)
 
 
 # Check results that say nothing about the task itself; such a task is checked again.
-PASSING_CHECK_FAILURES = ("docker-error", "setup-timeout", "timeout", "workspace-error")
+PASSING_CHECK_FAILURES = ("sandbox-error", "docker-error", "setup-timeout", "timeout", "workspace-error")
 
 
 def validate_all(tasks: list[Task], settings: Settings, run_id: str, on_result=None) -> None:
     """Check tasks not yet checked in this image, or whose check failed for a passing reason."""
-    todo = [t for t in tasks if (validation_status(t) or "docker-error").startswith(PASSING_CHECK_FAILURES)]
+    todo = [t for t in tasks if (validation_status(t, settings) or "sandbox-error").startswith(PASSING_CHECK_FAILURES)]
     in_parallel(todo, lambda t: validate_task(t, settings, run_id), settings.concurrency, run_id, on_result)
 
 
-def validation_status(task: Task) -> str | None:
+def validation_status(task: Task, settings: Settings | None = None) -> str | None:
     path = task.path / "validation" / "result.json"
-    return json.loads(path.read_text()).get("status") if path.is_file() else None
+    if not path.is_file():
+        return None
+    record = json.loads(path.read_text())
+    if settings and any(record.get(k) != v for k, v in environment_identity(settings).items()):
+        return None
+    return record.get("status")
+
+
+def environment_identity(settings: Settings) -> dict:
+    return {"backend": "blaxel", "workspace": runtime.workspace(settings.workspace),
+            "image": settings.image, "region": settings.region}
 
 
 def diff_stats(numstat: str) -> dict:
@@ -598,8 +611,12 @@ def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, se
             with limits[model.key]:
                 return run_trial(task, model, attempt, path, run_id, settings)
         except Exception as exc:  # noqa: BLE001 - one broken trial must not stop the run
-            return {"trial": trial_name(task, model, attempt), "outcome": "invalid",
-                    "invalid_reason": f"runner-error: {exc}"}
+            result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
+                      "attempt": attempt, "outcome": "invalid", "invalid_reason": f"runner-error: {exc}"}
+            if not STOPPING.is_set():
+                path.mkdir(parents=True, exist_ok=True)
+                write_json(path / "result.json", result)
+            return result
 
     in_parallel(pending, trial, settings.concurrency, run_id, on_result)
 
@@ -608,7 +625,7 @@ def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None) -> 
     """`work` on each job, `workers` at a time; `on_result(result, done, total)` as each lands.
 
     Ctrl-C, or Stop on the page, drops what hasn't finished and removes the run's
-    containers, so the work in flight fails fast instead of being waited for.
+    sandboxes, so the work in flight fails fast instead of being waited for.
     """
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
@@ -660,17 +677,20 @@ def retest_trial(trial_dir: Path, result: dict, task: Task, settings: Settings, 
         reason, setup = prepare_workspace(container, task, log_dir)
         if reason:
             return {"trial": result["trial"], "error": reason}
-        docker("cp", str(trial_dir / "agent.patch"), f"{container}:/tmp/agent.patch")
+        runtime.upload(container, trial_dir / "agent.patch", "/tmp/agent.patch")
         code, out, _ = sh(container, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
         if code:
             (log_dir / "apply.log").write_text(out)
             return {"trial": result["trial"], "error": "the saved diff doesn't apply"}
         set_aside = set_aside_agent_tests(container, setup["baseline"])
         tests = run_tests(container, task, log_dir / "verifier.log")
-    except (subprocess.SubprocessError, OSError) as exc:
-        return {"trial": result["trial"], "error": f"docker-error: {exc}"}
+    except (runtime.RuntimeError, OSError) as exc:
+        return {"trial": result["trial"], "error": f"sandbox-error: {exc}"}
     finally:
-        docker("rm", "-f", container, check=False, timeout=120)
+        try:
+            runtime.delete(container)
+        except runtime.RuntimeError:
+            pass  # the retest still stands; `pr-eval cleanup` removes the sandbox
     tests.pop("output")
     if tests["timed_out"] or STOPPING.is_set():
         return {"trial": result["trial"], "error": "stopped or timed out; left as it was"}
@@ -689,13 +709,9 @@ def retest_trial(trial_dir: Path, result: dict, task: Task, settings: Settings, 
                      f"{'passed' if tests['passed'] else 'failed'}", "judge": verdict}
 
 
-def cleanup(run_id: str | None = None) -> list[str]:
-    """Remove trial containers a killed run left behind."""
-    label = f"{LABEL}={run_id}" if run_id else LABEL
-    ids = docker("ps", "-aq", "--filter", f"label={label}").stdout.decode().split()
-    if ids:
-        docker("rm", "-f", *ids, check=False)
-    return ids
+def cleanup(run_id: str | None = None, workspace: str | None = None) -> list[str]:
+    """Delete only labelled eval sandboxes in the explicitly selected workspace."""
+    return runtime.cleanup(run_id, workspace)
 
 
 def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 8, force: bool = False) -> list[dict]:
@@ -709,7 +725,7 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 
         path = trial_dir / "result.json"
         result = json.loads(path.read_text())
         patch_path = trial_dir / "agent.patch"
-        if not result.get("tests") or not patch_path.is_file() or not patch_path.read_text().strip():
+        if not result.get("tests") or not patch_path.is_file() or not patch_path.read_bytes().strip():
             return None
         if result["outcome"] == "invalid" and result.get("invalid_reason") != "judge-error":
             return None
@@ -718,7 +734,7 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 
             return None
         before = result["outcome"]
         verdict, result["outcome"], result["invalid_reason"] = judge_attempt(
-            judge, load_task(tasks_dir / result["task_id"]), patch_path.read_text(), result["tests"],
+            judge, load_task(tasks_dir / result["task_id"]), patch_path.read_text(errors="replace"), result["tests"],
             (trial_dir / "verifier.log").read_text(errors="replace"), trial_dir)
         result["judge"] = verdict
         write_json(path, result)
