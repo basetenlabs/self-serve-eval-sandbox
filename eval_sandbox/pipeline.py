@@ -257,7 +257,9 @@ def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> 
 
 
 def leave_out(job: Job, statuses: dict[str, str | None]) -> None:
-    job.meta["left_out"] = {t: s for t, s in statuses.items() if s != "valid"}
+    # A resumed run checks only the tasks it kept, so the ones left out before stay left out.
+    earlier = {t: s for t, s in job.meta.get("left_out", {}).items() if t not in statuses}
+    job.meta["left_out"] = earlier | {t: s for t, s in statuses.items() if s != "valid"}
     if job.meta["left_out"]:
         print(f"leaving out {len(job.meta['left_out'])} task(s) that failed the check (a setup problem, "
               f"not a model's): {', '.join(job.meta['left_out'])}")
