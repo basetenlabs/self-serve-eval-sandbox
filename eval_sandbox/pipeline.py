@@ -6,6 +6,9 @@ doing to `status` in its run.json, so the page can show it while it goes:
     collecting -> checking -> running -> done
                                       -> stopped (Ctrl-C or Stop; resume finishes it)
                                       -> failed  (with the reason)
+
+Each PR's attempts start as soon as its own check passes, so a run is already running
+attempts while it says "checking"; "running" means every check is done.
 """
 from __future__ import annotations
 
@@ -143,30 +146,33 @@ def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
 def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, skip_check: bool = False) -> int:
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
+    attempts = job.meta.get("attempts", 1)
     try:
         restore_execution(job.meta, settings)
-        if job.meta.get("tasks"):  # resumed after the check: keep the same tasks
+        if job.meta.get("tasks") and job.meta.get("checked", True):  # resumed after the check: keep the same tasks
             selected = tasks.discover(tasks_dir, job.meta["tasks"])
             settings.image = prepare_image(job, settings.image)
             if not skip_check and len(check(job, selected, settings)) != len(selected):
                 raise SystemExit("The original task set no longer passes validation; start a new run.")
+            start_running(job, models, settings)
+            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
         else:
-            request = Request(**job.meta.get("request") or {})
-            job.status("collecting", f"Finding merged pull requests in {request.describe()}")
-            candidates = find_tasks(request, tasks_dir)
-            if not candidates:
-                raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
+            if job.meta.get("candidates"):  # resumed while checking: the same pull requests
+                candidates = tasks.discover(tasks_dir, job.meta["candidates"])
+            else:
+                request = Request(**job.meta.get("request") or {})
+                job.status("collecting", f"Finding merged pull requests in {request.describe()}")
+                candidates = find_tasks(request, tasks_dir)
+                if not candidates:
+                    raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
+                job.meta["candidates"] = [t.id for t in candidates]
             settings.image = prepare_image(job, settings.image)
-            job.meta["candidates"] = [t.id for t in candidates]
-            selected = candidates if skip_check else check(job, candidates, settings)
-            job.meta["tasks"] = [t.id for t in selected]
-        job.meta["harness_version"] = (job.meta.get("harness_version")
-                                       or image_claude_version(settings.image, settings.region, job.id))
-        attempts = job.meta.get("attempts", 1)
-        job.status("running", f"Running {len(selected)} tasks x {len(models)} models"
-                              + (f" x {attempts} attempts" if attempts > 1 else ""))
-        report.build(job.path)
-        runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
+            if skip_check:
+                job.meta.update(tasks=[t.id for t in candidates], checked=True)
+                start_running(job, models, settings)
+                runner.run(candidates, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
+            else:
+                check_and_run(job, candidates, models, settings)
         path = report.build(job.path)
         job.status("done", f"Finished. Report: {path}")
         return 0
@@ -184,6 +190,54 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
         raise
 
 
+def start_running(job: Job, models: list[config.Model], settings: runner.Settings) -> None:
+    note_harness_version(job, settings)
+    attempts = job.meta.get("attempts", 1)
+    job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models"
+                          + (f" x {attempts} attempts" if attempts > 1 else ""))
+    report.build(job.path)
+
+
+def note_harness_version(job: Job, settings: runner.Settings) -> None:
+    job.meta["harness_version"] = (job.meta.get("harness_version")
+                                   or image_claude_version(settings.image, settings.region, job.id))
+
+
+def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Model],
+                  settings: runner.Settings) -> None:
+    """Check the pull requests, and run the models on each one as soon as it passes."""
+    note_harness_version(job, settings)
+    job.meta["checked"] = False
+    job.meta.setdefault("tasks", [])
+    job.status("checking", f"Checking {len(candidates)} pull requests: each PR's tests have to fail "
+                           "before the change and pass after it. Attempts start on each one that passes.")
+    report.build(job.path)
+    statuses: dict[str, str] = {}
+
+    def checked(task: tasks.Task, status: str, unchecked: int) -> None:
+        statuses[task.id] = status
+        print(f"  [{len(statuses)}/{len(candidates)}] {task.id}: {status}", flush=True)
+        if status == "valid" and task.id not in job.meta["tasks"]:
+            job.meta["tasks"].append(task.id)
+        if unchecked:
+            job.save()
+            return
+        job.meta["checked"] = True
+        leave_out(job, statuses)
+        if job.meta["tasks"]:
+            attempts = job.meta.get("attempts", 1)
+            job.status("running", f"All checked. Running {len(job.meta['tasks'])} tasks x {len(models)} models"
+                                  + (f" x {attempts} attempts" if attempts > 1 else ""))
+        else:
+            job.save()
+
+    runner.check_and_run(candidates, models, job.meta.get("attempts", 1), job.path, settings, job.id,
+                         on_checked=checked, on_result=progress_printer(job))
+    if not job.meta["tasks"]:
+        raise SystemExit(f"None of the {len(candidates)} pull requests passed the check. "
+                         "If installing failed, give the install and test commands (--setup, --test).")
+
+
 def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> list[tasks.Task]:
     """Keep the tasks whose PR tests fail without the change and pass with it, in this image."""
     job.status("checking", f"Checking {len(candidates)} pull requests: each PR's tests have to fail "
@@ -193,15 +247,20 @@ def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> 
         print(f"  [{done}/{total}] {record['task_id']}: {record['status']}", flush=True)
 
     runner.validate_all(candidates, settings, job.id, on_result=checked)
-    kept = [t for t in candidates if runner.validation_status(t, settings) == "valid"]
-    job.meta["left_out"] = {t.id: runner.validation_status(t, settings) for t in candidates if t not in kept}
-    if job.meta["left_out"]:
-        print(f"leaving out {len(job.meta['left_out'])} task(s) that failed the check (a setup problem, "
-              f"not a model's): {', '.join(job.meta['left_out'])}")
+    statuses = {t.id: runner.validation_status(t, settings) for t in candidates}
+    kept = [t for t in candidates if statuses[t.id] == "valid"]
+    leave_out(job, statuses)
     if not kept:
         raise SystemExit(f"None of the {len(candidates)} pull requests passed the check. "
                          "If installing failed, give the install and test commands (--setup, --test).")
     return kept
+
+
+def leave_out(job: Job, statuses: dict[str, str | None]) -> None:
+    job.meta["left_out"] = {t: s for t, s in statuses.items() if s != "valid"}
+    if job.meta["left_out"]:
+        print(f"leaving out {len(job.meta['left_out'])} task(s) that failed the check (a setup problem, "
+              f"not a model's): {', '.join(job.meta['left_out'])}")
 
 
 def progress_printer(job: Job):

@@ -6,8 +6,10 @@ import io
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -225,10 +227,17 @@ class RecipeTest(unittest.TestCase):
                                imports=["k8s.io/api/core/v1"])
         self.assertEqual(grafana["test"], "go test -count=1 -timeout=600s ./pkg/a ./pkg/b")
         self.assertIn("go list -e -deps -test ./pkg/a ./pkg/b k8s.io/api/core/v1 ", grafana["setup"])
+        self.assertEqual(grafana["memory"], 16384)
         with self.assertRaises(tasks.Skip):
             tasks.recipe("grafana/grafana", "TypeScript", ["public/app/a.test.tsx"])
         with self.assertRaises(tasks.Skip):
             tasks.recipe("someone/rust", "Rust", [])
+
+    def test_a_repository_that_needs_a_bigger_sandbox_gets_one(self):
+        grafana = SimpleNamespace(meta={"environment": {"memory_mb": 16384}})
+        self.assertEqual(runner.sandbox_memory(grafana, runner.Settings(memory=4096)), 16384)
+        self.assertEqual(runner.sandbox_memory(grafana, runner.Settings(memory=32768)), 32768)
+        self.assertEqual(runner.sandbox_memory(SimpleNamespace(meta={"environment": {}}), runner.Settings()), 4096)
 
     def test_sample_list_parses(self):
         sample = tasks.sample()
@@ -297,7 +306,7 @@ class CollectTest(unittest.TestCase):
     def test_the_answer_stays_out_of_the_agents_copy(self):
         import tarfile
         task = tasks.load(self.export())
-        with tarfile.open(task.path / "environment" / "source.tar") as tar:
+        with tarfile.open(task.path / "environment" / "source.tar.gz") as tar:
             source = {m.name: tar.extractfile(m).read().decode() for m in tar.getmembers() if m.isfile()}
         self.assertEqual(source["lib.py"], "def double(x):\n    return x\n")
         self.assertEqual(source["tests/test_lib.py"], "old test\n")
@@ -308,6 +317,19 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(task.meta["task"]["instruction_source"], "linked-issue")
         self.assertTrue(task.instruction.startswith("# Fix double\n\ndouble() returns its input\n\n"))
         self.assertNotIn("## Names the tests use", task.instruction)  # the tests call nothing new
+
+    def test_an_older_tasks_plain_snapshot_is_compressed_on_first_use(self):
+        import gzip
+        task = tasks.load(self.export())
+        packed = task.path / "environment" / "source.tar.gz"
+        plain = packed.with_suffix("")
+        source = gzip.decompress(packed.read_bytes())
+        plain.write_bytes(source)
+        packed.unlink()
+        self.assertEqual(tasks.snapshot(task), packed)
+        self.assertFalse(plain.exists())
+        self.assertEqual(gzip.decompress(packed.read_bytes()), source)
+        self.assertEqual(tasks.snapshot(task), packed)  # and only once
 
     def test_the_request_gives_the_names_the_tests_call_but_never_the_code(self):
         (self.repo / "lib.py").write_text("def double(x):\n    return x\n\n\ndef label(x) -> str | None:\n    return None\n")
@@ -409,6 +431,37 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertTrue(runner.touches_tests("diff --git a/lib.go b/lib.go\ndiff --git a/x_test.go b/x_test.go\n"))
         self.assertFalse(runner.touches_tests("diff --git a/lib.go b/lib.go\n"))
 
+class QueueTest(unittest.TestCase):
+    def test_a_task_runs_as_soon_as_its_own_check_passes(self):
+        from unittest import mock
+        events, fast_trial = [], threading.Event()
+
+        def validate(task, *_):
+            if task.id == "slow":
+                fast_trial.wait(5)  # still checking when the other task's attempt starts
+            events.append(("checked", task.id))
+            return {"task_id": task.id, "status": "reference-fails" if task.id == "bad" else "valid"}
+
+        def trial(task, *_):
+            events.append(("trial", task.id))
+            if task.id == "fast":
+                fast_trial.set()
+            return {"trial": task.id, "outcome": "solved"}
+        candidates = [SimpleNamespace(id=i) for i in ("slow", "fast", "bad", "known")]
+        seen = []
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(runner, "needs_check", side_effect=lambda t, _: t.id != "known"), \
+                mock.patch.object(runner, "validation_status", return_value="valid"), \
+                mock.patch.object(runner, "validate_task", side_effect=validate), \
+                mock.patch.object(runner, "run_trial", side_effect=trial):
+            runner.check_and_run(candidates, [baseten_model()], 1, Path(d), runner.Settings(concurrency=2), "r",
+                                 on_checked=lambda t, status, left: seen.append((t.id, status, left)))
+        self.assertLess(events.index(("trial", "fast")), events.index(("checked", "slow")))
+        self.assertEqual(sorted(t for kind, t in events if kind == "trial"), ["fast", "known", "slow"])
+        self.assertEqual(seen[0], ("known", "valid", 3))  # checked in an earlier run: not checked again
+        self.assertEqual(seen[-1], ("slow", "valid", 0))
+
+
 class PipelineTest(unittest.TestCase):
     def test_resume_adds_new_models_after_the_runs_own(self):
         meta = {"models": [{"key": "claude-opus"}, {"key": "glm-5.3"}]}
@@ -444,6 +497,35 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(meta["status"]["phase"], "stopped")
         self.assertEqual(meta["request"]["repos"], ["o/r"])  # what resume needs to start over
         self.assertEqual(meta["tasks"], [])
+
+    def test_tasks_join_the_run_as_their_checks_pass(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            job = self.job(d, pipeline.Request(repos=["o/r"]))
+            saved = []
+
+            def check_and_run(candidates, *_, on_checked, on_result):
+                on_checked(candidates[0], "valid", 1)
+                meta = pipeline.Job(job.path).meta
+                saved.append((meta["status"]["phase"], meta["tasks"]))
+                on_checked(candidates[1], "reference-fails", 0)
+            with mock.patch.object(runner, "check_and_run", side_effect=check_and_run), \
+                    mock.patch.object(pipeline, "image_claude_version", return_value="2.1.0"), \
+                    mock.patch.object(pipeline.report, "build"), contextlib.redirect_stdout(io.StringIO()):
+                pipeline.check_and_run(job, [SimpleNamespace(id="a"), SimpleNamespace(id="b")],
+                                       [baseten_model()], runner.Settings())
+                meta = pipeline.Job(job.path).meta
+            with tempfile.TemporaryDirectory() as other, \
+                    mock.patch.object(runner, "check_and_run",
+                                      side_effect=lambda c, *_, on_checked, **__: on_checked(c[0], "setup-error", 0)), \
+                    mock.patch.object(pipeline, "image_claude_version", return_value=None), \
+                    mock.patch.object(pipeline.report, "build"), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "None of the 1"):
+                pipeline.check_and_run(self.job(other, pipeline.Request()), [SimpleNamespace(id="c")],
+                                       [baseten_model()], runner.Settings())
+        self.assertEqual(saved, [("checking", ["a"])])  # saved while b was still being checked
+        self.assertEqual((meta["tasks"], meta["left_out"], meta["checked"]), (["a"], {"b": "reference-fails"}, True))
+        self.assertEqual(meta["status"]["phase"], "running")
 
     def test_a_run_name_is_the_repository_and_the_time(self):
         self.assertTrue(pipeline.default_name(pipeline.Request(repos=["o/my-repo"])).startswith("my-repo-"))

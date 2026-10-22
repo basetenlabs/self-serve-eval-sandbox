@@ -384,7 +384,8 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     const p = r.progress, k = r.checking;
     let line = null, share = null;
     if (r.phase === "checking" && k.total) {
-      line = `Checking pull requests: ${k.done} of ${k.total}. Each PR's tests have to fail before the change and pass after it.`;
+      line = `Checking pull requests: ${k.done} of ${k.total}. Each PR's tests have to fail before the change and pass after it.`
+        + (p.done ? ` ${p.done} of ${p.total} attempts finished so far.` : "");
       share = k.done / k.total;
     } else if (r.phase === "running") {
       line = `${p.done} of ${p.total} attempts finished.`;
