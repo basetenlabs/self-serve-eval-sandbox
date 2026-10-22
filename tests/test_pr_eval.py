@@ -469,6 +469,12 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.resumed_models(meta, ["glm-5.3", "muse-spark"]),
                          (["claude-opus", "glm-5.3", "muse-spark"], ["muse-spark"]))
 
+    def test_resume_keeps_the_runs_own_judge(self):
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "none")  # no judge key needed
+        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, "gpt-y"), "gpt-y")  # named on the command line
+        self.assertEqual(pipeline.resumed_judge({}, "default"), "default")  # a run from before judges were recorded
+
     def job(self, d, request):
         from unittest import mock
         with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
