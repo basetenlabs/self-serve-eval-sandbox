@@ -81,11 +81,26 @@ class RuntimeTests(unittest.TestCase):
                 self.assertRaisesRegex(runtime.RuntimeError, r"\(ValueError\)") as raised:
             runtime.create("sandbox-one", "run", runner.Settings(workspace="eval-only"))
         self.assertNotIn("response body", str(raised.exception))
-        with mock.patch.object(runtime, "sdk", return_value=mock.Mock()), \
+        with mock.patch.object(runtime, "sdk", return_value=mock.Mock()), mock.patch.object(runtime.time, "sleep"), \
                 mock.patch.object(runtime, "execute",
                                   side_effect=runtime.RuntimeError("Blaxel process transport failed (ResponseError).")), \
                 self.assertRaisesRegex(runtime.RuntimeError, r"\(Blaxel process transport failed \(ResponseError\)\.\)"):
             runtime.create("sandbox-one", "run", runner.Settings(workspace="eval-only"))
+        runtime._SANDBOXES.pop("sandbox-one", None)
+
+    def test_a_new_sandbox_that_cannot_take_its_first_command_yet_is_asked_again(self):
+        dropped = runtime.RuntimeError("Blaxel process transport failed (ResponseError).")
+        with mock.patch.object(runtime, "sdk", return_value=mock.Mock()), \
+                mock.patch.object(runtime.time, "sleep") as sleep, \
+                mock.patch.object(runtime, "execute", side_effect=[dropped, dropped, runtime.Execution(0, "", "")]) as run:
+            runtime.create("sandbox-one", "run", runner.Settings(workspace="eval-only"))
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [1, 2])
+        with mock.patch.object(runtime, "sdk", return_value=mock.Mock()), \
+                mock.patch.object(runtime, "execute", return_value=runtime.Execution(1, "", "")) as run, \
+                self.assertRaisesRegex(runtime.RuntimeError, "must run non-root"):
+            runtime.create("sandbox-one", "run", runner.Settings(workspace="eval-only"))
+        self.assertEqual(run.call_count, 1)  # a check that ran and failed is never asked again
         runtime._SANDBOXES.pop("sandbox-one", None)
 
     def test_a_dropped_transfer_is_tried_once_more(self):
