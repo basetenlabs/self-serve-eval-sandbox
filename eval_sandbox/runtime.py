@@ -153,7 +153,9 @@ def create(name: str, run_id: str, settings, memory: int | None = None):
         return sandbox
     except Exception as exc:
         # Named creation is not retried: a timeout may still have allocated it.
-        raise RuntimeError(f"Blaxel creation failed for {name} ({type(exc).__name__}); use cleanup to reconcile.") from exc
+        # Our own messages say which step failed; anything else is named by type only.
+        why = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+        raise RuntimeError(f"Blaxel creation failed for {name} ({why}); use cleanup to reconcile.") from exc
 
 
 def get(name: str):
