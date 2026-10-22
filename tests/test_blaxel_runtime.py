@@ -304,6 +304,16 @@ class TrialBoundaryTests(unittest.TestCase):
         self.assertLess(events.index(("delete", "verifier")), events.index(("setup ended", "verifier")))
         self.assertNotIn(("upload", "verifier"), events)
 
+    def test_a_rerun_starts_in_a_clean_folder_and_says_what_it_replaces(self):
+        with tempfile.TemporaryDirectory() as d:
+            earlier = Path(d) / "trial"
+            earlier.mkdir()
+            (earlier / "result.json").write_text(json.dumps({"outcome": "invalid", "invalid_reason": "sandbox-error"}))
+            (earlier / "error.log").write_text("Blaxel creation failed")
+            result = self.trial(Path(d), [], lambda name, *_: (None, {"baseline": "a" * 40}))
+            self.assertFalse((earlier / "error.log").exists())
+        self.assertEqual((result["outcome"], result["rerun_after"]), ("solved", "sandbox-error"))
+
 
 if __name__ == "__main__":
     unittest.main()

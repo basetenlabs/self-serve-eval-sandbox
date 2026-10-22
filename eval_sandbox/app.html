@@ -392,6 +392,8 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
       share = p.total ? p.done / p.total : 0;
     } else if (r.phase === "stopped") {
       line = `Stopped${p.total ? ` with ${p.done} of ${p.total} attempts finished` : ""}. Resume to carry on where it left off.`;
+    } else if (r.phase === "done" && r.resumable) {
+      line = `${r.lost} attempt${r.lost === 1 ? " was" : "s were"} lost to sandbox, setup or provider problems, not the models. Resume runs ${r.lost === 1 ? "it" : "them"} again.`;
     } else if (r.phase !== "done") {
       line = r.detail;
     }

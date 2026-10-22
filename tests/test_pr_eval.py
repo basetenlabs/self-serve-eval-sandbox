@@ -533,6 +533,21 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual((meta["tasks"], meta["left_out"], meta["checked"]), (["a"], {"b": "reference-fails"}, True))
         self.assertEqual(meta["status"]["phase"], "running")
 
+    def test_resume_runs_again_the_attempts_lost_to_infrastructure(self):
+        model, task = baseten_model(), SimpleNamespace(id="t")
+        reasons = {1: "sandbox-error", 2: "verifier-setup-timeout", 3: "provider-error", 4: "runner-error: boom",
+                   5: "verifier-apply-error", 6: "verifier-timeout", 7: "agent-crashed", 8: "judge-error", 9: None}
+        with tempfile.TemporaryDirectory() as d:
+            for attempt, reason in reasons.items():
+                path = Path(d) / "trials" / runner.trial_name(task, model, attempt)
+                path.mkdir(parents=True)
+                (path / "result.json").write_text(json.dumps(
+                    {"outcome": "invalid" if reason else "solved", "invalid_reason": reason}))
+            pending = runner.pending_trials([task], [model], 10, Path(d))
+            self.assertEqual(runner.lost_trials(Path(d)), 4)
+        # Only infrastructure: a diff that won't apply or tests that hang may be the model's doing.
+        self.assertEqual([attempt for _, _, attempt, _ in pending], [1, 2, 3, 4, 10])
+
     def test_a_resumed_run_still_lists_the_prs_it_left_out_before(self):
         job = SimpleNamespace(meta={"left_out": {"old": "reference-fails"}})
         with contextlib.redirect_stdout(io.StringIO()):

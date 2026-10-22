@@ -13,6 +13,7 @@ import json
 import re
 import secrets
 import shlex
+import shutil
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -395,7 +396,11 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
 
 
 def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: str, settings: Settings) -> dict:
-    trial_dir.mkdir(parents=True, exist_ok=True)
+    # An attempt starts in a clean folder: one cut short or lost to infrastructure leaves files behind.
+    earlier = trial_dir / "result.json"
+    rerun_after = json.loads(earlier.read_text()).get("invalid_reason") if earlier.is_file() else None
+    shutil.rmtree(trial_dir, ignore_errors=True)
+    trial_dir.mkdir(parents=True)
     container = container_name(run_id)
     verifier = container_name(run_id)
     verify_dir = trial_dir / "verification"
@@ -404,6 +409,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
               "model_id": model.model, "attempt": attempt, "started_at": now(), "outcome": None,
               "invalid_reason": None, **environment_identity(settings),
               "agent_sandbox": container, "verifier_sandbox": verifier}
+    if rerun_after:
+        result["rerun_after"] = rerun_after
     agent_timeout = settings.agent_timeout or int(task.meta["agent"].get("timeout_sec", 1800))
     memory = sandbox_memory(task, settings)
     alive = [container, verifier]  # reconcile by exact name even if allocation times out
@@ -618,14 +625,30 @@ def test_summary(output: str) -> str:
     return (lines[-1].strip() if lines else "")[:200]
 
 
+# Attempt results that say nothing about the model or its change: a sandbox, setup or provider
+# problem, or this runner's own. `--resume` runs those attempts again.
+LOST_TO = ("sandbox-error", "sandbox-cleanup-error", "workspace-error", "setup-", "provider-error", "runner-error")
+
+
+def lost(result: dict) -> bool:
+    """An attempt lost to infrastructure, in the agent's sandbox or the verifier's, rather than graded."""
+    return result.get("outcome") == "invalid" and \
+        (result.get("invalid_reason") or "").removeprefix("verifier-").startswith(LOST_TO)
+
+
+def lost_trials(job_dir: Path) -> int:
+    return sum(lost(json.loads(p.read_text())) for p in (job_dir / "trials").glob("*/result.json"))
+
+
 def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path) -> list[tuple]:
-    """Trials not already finished in `job_dir`, attempt-major, so a stopped run is balanced."""
+    """Trials not finished in `job_dir`, or lost to infrastructure, attempt-major, so a stopped run is balanced."""
     pending = []
     for attempt in range(1, attempts + 1):
         for task in tasks:
             for model in models:
                 path = job_dir / "trials" / trial_name(task, model, attempt)
-                if not (path / "result.json").is_file():
+                done = path / "result.json"
+                if not done.is_file() or lost(json.loads(done.read_text())):
                     pending.append((task, model, attempt, path))
     return pending
 
