@@ -441,6 +441,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
   const expected = (run.tasks || []).length * models.length * (run.attempts || 1);
   if (!DATA.complete) banners.append(el("div", { class: "banner" }, el("b", {}, "In progress"), `${trials.length} of ${expected} attempts had finished at ${new Date(DATA.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. The run rewrites this page as attempts finish; reload for the latest.`));
   if (run.note) banners.append(el("div", { class: "banner" }, el("b", {}, "Note"), run.note));
+  if (!run.judge) banners.append(el("div", { class: "banner" }, el("b", {}, "Tests only"), "No AI judge on this run: solved means the PR's hidden tests passed. Running pr-eval rejudge on it adds the judge later."));
   if (tasks.length < 30) banners.append(el("div", { class: "banner" }, el("b", {}, "Small sample"), `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}. Differences of a few points are noise at this size; the ranges in More metrics show how wide the uncertainty is.`));
 
   // ---------- ranked model cards ----------
@@ -706,7 +707,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 32px 0 48px; }
     const body = document.getElementById("d-body");
     body.replaceChildren(...[
       el("details", { class: "instr" }, el("summary", {}, "What the agent was asked to do"), el("pre", {}, t.instruction || "")),
-      el("div", { class: "t-meta", style: "margin:-8px 0 14px" }, `Verified with ${scopeText(t.test_scope)}, then the judge.`),
+      el("div", { class: "t-meta", style: "margin:-8px 0 14px" }, `Verified with ${scopeText(t.test_scope)}${run.judge ? ", then the judge" : ""}.`),
       taskState(t).unsolved ? el("div", { class: "banner", style: "margin:0 0 14px" }, el("b", {}, "No model solved this"),
         "Check the task before blaming the models: PR tests sometimes assert details, such as an exact error message, that the request never states.") : null,
       ...rankedModels.flatMap((m) => trialsFor(id, m.key).map((r) => attemptCard(t, r, modelIndex[m.key]))),
