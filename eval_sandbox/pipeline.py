@@ -174,7 +174,10 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
             else:
                 check_and_run(job, candidates, models, settings)
         path = report.build(job.path)
-        job.status("done", f"Finished. Report: {path}")
+        lost = runner.lost_trials(job.path)
+        job.status("done", f"Finished. Report: {path}" + (
+            f". {lost} attempt(s) were lost to sandbox, setup or provider problems, not the models; "
+            f"run them again with: pr-eval run --resume {job.path}" if lost else ""))
         return 0
     except KeyboardInterrupt:
         runner.cleanup(job.id, workspace=settings.workspace)

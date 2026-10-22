@@ -215,6 +215,21 @@ class BlaxelFlowTest(unittest.TestCase):
         self.assertEqual(result["phase"], "stopped")
         self.assertFalse(result["resumable"])
 
+    def test_a_finished_run_with_attempts_lost_to_infrastructure_can_be_resumed(self):
+        def describe(root, path, trials):
+            (path / "report.json").write_text(json.dumps({"models": [], "summary": {}, "trials": trials}))
+            return app.App(Path(root)).describe(path)
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "done"
+            path.mkdir()
+            (path / "run.json").write_text(json.dumps({
+                "run_id": "done", "request": {"repos": ["owner/repo"]}, "tasks": ["owner__repo-1"], "models": [],
+                "backend": "blaxel", "workspace": "eval-only", "status": {"phase": "done"}}))
+            lost = describe(root, path, [{"outcome": "solved"}, {"outcome": "invalid", "invalid_reason": "sandbox-error"}])
+            graded = describe(root, path, [{"outcome": "invalid", "invalid_reason": "verifier-apply-error"}])
+        self.assertEqual((lost["lost"], lost["resumable"]), (1, True))
+        self.assertEqual((graded["lost"], graded["resumable"]), (0, False))
+
 
 if __name__ == "__main__":
     unittest.main()

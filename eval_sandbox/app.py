@@ -110,7 +110,7 @@ class App:
                     "active_at": pipeline.now(), "phase": "collecting" if starting else "failed",
                     "detail": "Starting" if starting else "The run stopped before it began; see its log.",
                     "note": None, "progress": {"done": 0, "total": 0}, "checking": {"done": 0, "total": 0},
-                    "left_out": [], "summary": {}, "report": None, "resumable": False,
+                    "left_out": [], "summary": {}, "report": None, "lost": 0, "resumable": False,
                     "log": None if starting else tail(log)}
         meta = read_json(job_dir / "run.json")
         if not meta:
@@ -146,6 +146,7 @@ class App:
             summary = {m["key"]: {k: data["summary"][m["key"]].get(k) for k in
                                   ("pass_at_1", "solved", "valid", "cost_per_solved", "invalid")}
                        for m in data["models"] if m["key"] in data["summary"]}
+        lost = sum(map(runner.lost, data.get("trials") or []))  # resume runs these again
         candidates = meta.get("candidates") or []
         tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
         return {
@@ -159,8 +160,8 @@ class App:
             "left_out": [{"id": t, "pr": t.rsplit("-", 1)[-1], "why": pipeline.LEFT_OUT.get(s, s)}
                          for t, s in (meta.get("left_out") or {}).items()],
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
-            "log": tail(log) if phase in ("failed", "stopped") else None,
-            "resumable": phase in ("stopped", "failed") and meta.get("backend") == "blaxel"
+            "log": tail(log) if phase in ("failed", "stopped") else None, "lost": lost,
+            "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "blaxel"
                          and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
         }
 
