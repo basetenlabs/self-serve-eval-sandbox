@@ -173,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
     r.add_argument("--judge", default="default", help="'none' to score on tests only, or a judge model id")
     r.add_argument("--concurrency", type=int, default=8, help="attempts and checks at once (default 8)")
-    r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096)")
+    r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
     r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
     r.add_argument("--agent-timeout", type=int, help="seconds per attempt (default 1800)")
     r.add_argument("--skip-validation", action="store_true", help="run tasks without checking them first")

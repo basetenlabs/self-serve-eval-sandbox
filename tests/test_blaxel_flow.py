@@ -45,6 +45,17 @@ class BlaxelFlowTest(unittest.TestCase):
         self.assertEqual(settings.workspace, "eval-original")
         self.assertEqual(settings.image, "original-image")
 
+    def test_resume_keeps_the_sandbox_size_the_run_started_with(self):
+        with mock.patch.dict(os.environ):
+            new = {"backend": "blaxel", "workspace": "eval-only", "image": "image"}
+            pipeline.restore_execution(new, runner.Settings(memory=16384))
+            resumed = runner.Settings()
+            pipeline.restore_execution(new, resumed)
+            raised = runner.Settings(memory=32768)
+            pipeline.restore_execution(new, raised)
+        self.assertEqual(resumed.memory, 16384)
+        self.assertEqual((raised.memory, new["memory"]), (32768, 32768))
+
     def test_resume_rejects_docker_and_incomplete_metadata(self):
         for meta in ({"image": "legacy:dev"}, {"backend": "docker"}, {"backend": "blaxel"}):
             with self.subTest(meta=meta), self.assertRaisesRegex(SystemExit, "start a new run"):
