@@ -345,3 +345,10 @@ def resumed_models(meta: dict, requested: list[str] | None) -> tuple[list[str], 
     have = [m["key"] for m in meta["models"]]
     added = [k for k in requested or [] if k not in have]
     return have + added, added
+
+
+def resumed_judge(meta: dict, choice: str) -> str:
+    """The judge a resumed run started with, unless --judge names one, so a tests-only run stays tests only."""
+    if choice != "default" or "judge" not in meta:
+        return choice
+    return meta["judge"]["model"] if meta["judge"] else "none"

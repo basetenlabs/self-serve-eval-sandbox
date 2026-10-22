@@ -29,7 +29,7 @@ def cmd_run(args) -> int:
         pipeline.restore_execution(job.meta, runner.Settings(workspace=args.workspace))
         keys, added = pipeline.resumed_models(job.meta, args.models)
         try:
-            models, judge = pipeline.preflight(keys, args.judge, args.models_config)
+            models, judge = pipeline.preflight(keys, pipeline.resumed_judge(job.meta, args.judge), args.models_config)
         except SystemExit as exc:
             job.status("failed", str(exc.code))  # so the page shows why Resume didn't start
             raise
