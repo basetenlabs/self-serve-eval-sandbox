@@ -53,6 +53,8 @@ DEFINITION = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+|export\s+(?:default\s+)?)?(?:async\s+)?"
     r"(?:func\s+(?:\([^)]*\)\s*)?|def\s+|fn\s+|function\*?\s+|class\s+|interface\s+|struct\s+|enum\s+|trait\s+)(\w+)"
     r"|^(?:export\s+)?(?:type|var|const|let)\s+(\w+)")
+GO_IMPORT_BLOCK = re.compile(r"^import\s*\((.*?)^\)", re.M | re.S)
+GO_IMPORT_LINE = re.compile(r'^import\s+(?:[\w.]+\s+)?"([^"]+)"', re.M)
 
 
 @dataclass
@@ -67,12 +69,27 @@ class Skip(Exception):
     """A pull request that can't be a task, and why."""
 
 
-def recipe(repo: str, language: str, test_paths: list[str], package_json: dict | None = None) -> dict:
+def recipe(repo: str, language: str, test_paths: list[str], package_json: dict | None = None,
+           imports: list[str] | None = None) -> dict:
     """Default setup and test commands for a repository; `--setup` and `--test` override them.
 
     The tests run are the repository's default suite, except where that suite needs more
-    than one sandbox (Hono: only the PR's changed test files).
+    than one sandbox (Hono: only the PR's changed test files; Grafana: only their Go packages).
+    `imports` are the Go packages the merged change imports.
     """
+    if repo == "grafana/grafana":
+        packages = " ".join(sorted({"./" + os.path.dirname(p) for p in test_paths if p.endswith("_test.go")}))
+        if test_paths and not packages:
+            raise Skip("no Go tests (only Grafana's Go tests run here)")
+        # All its modules don't fit in a sandbox, and the agent and the tests run without network:
+        # download what the test packages and the merged change import (packages the change adds
+        # don't exist yet, hence `|| true`), then compile the test packages once, as they are
+        # before the change, to warm the build cache.
+        wanted = " ".join([packages, *map(shlex.quote, imports or [])])
+        return {"setup": (f"{{ go list -e -deps -test {wanted} >/dev/null || true; }} && "
+                          f"{{ go test -count=1 -run '^$' {packages} >/dev/null 2>&1 || true; }}"),
+                "test": f"go test -count=1 -timeout=600s {packages}",
+                "scope": "the Go packages of the PR's changed tests", "setup_timeout": 1800}
     if language == "Go":
         return {"setup": "go mod download && go build ./... >/dev/null",
                 "test": "go test -count=1 -timeout=300s ./...",
@@ -290,6 +307,20 @@ exit "$code"
 """
 
 
+def go_imports(mirror: Path, commit: str, paths: list[str]) -> list[str]:
+    """Non-standard-library packages the Go files import at a commit (files missing there are skipped)."""
+    found = set()
+    for path in paths:
+        try:
+            source = git(mirror, "show", f"{commit}:{path}").decode(errors="replace")
+        except subprocess.CalledProcessError:
+            continue
+        for block in GO_IMPORT_BLOCK.findall(source):
+            found.update(re.findall(r'"([^"]+)"', block))
+        found.update(GO_IMPORT_LINE.findall(source))
+    return sorted(p for p in found if "." in p.split("/")[0])
+
+
 def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
                 setup: str | None = None, test: str | None = None, max_lines: int = MAX_LINES) -> Path:
     """Write tasks/<id> for one merged pull request. Raises Skip if it can't be a task."""
@@ -316,9 +347,12 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     present = set(git(mirror, "ls-tree", "-r", "--name-only", reference, "--", *test_paths).decode().splitlines())
     # {test_files}: the PR's test sources that still exist, not its fixtures or deleted tests
     runnable = [p for p in test_paths if p in present and SOURCE_FILE.search(p)]
-    commands = recipe(repo, language, runnable, package_json) if not (setup and test) else {}
+    go_files = [f["path"] for f in files if f["path"].endswith(".go")]
+    imports = go_imports(mirror, reference, go_files) if repo == "grafana/grafana" else None
+    commands = recipe(repo, language, runnable, package_json, imports) if not (setup and test) else {}
     template = test or commands["test"]
     commands = {"setup": setup or commands["setup"], "scope": commands.get("scope", "the given test command"),
+                "setup_timeout": commands.get("setup_timeout", 900),
                 "test": template.replace("{test_files}", " ".join(map(shlex.quote, runnable)))}
     text, source = request(repo, pr)
     if len(text.strip()) < MIN_REQUEST_CHARS:
@@ -352,7 +386,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
                  "title": pr["title"], "language": language, "size_bucket": size, "lines_changed": lines,
                  "files_changed": len(files), "merged_at": pr["merged_at"], "base_sha": base,
                  "reference_sha": reference, "instruction_source": source},
-        "environment": {"setup": commands["setup"], "setup_timeout_sec": 900},
+        "environment": {"setup": commands["setup"], "setup_timeout_sec": commands["setup_timeout"]},
         "agent": {"timeout_sec": 1800},
         "verifier": {"test": commands["test"], "test_template": template, "scope": commands["scope"], "timeout_sec": 900,
                      "test_files": test_paths, "deleted_test_files": deleted},

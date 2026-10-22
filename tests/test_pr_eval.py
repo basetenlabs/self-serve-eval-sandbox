@@ -221,6 +221,12 @@ class RecipeTest(unittest.TestCase):
         self.assertIn("src/a.test.ts", hono["test"])
         self.assertNotIn("README.md", hono["test"])
         self.assertTrue(hono["setup"].startswith("corepack pnpm@9.1.0 install"))
+        grafana = tasks.recipe("grafana/grafana", "TypeScript", ["pkg/a/x_test.go", "pkg/a/y_test.go", "pkg/b/z_test.go"],
+                               imports=["k8s.io/api/core/v1"])
+        self.assertEqual(grafana["test"], "go test -count=1 -timeout=600s ./pkg/a ./pkg/b")
+        self.assertIn("go list -e -deps -test ./pkg/a ./pkg/b k8s.io/api/core/v1 ", grafana["setup"])
+        with self.assertRaises(tasks.Skip):
+            tasks.recipe("grafana/grafana", "TypeScript", ["public/app/a.test.tsx"])
         with self.assertRaises(tasks.Skip):
             tasks.recipe("someone/rust", "Rust", [])
 
@@ -279,6 +285,14 @@ class CollectTest(unittest.TestCase):
             return [{"commit": {"message": m}} for m in commits] if endpoint.endswith("/commits?per_page=100") else issue
         with mock.patch.object(tasks, "gh", side_effect=github):
             return tasks.export_task(self.repo / ".git", "o/r", "Python", self.pr, self.out, **kwargs)
+
+    def test_go_imports_leave_out_the_standard_library(self):
+        (self.repo / "a.go").write_text('package a\n\nimport (\n\t"fmt"\n\tv1 "k8s.io/api/core/v1"\n)\n\n'
+                                        'import "github.com/x/y"\n')
+        self.git("add", "a.go")
+        self.git("commit", "-qm", "go")
+        self.assertEqual(tasks.go_imports(self.repo / ".git", "HEAD", ["a.go", "missing.go"]),
+                         ["github.com/x/y", "k8s.io/api/core/v1"])
 
     def test_the_answer_stays_out_of_the_agents_copy(self):
         import tarfile
