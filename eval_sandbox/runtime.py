@@ -133,11 +133,12 @@ def build_image(image: str, claude_code_version: str | None = None) -> int:
                                "-w", workspace(), "--yes"], cwd=d, timeout=3600).returncode
 
 
-def create(name: str, run_id: str, settings):
+def create(name: str, run_id: str, settings, memory: int | None = None):
+    """A sandbox of `memory` MB, or the run's default size."""
     api = sdk(settings.workspace)
     try:
         sandbox = api.create({
-            "name": name, "image": settings.image, "memory": settings.memory,
+            "name": name, "image": settings.image, "memory": memory or settings.memory,
             "region": settings.region, "ttl": "6h",
             "labels": {LABEL: run_id}, "extra_args": {"iptables": "enabled"},
             "network": {"firewall": {"rulesets": ["proxy"]},
@@ -183,9 +184,20 @@ def restrict_network(name: str, domains: list[str]) -> None:
         raise RuntimeError("GitHub is still reachable inside the sandbox; no agent was started.")
 
 
+def twice(transfer):
+    """A transfer, and once more if it fails: a dropped upload or download is harmless to repeat,
+    and losing the attempt to one is not."""
+    try:
+        return transfer()
+    except Exception:  # noqa: BLE001 - the second try raises whatever is really wrong
+        time.sleep(2)
+        return transfer()
+
+
 def upload(name: str, local: Path, remote: str) -> None:
     sandbox = get(name)
-    try:
+
+    def transfer():
         if local.is_dir():
             archive = io.BytesIO()
             with tarfile.open(fileobj=archive, mode="w") as tar:
@@ -197,6 +209,9 @@ def upload(name: str, local: Path, remote: str) -> None:
                 raise RuntimeError("Could not unpack uploaded files.")
         else:
             sandbox.fs.write_binary(remote, local.read_bytes())
+
+    try:
+        twice(transfer)
     except RuntimeError:
         raise
     except Exception as exc:
@@ -204,8 +219,12 @@ def upload(name: str, local: Path, remote: str) -> None:
 
 
 def download(name: str, remote: str, local: Path, *, optional: bool = False) -> None:
-    try:
+    """An optional file may well not exist, so only a required one is tried twice."""
+    def transfer():
         local.write_bytes(get(name).fs.read_binary(remote))
+
+    try:
+        transfer() if optional else twice(transfer)
     except Exception:
         if not optional:
             raise RuntimeError(f"Could not download {remote}.")

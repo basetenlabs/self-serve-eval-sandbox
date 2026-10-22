@@ -2,9 +2,10 @@
 
 A trial is one (task, model, attempt). Setup installs dependencies, then a
 creation-time proxy firewall limits egress to the selected model provider.
-The agent's patch is saved and its entire sandbox deleted. A fresh sandbox
-repeats setup, applies the patch and runs hidden tests. The reference patch
-is used only by separate validation sandboxes and the host-side judge.
+The agent's patch is saved and its entire sandbox deleted. A second sandbox,
+set up the same way while the agent works, then gets the patch and the hidden
+tests. The reference patch is used only by separate validation sandboxes and
+the host-side judge.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import secrets
 import shlex
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +23,7 @@ from pathlib import Path
 from . import judge as judge_mod
 from . import runtime
 from .config import BASETEN_URL, Judge, Model, credential_env
-from .tasks import TEST_FILE, Task
+from .tasks import TEST_FILE, Task, snapshot
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
@@ -73,7 +74,7 @@ def write_json(path: Path, data: dict) -> None:
 class Settings:
     image: str = DEFAULT_IMAGE
     concurrency: int = 4
-    memory: int = 4096
+    memory: int = 4096                 # MB; a task that needs more says so (memory_mb)
     region: str = "us-pdx-1"
     workspace: str | None = None
     agent_timeout: int | None = None   # overrides the task's own
@@ -291,13 +292,18 @@ def container_name(run_id: str) -> str:
     return f"pr-eval-{slug or 'trial'}-{secrets.token_hex(4)}"
 
 
-def start_container(name: str, run_id: str, settings: Settings) -> None:
+def start_container(name: str, run_id: str, settings: Settings, memory: int | None = None) -> None:
     """Create a fresh, labelled Blaxel sandbox with a six-hour TTL."""
     if STOPPING.is_set():
         raise runtime.RuntimeError("Run is stopping; no new sandbox is created.")
-    runtime.create(name, run_id, settings)
+    runtime.create(name, run_id, settings, memory)
     if STOPPING.is_set():  # the stop's cleanup may have listed sandboxes before this one existed
         raise runtime.RuntimeError("Run is stopping; the caller deletes this sandbox.")
+
+
+def sandbox_memory(task: Task, settings: Settings) -> int:
+    """MB for this task's sandboxes: the run's size, or more where the repository needs it."""
+    return max(settings.memory, int(task.meta["environment"].get("memory_mb", 0)))
 
 
 def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | None, dict]:
@@ -306,10 +312,10 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
     Returns (invalid reason or None, setup stats). The baseline includes whatever setup
     wrote outside .gitignore, so the agent's diff is only the agent's.
     """
-    runtime.upload(container, task.path / "environment" / "source.tar", "/tmp/source.tar")
+    runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
     commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
-    code, out, _ = sh(container, f"tar -xf /tmp/source.tar -C /workspace && git init -q -b main && "
-                                 f"git add -A && {commit} base", timeout=300)
+    code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
+                                 f"git init -q -b main && git add -A && {commit} base", timeout=300)
     if code != 0:
         (log_dir / "setup.log").write_text(out)
         return "workspace-error", {}
@@ -392,12 +398,25 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     trial_dir.mkdir(parents=True, exist_ok=True)
     container = container_name(run_id)
     verifier = container_name(run_id)
+    verify_dir = trial_dir / "verification"
+    verify_dir.mkdir(exist_ok=True)
     result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
               "model_id": model.model, "attempt": attempt, "started_at": now(), "outcome": None,
               "invalid_reason": None, **environment_identity(settings),
               "agent_sandbox": container, "verifier_sandbox": verifier}
     agent_timeout = settings.agent_timeout or int(task.meta["agent"].get("timeout_sec", 1800))
-    alive = []
+    memory = sandbox_memory(task, settings)
+    alive = [container, verifier]  # reconcile by exact name even if allocation times out
+    created = threading.Event()
+
+    def ready_verifier() -> tuple[str | None, dict]:
+        # Only the starting code and its dependencies, like the agent's sandbox: the patch
+        # and the hidden tests go in after the agent's sandbox is gone.
+        try:
+            start_container(verifier, run_id, settings, memory)
+        finally:
+            created.set()
+        return prepare_workspace(verifier, task, verify_dir)
 
     def finish(outcome: str, reason: str | None = None) -> dict:
         result["outcome"], result["invalid_reason"] = outcome, reason
@@ -408,10 +427,11 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             write_json(trial_dir / "result.json", result)
         return result
 
+    helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
     try:
         secrets_env = credential_env(model)
-        alive.append(container)  # reconcile by exact name even if allocation times out
-        start_container(container, run_id, settings)
+        verifier_ready = helper.submit(ready_verifier)
+        start_container(container, run_id, settings, memory)
         reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
@@ -434,11 +454,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         # Destroy the entire agent VM BEFORE any hidden tests leave this host.
         runtime.delete(container)
         alive.remove(container)
-        alive.append(verifier)
-        start_container(verifier, run_id, settings)
-        verify_dir = trial_dir / "verification"
-        verify_dir.mkdir(exist_ok=True)
-        reason, setup = prepare_workspace(verifier, task, verify_dir)
+        reason, result["verifier_setup"] = verifier_ready.result()
         if reason:
             return finish("invalid", "verifier-" + reason)
         runtime.upload(verifier, trial_dir / "agent.patch", "/tmp/agent.patch")
@@ -446,7 +462,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             code, _, timed_out = sh(verifier, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
             if code or timed_out:
                 return finish("invalid", "verifier-apply-error")
-        set_aside = set_aside_agent_tests(verifier, setup["baseline"])
+        set_aside = set_aside_agent_tests(verifier, result["verifier_setup"]["baseline"])
         tests = run_tests(verifier, task, trial_dir / "verifier.log")
         test_output = tests.pop("output")
         result["tests"] = {**tests, "set_aside": set_aside}
@@ -456,6 +472,10 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         (trial_dir / "error.log").write_text(str(exc))
         return finish("invalid", "sandbox-error")
     finally:
+        # Ending early can leave the verifier mid-setup, which deleting it ends. One still
+        # being created can't be deleted yet, so wait for that part.
+        if verifier_ready:
+            created.wait()
         for name in alive:
             # Debug retention is only for a verifier, never a live agent VM.
             if name == verifier and settings.keep_sandboxes:
@@ -466,6 +486,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             except runtime.RuntimeError as exc:
                 result["cleanup_error"] = str(exc)
                 finish("invalid", "sandbox-cleanup-error")
+        helper.shutdown(wait=False)
 
     if result.get("cleanup_error"):
         return finish("invalid", "sandbox-cleanup-error")
@@ -505,7 +526,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
     container = container_name(run_id)
     record = {"task_id": task.id, **environment_identity(settings), "checked_at": now(), "status": None}
     try:
-        start_container(container, run_id, settings)
+        start_container(container, run_id, settings, sandbox_memory(task, settings))
         reason, record["setup"] = prepare_workspace(container, task, log_dir)
         if reason:
             record["status"] = reason
@@ -546,9 +567,13 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
 PASSING_CHECK_FAILURES = ("sandbox-error", "docker-error", "setup-timeout", "timeout", "workspace-error")
 
 
+def needs_check(task: Task, settings: Settings) -> bool:
+    """Not yet checked in this image, or its check failed for a passing reason."""
+    return (validation_status(task, settings) or "sandbox-error").startswith(PASSING_CHECK_FAILURES)
+
+
 def validate_all(tasks: list[Task], settings: Settings, run_id: str, on_result=None) -> None:
-    """Check tasks not yet checked in this image, or whose check failed for a passing reason."""
-    todo = [t for t in tasks if (validation_status(t, settings) or "sandbox-error").startswith(PASSING_CHECK_FAILURES)]
+    todo = [t for t in tasks if needs_check(t, settings)]
     in_parallel(todo, lambda t: validate_task(t, settings, run_id), settings.concurrency, run_id, on_result)
 
 
@@ -593,16 +618,20 @@ def test_summary(output: str) -> str:
     return (lines[-1].strip() if lines else "")[:200]
 
 
-def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-        run_id: str, on_result=None) -> None:
-    """Run every trial not already finished in `job_dir`, a few at a time."""
+def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path) -> list[tuple]:
+    """Trials not already finished in `job_dir`, attempt-major, so a stopped run is balanced."""
     pending = []
-    for attempt in range(1, attempts + 1):        # attempt-major, so a stopped run is balanced
+    for attempt in range(1, attempts + 1):
         for task in tasks:
             for model in models:
                 path = job_dir / "trials" / trial_name(task, model, attempt)
                 if not (path / "result.json").is_file():
                     pending.append((task, model, attempt, path))
+    return pending
+
+
+def trial_runner(models: list[Model], settings: Settings, run_id: str):
+    """Runs one pending trial within its model's own limit. A broken trial is saved, never raised."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
 
     def trial(job) -> dict:
@@ -618,21 +647,90 @@ def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, se
                 write_json(path / "result.json", result)
             return result
 
-    in_parallel(pending, trial, settings.concurrency, run_id, on_result)
+    return trial
 
 
-def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None) -> None:
+def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
+        run_id: str, on_result=None) -> None:
+    """Run every trial not already finished in `job_dir`, a few at a time."""
+    in_parallel(pending_trials(tasks, models, attempts, job_dir), trial_runner(models, settings, run_id),
+                settings.concurrency, run_id, on_result)
+
+
+def check_and_run(candidates: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
+                  run_id: str, on_checked=None, on_result=None) -> None:
+    """Check the tasks and run the models on each one as soon as its own check passes.
+
+    Checks and trials share the run's sandboxes, checks first, so a slow check holds up
+    only its own task. `on_checked(task, status, unchecked)` follows every task, those
+    checked before first; `on_result(result, done, total)` every trial, where total
+    counts the trials of tasks that have passed so far.
+    """
+    todo = [t for t in candidates if needs_check(t, settings)]
+    trial = trial_runner(models, settings, run_id)
+    unchecked, trials_done, trials_total = len(candidates), 0, 0
+
+    def checked(task: Task, status: str) -> list:
+        nonlocal unchecked, trials_total
+        unchecked -= 1
+        if on_checked:
+            on_checked(task, status, unchecked)
+        if status != "valid":
+            return []
+        trials = pending_trials([task], models, attempts, job_dir)
+        trials_total += len(trials)
+        return [("trial", t) for t in trials]
+
+    jobs = [("check", t) for t in todo]
+    for task in candidates:
+        if task not in todo:
+            jobs += checked(task, validation_status(task, settings))
+
+    def work(job) -> dict:
+        kind, item = job
+        return validate_task(item, settings, run_id) if kind == "check" else trial(item)
+
+    def then(job, result: dict) -> list:
+        nonlocal trials_done
+        kind, item = job
+        if kind == "check":
+            return checked(item, result["status"])
+        trials_done += 1
+        if on_result:
+            on_result(result, trials_done, trials_total)
+        return []
+
+    # Checks first, then trials attempt by attempt, so a stopped run is left balanced.
+    in_parallel(jobs, work, settings.concurrency, run_id, then=then,
+                order=lambda job: 0 if job[0] == "check" else job[1][2])
+
+
+def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, then=None, order=None) -> None:
     """`work` on each job, `workers` at a time; `on_result(result, done, total)` as each lands.
 
-    Ctrl-C, or Stop on the page, drops what hasn't finished and removes the run's
-    sandboxes, so the work in flight fails fast instead of being waited for.
+    `then(job, result)` may return more jobs to do. They wait behind the others, unless
+    `order` (a sort key) puts them sooner. Ctrl-C, or Stop on the page, drops what hasn't
+    finished and removes the run's sandboxes, so the work in flight fails fast instead
+    of being waited for.
     """
+    waiting, running, done, total = list(jobs), {}, 0, len(jobs)
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        futures = [pool.submit(work, job) for job in jobs]
-        for done, future in enumerate(as_completed(futures), 1):
-            if on_result:
-                on_result(future.result(), done, len(jobs))
+        while waiting or running:
+            if order:
+                waiting.sort(key=order)
+            while waiting and len(running) < workers:
+                job = waiting.pop(0)
+                running[pool.submit(work, job)] = job
+            finished, _ = wait(running, return_when=FIRST_COMPLETED)
+            for future in finished:
+                job, result = running.pop(future), future.result()
+                done += 1
+                more = then(job, result) if then else []
+                waiting += more
+                total += len(more)
+                if on_result:
+                    on_result(result, done, total)
     except KeyboardInterrupt:
         STOPPING.set()
         pool.shutdown(wait=False, cancel_futures=True)
@@ -673,7 +771,7 @@ def retest_trial(trial_dir: Path, result: dict, task: Task, settings: Settings, 
     log_dir.mkdir(exist_ok=True)
     container = container_name(run_id)
     try:
-        start_container(container, run_id, settings)
+        start_container(container, run_id, settings, sandbox_memory(task, settings))
         reason, setup = prepare_workspace(container, task, log_dir)
         if reason:
             return {"trial": result["trial"], "error": reason}

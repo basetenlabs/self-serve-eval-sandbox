@@ -5,7 +5,7 @@ A task folder is what one trial needs and nothing more:
     tasks/<id>/
       task.toml                  metadata, setup and test commands, timeouts
       instruction.md             what the agent is asked to do (PR or issue text, names the tests call)
-      environment/source.tar     the repository at the PR's base commit, no .git
+      environment/source.tar.gz  the repository at the PR's base commit, no .git
       tests/files/...            the PR's test files at the merged commit   (hidden)
       tests/deleted.txt          test files the PR removed                  (hidden)
       tests/test.sh              runs the hidden tests, Harbor-style reward  (hidden)
@@ -20,12 +20,14 @@ data/repos/; the clone never enters a sandbox.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import threading
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,7 +77,8 @@ def recipe(repo: str, language: str, test_paths: list[str], package_json: dict |
 
     The tests run are the repository's default suite, except where that suite needs more
     than one sandbox (Hono: only the PR's changed test files; Grafana: only their Go packages).
-    `imports` are the Go packages the merged change imports.
+    `imports` are the Go packages the merged change imports. `memory` (MB) is the smallest
+    sandbox the repository fits in, where the default is too small.
     """
     if repo == "grafana/grafana":
         packages = " ".join(sorted({"./" + os.path.dirname(p) for p in test_paths if p.endswith("_test.go")}))
@@ -89,7 +92,8 @@ def recipe(repo: str, language: str, test_paths: list[str], package_json: dict |
         return {"setup": (f"{{ go list -e -deps -test {wanted} >/dev/null || true; }} && "
                           f"{{ go test -count=1 -run '^$' {packages} >/dev/null 2>&1 || true; }}"),
                 "test": f"go test -count=1 -timeout=600s {packages}",
-                "scope": "the Go packages of the PR's changed tests", "setup_timeout": 1800}
+                "scope": "the Go packages of the PR's changed tests", "setup_timeout": 1800,
+                "memory": 16384}  # the sandbox size its runs are proven at
     if language == "Go":
         return {"setup": "go mod download && go build ./... >/dev/null",
                 "test": "go test -count=1 -timeout=300s ./...",
@@ -352,7 +356,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     commands = recipe(repo, language, runnable, package_json, imports) if not (setup and test) else {}
     template = test or commands["test"]
     commands = {"setup": setup or commands["setup"], "scope": commands.get("scope", "the given test command"),
-                "setup_timeout": commands.get("setup_timeout", 900),
+                "setup_timeout": commands.get("setup_timeout", 900), "memory": commands.get("memory"),
                 "test": template.replace("{test_files}", " ".join(map(shlex.quote, runnable)))}
     text, source = request(repo, pr)
     if len(text.strip()) < MIN_REQUEST_CHARS:
@@ -369,7 +373,9 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     shutil.rmtree(tmp, ignore_errors=True)
     for folder in ("environment", "tests/files", "solution"):
         (tmp / folder).mkdir(parents=True)
-    (tmp / "environment" / "source.tar").write_bytes(git(mirror, "archive", "--format=tar", base))
+    # Compressed, it is about a quarter the size to keep and to upload to each sandbox.
+    (tmp / "environment" / "source.tar.gz").write_bytes(
+        gzip.compress(git(mirror, "archive", "--format=tar", base), compresslevel=6, mtime=0))
     for path, content in hidden.items():
         target = tmp / "tests" / "files" / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -386,7 +392,8 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
                  "title": pr["title"], "language": language, "size_bucket": size, "lines_changed": lines,
                  "files_changed": len(files), "merged_at": pr["merged_at"], "base_sha": base,
                  "reference_sha": reference, "instruction_source": source},
-        "environment": {"setup": commands["setup"], "setup_timeout_sec": commands["setup_timeout"]},
+        "environment": {"setup": commands["setup"], "setup_timeout_sec": commands["setup_timeout"],
+                        **({"memory_mb": commands["memory"]} if commands["memory"] else {})},
         "agent": {"timeout_sec": 1800},
         "verifier": {"test": commands["test"], "test_template": template, "scope": commands["scope"], "timeout_sec": 900,
                      "test_files": test_paths, "deleted_test_files": deleted},
@@ -486,6 +493,34 @@ def spread(rows, limit, repo=lambda row: row["repo"]):
             if by_repo[name] and len(picked) < limit:
                 picked.append(by_repo[name].pop())  # newest first: least likely to be memorized
     return picked
+
+
+_COMPRESSING = threading.Lock()
+
+
+def snapshot(task: Task) -> Path:
+    """The task's gzipped source. A task collected before snapshots were compressed has a plain
+    source.tar, which is compressed in place the first time it is needed."""
+    env = task.path / "environment"
+    packed, plain = env / "source.tar.gz", env / "source.tar"
+    if packed.is_file():
+        return packed
+    with _COMPRESSING:
+        if not packed.is_file():
+            # Another run may be compressing it too: each writes its own file and the last
+            # rename wins, both with the same bytes.
+            tmp = env / f".source.tar.gz.{os.getpid()}"
+            try:
+                with plain.open("rb") as src, tmp.open("wb") as raw, \
+                        gzip.GzipFile("", "wb", compresslevel=6, fileobj=raw, mtime=0) as out:
+                    shutil.copyfileobj(src, out, 1 << 20)
+                tmp.replace(packed)
+                plain.unlink(missing_ok=True)
+            except FileNotFoundError:  # the other run finished first and removed the plain one
+                tmp.unlink(missing_ok=True)
+                if not packed.is_file():
+                    raise
+    return packed
 
 
 def load(path: Path) -> Task:

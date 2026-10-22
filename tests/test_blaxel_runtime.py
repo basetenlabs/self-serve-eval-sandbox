@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,7 +56,10 @@ class RuntimeTests(unittest.TestCase):
         with mock.patch.object(runtime, "sdk", return_value=api), \
                 mock.patch.object(runtime, "execute", return_value=runtime.Execution(0, "", "")):
             runtime.create("sandbox-one", "run-one", settings)
+            self.assertEqual(api.create.call_args.args[0]["memory"], 4096)
+            runtime.create("sandbox-one", "run-one", settings, 16384)
         payload = api.create.call_args.args[0]
+        self.assertEqual(payload["memory"], 16384)
         self.assertEqual(payload["extra_args"], {"iptables": "enabled"})
         self.assertEqual(payload["network"]["firewall"], {"rulesets": ["proxy"]})
         self.assertEqual(payload["labels"], {"pr-eval": "run-one"})
@@ -69,6 +73,24 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(runtime.RuntimeError):
                 runtime.create("unsafe-image", "run", runner.Settings(workspace="eval-only"))
         runtime._SANDBOXES.pop("unsafe-image", None)
+
+    def test_a_dropped_transfer_is_tried_once_more(self):
+        sandbox = mock.Mock()
+        sandbox.fs.write_binary.side_effect = [ConnectionResetError(), None]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(runtime, "get", return_value=sandbox), \
+                mock.patch.object(runtime.time, "sleep"):
+            (Path(d) / "f").write_bytes(b"x")
+            runtime.upload("sb", Path(d) / "f", "/tmp/f")
+            self.assertEqual(sandbox.fs.write_binary.call_count, 2)
+            sandbox.fs.write_binary.side_effect = ConnectionResetError()
+            with self.assertRaisesRegex(runtime.RuntimeError, "Could not upload f"):
+                runtime.upload("sb", Path(d) / "f", "/tmp/f")
+            sandbox.fs.read_binary.side_effect = FileNotFoundError()
+            runtime.download("sb", "/logs/proxy.log", Path(d) / "p", optional=True)
+            self.assertEqual(sandbox.fs.read_binary.call_count, 1)  # an optional file may simply not exist
+            with self.assertRaises(runtime.RuntimeError):
+                runtime.download("sb", "/workspace/.git/pr-eval.patch", Path(d) / "p")
+            self.assertEqual(sandbox.fs.read_binary.call_count, 3)
 
     def test_failed_patch_capture_is_not_a_model_failure(self):
         with mock.patch.object(runner, "sh", return_value=(1, "git failed", False)):
@@ -121,7 +143,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_a_failed_delete_still_records_the_check(self):
         with tempfile.TemporaryDirectory() as d:
-            task = SimpleNamespace(id="public-task", path=Path(d))
+            task = SimpleNamespace(id="public-task", path=Path(d), meta={"environment": {}})
             with mock.patch.object(runner, "start_container"), \
                     mock.patch.object(runner, "prepare_workspace", return_value=("setup-error", {})), \
                     mock.patch.object(runtime, "delete", side_effect=runtime.RuntimeError("slow delete")):
@@ -192,39 +214,66 @@ class RuntimeTests(unittest.TestCase):
 
 
 class TrialBoundaryTests(unittest.TestCase):
-    def test_agent_vm_is_deleted_before_hidden_tests_enter_fresh_verifier(self):
+    def trial(self, d, events, prepare, on_delete=lambda name: None):
+        """run_trial with every sandbox step mocked; the agent's sandbox is "agent", the verifier "verifier"."""
+        task = SimpleNamespace(id="public-task", instruction="Fix the public example.",
+                               meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}}, path=d)
+        model = SimpleNamespace(key="model", model="model", provider="anthropic")
+
+        def agent(name, model, secrets, path, timeout):
+            path.write_text("")
+            events.append(("agent", name))
+            return {"subtype": "success", "timed_out": False}
+
+        def tests(name, *_):
+            events.append(("hidden", name))
+            return {"passed": True, "timed_out": False, "output": "ok"}
+        with mock.patch.object(runner, "container_name", side_effect=["agent", "verifier"]), \
+                mock.patch.object(runner, "credential_env", return_value={}), \
+                mock.patch.object(runner, "start_container", side_effect=lambda name, *_: events.append(("create", name))), \
+                mock.patch.object(runner, "prepare_workspace", side_effect=prepare), \
+                mock.patch.object(runner, "block_lookups"), \
+                mock.patch.object(runtime, "upload", side_effect=lambda name, *_: events.append(("upload", name))), \
+                mock.patch.object(runtime, "download"), \
+                mock.patch.object(runtime, "delete", side_effect=lambda name: (events.append(("delete", name)), on_delete(name))), \
+                mock.patch.object(runner, "run_agent", side_effect=agent), \
+                mock.patch.object(runner, "price_agent", side_effect=lambda agent, *args: agent), \
+                mock.patch.object(runner, "capture_patch", return_value=("patch", "1\t0\tfile.py")), \
+                mock.patch.object(runner, "sh", return_value=(0, "", False)), \
+                mock.patch.object(runner, "set_aside_agent_tests", return_value=[]), \
+                mock.patch.object(runner, "run_tests", side_effect=tests):
+            return runner.run_trial(task, model, 1, d / "trial", "run-one", runner.Settings(workspace="eval-only"))
+
+    def test_the_answer_reaches_the_verifier_only_after_the_agent_vm_is_deleted(self):
+        events, both_set_up = [], threading.Barrier(2, timeout=5)
+
+        def prepare(name, *_):
+            events.append(("prepare", name))
+            both_set_up.wait()  # the verifier is set up while the agent's sandbox is
+            return None, {"baseline": "a" * 40}
         with tempfile.TemporaryDirectory() as d:
-            task = SimpleNamespace(id="public-task", instruction="Fix the public example.",
-                                   meta={"task": {"repo": "public/example"}, "agent": {}}, path=Path(d))
-            model = SimpleNamespace(key="model", model="model", provider="anthropic")
-            events = []
-            def start(name, *_): events.append(("create", name))
-            def delete(name): events.append(("delete", name))
-            def agent(name, model, secrets, path, timeout):
-                path.write_text("")
-                events.append(("agent", name))
-                return {"subtype": "success", "timed_out": False}
-            def tests(name, *_):
-                events.append(("hidden", name))
-                return {"passed": True, "timed_out": False, "output": "ok"}
-            with mock.patch.object(runner, "credential_env", return_value={}), \
-                    mock.patch.object(runner, "start_container", side_effect=start), \
-                    mock.patch.object(runner, "prepare_workspace", return_value=(None, {"baseline": "a" * 40})), \
-                    mock.patch.object(runner, "block_lookups"), \
-                    mock.patch.object(runtime, "upload"), mock.patch.object(runtime, "download"), \
-                    mock.patch.object(runtime, "delete", side_effect=delete), \
-                    mock.patch.object(runner, "run_agent", side_effect=agent), \
-                    mock.patch.object(runner, "price_agent", side_effect=lambda agent, *args: agent), \
-                    mock.patch.object(runner, "capture_patch", return_value=("patch", "1\t0\tfile.py")), \
-                    mock.patch.object(runner, "sh", return_value=(0, "", False)), \
-                    mock.patch.object(runner, "set_aside_agent_tests", return_value=[]), \
-                    mock.patch.object(runner, "run_tests", side_effect=tests):
-                result = runner.run_trial(task, model, 1, Path(d) / "trial", "run-one", runner.Settings(workspace="eval-only"))
-            agent_name = next(name for event, name in events if event == "agent")
-            verifier = next(name for event, name in events if event == "hidden")
-            self.assertNotEqual(agent_name, verifier)
-            self.assertLess(events.index(("delete", agent_name)), events.index(("create", verifier)))
-            self.assertEqual(result["outcome"], "solved")
+            result = self.trial(Path(d), events, prepare)
+        gone = events.index(("delete", "agent"))
+        self.assertLess(events.index(("prepare", "verifier")), events.index(("agent", "agent")))
+        self.assertEqual(events[gone + 1:], [("upload", "verifier"), ("hidden", "verifier"), ("delete", "verifier")])
+        self.assertEqual(result["outcome"], "solved")
+
+    def test_an_attempt_that_ends_early_deletes_the_verifier_mid_setup(self):
+        events, deleted, finished = [], threading.Event(), threading.Event()
+
+        def prepare(name, *_):
+            if name == "agent":
+                return "setup-error", {}
+            deleted.wait(5)  # a long setup, cut short by the deletion
+            events.append(("setup ended", name))
+            finished.set()
+            return None, {"baseline": "a" * 40}
+        with tempfile.TemporaryDirectory() as d:
+            result = self.trial(Path(d), events, prepare, on_delete=lambda name: deleted.set())
+            finished.wait(5)
+        self.assertEqual(result["invalid_reason"], "setup-error")
+        self.assertLess(events.index(("delete", "verifier")), events.index(("setup ended", "verifier")))
+        self.assertNotIn(("upload", "verifier"), events)
 
 
 if __name__ == "__main__":
