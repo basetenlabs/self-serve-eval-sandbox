@@ -145,9 +145,9 @@ def create(name: str, run_id: str, settings, memory: int | None = None):
                         "allowedDomains": ["*"], "proxy": {"routing": []}},
         })
         _SANDBOXES[name] = sandbox
-        check = execute(name, "test \"$(id -u)\" != 0 && python3 -c " + shlex.quote(
+        check = until_ready(lambda: execute(name, "test \"$(id -u)\" != 0 && python3 -c " + shlex.quote(
             "import socket; s=socket.socket(); s.settimeout(2); "
-            "code=s.connect_ex(('127.0.0.1',8080)); s.close(); raise SystemExit(code == 0)"), timeout=15)
+            "code=s.connect_ex(('127.0.0.1',8080)); s.close(); raise SystemExit(code == 0)"), timeout=15))
         if check.code or check.timed_out:
             raise RuntimeError("Trial image must run non-root and refuse in-sandbox API access.")
         return sandbox
@@ -194,6 +194,18 @@ def twice(transfer):
     except Exception:  # noqa: BLE001 - the second try raises whatever is really wrong
         time.sleep(2)
         return transfer()
+
+
+def until_ready(command):
+    """A new sandbox's first command, asked again with backoff if it can't be sent: with many sandboxes
+    starting at once, Blaxel can answer it with a retryable 502 while the sandbox finishes starting.
+    Only for commands that are harmless to repeat; each try is a new process."""
+    for delay in (1, 2, 4):
+        try:
+            return command()
+        except RuntimeError:
+            time.sleep(delay)
+    return command()
 
 
 def upload(name: str, local: Path, remote: str) -> None:
