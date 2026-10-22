@@ -6,7 +6,7 @@ Status: v0. Claude Code is the only harness.
 
 ## Quickstart
 
-You need Python 3.12+, the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for eight sandboxes at once: four attempts, each with a grading sandbox that gets ready alongside it (`--concurrency` lowers that). Create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
+You need Python 3.12+, the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for 16 sandboxes at once: eight attempts, each with a grading sandbox that gets ready alongside it (`--concurrency` lowers that). Create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
 
 One-time setup (replace `dedicated-eval-workspace` with the new workspace's name):
 
@@ -66,7 +66,7 @@ pr-eval run your-org/your-repo --pr 123 --pr 456   # exactly these PRs (up to 1,
 
 It prints one line per attempt and keeps the report current. Stop it with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`; the same command with `--attempts 3` adds attempts to a finished run, and with `--models kimi-k3` adds a model on the same tasks. Resume restores the recorded Blaxel workspace, immutable image reference and region, rather than switching to the current defaults. The default image name includes a hash of its build files; each run resolves that name to an immutable registry reference before validation. Old Docker runs remain readable as reports but cannot be resumed or retested on Blaxel: start a new run.
 
-`--memory 4096` sets memory per sandbox in MiB (a repository that needs more gets it: grafana/grafana runs in 16384); `--region us-pdx-1` selects the Blaxel region, and `--concurrency 4` controls parallel attempts and checks. An upload or download that fails is tried once more before the attempt counts as a sandbox error. After changing `docker/Dockerfile`, run `pr-eval build-image`; validation is tied to the workspace and image identity so a rebuilt image is checked afresh.
+`--memory 4096` sets memory per sandbox in MiB (a repository that needs more gets it: grafana/grafana runs in 16384); `--region us-pdx-1` selects the Blaxel region, and `--concurrency 8` controls parallel attempts and checks. An upload or download that fails is tried once more before the attempt counts as a sandbox error. After changing `docker/Dockerfile`, run `pr-eval build-image`; validation is tied to the workspace and image identity so a rebuilt image is checked afresh.
 
 ## How it works
 

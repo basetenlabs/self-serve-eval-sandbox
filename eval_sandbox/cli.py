@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
     r.add_argument("--judge", default="default", help="'none' to score on tests only, or a judge model id")
-    r.add_argument("--concurrency", type=int, default=4, help="attempts and checks at once (default 4)")
+    r.add_argument("--concurrency", type=int, default=8, help="attempts and checks at once (default 8)")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096)")
     r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
     r.add_argument("--agent-timeout", type=int, help="seconds per attempt (default 1800)")
@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("validate", help="check task folders in the trial image without running a model")
     v.add_argument("--tasks", type=Path, default=tasks.DEFAULT_TASKS)
     v.add_argument("--task", action="append")
-    v.add_argument("--concurrency", type=int, default=4)
+    v.add_argument("--concurrency", type=int, default=8)
     v.add_argument("--image", default=runner.DEFAULT_IMAGE)
     v.set_defaults(func=cmd_validate)
 

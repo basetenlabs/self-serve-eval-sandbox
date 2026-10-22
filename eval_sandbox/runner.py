@@ -73,7 +73,7 @@ def write_json(path: Path, data: dict) -> None:
 @dataclass
 class Settings:
     image: str = DEFAULT_IMAGE
-    concurrency: int = 4
+    concurrency: int = 8
     memory: int = 4096                 # MB; a task that needs more says so (memory_mb)
     region: str = "us-pdx-1"
     workspace: str | None = None
