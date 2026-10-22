@@ -70,9 +70,23 @@ class RuntimeTests(unittest.TestCase):
     def test_root_or_open_local_api_fails_the_creation_guard(self):
         with mock.patch.object(runtime, "sdk", return_value=mock.Mock()), \
                 mock.patch.object(runtime, "execute", return_value=runtime.Execution(1, "", "")):
-            with self.assertRaises(runtime.RuntimeError):
+            with self.assertRaisesRegex(runtime.RuntimeError, "unsafe-image .*must run non-root"):
                 runtime.create("unsafe-image", "run", runner.Settings(workspace="eval-only"))
         runtime._SANDBOXES.pop("unsafe-image", None)
+
+    def test_a_failed_creation_says_which_step_failed_but_not_what_the_api_said(self):
+        api = mock.Mock()
+        api.create.side_effect = ValueError("response body")
+        with mock.patch.object(runtime, "sdk", return_value=api), \
+                self.assertRaisesRegex(runtime.RuntimeError, r"\(ValueError\)") as raised:
+            runtime.create("sandbox-one", "run", runner.Settings(workspace="eval-only"))
+        self.assertNotIn("response body", str(raised.exception))
+        with mock.patch.object(runtime, "sdk", return_value=mock.Mock()), \
+                mock.patch.object(runtime, "execute",
+                                  side_effect=runtime.RuntimeError("Blaxel process transport failed (ResponseError).")), \
+                self.assertRaisesRegex(runtime.RuntimeError, r"\(Blaxel process transport failed \(ResponseError\)\.\)"):
+            runtime.create("sandbox-one", "run", runner.Settings(workspace="eval-only"))
+        runtime._SANDBOXES.pop("sandbox-one", None)
 
     def test_a_dropped_transfer_is_tried_once_more(self):
         sandbox = mock.Mock()
