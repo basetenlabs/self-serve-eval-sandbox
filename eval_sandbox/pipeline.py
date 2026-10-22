@@ -290,7 +290,7 @@ def rebuild_quietly(job: Job) -> None:
 
 
 def restore_execution(meta: dict, settings: runner.Settings) -> None:
-    """Keep resumed work in its original backend, workspace and image."""
+    """Keep resumed work in its original backend, workspace, image and sandbox size."""
     if meta.get("backend") != "blaxel" or not meta.get("workspace") or not meta.get("image"):
         raise SystemExit("This run predates the Blaxel backend; start a new run instead of resuming a Docker run.")
     if settings.workspace and settings.workspace != meta["workspace"]:
@@ -298,6 +298,8 @@ def restore_execution(meta: dict, settings: runner.Settings) -> None:
     settings.workspace = meta["workspace"]
     settings.image = meta["image"]
     settings.region = meta.get("region", "us-pdx-1")
+    # Disk grows with memory, so a resume never shrinks the run's sandboxes; a larger --memory raises them.
+    settings.memory = meta["memory"] = max(settings.memory, meta.get("memory", 0))
     os.environ["PR_EVAL_BLAXEL_WORKSPACE"] = settings.workspace
 
 
