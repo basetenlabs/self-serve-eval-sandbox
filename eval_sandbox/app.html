@@ -379,7 +379,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
       el("div", { class: "run-head" },
         el("span", { class: "run-title" }, r.title),
         el("span", { class: `phase ${active ? "active" : r.phase}` }, PHASE[r.phase] || r.phase),
-        el("span", { class: "run-meta" }, [r.tasks ? `${r.tasks} PR${r.tasks === 1 ? "" : "s"}` : null, vs, when(r.started)].filter(Boolean).join(" · ")),
+        el("span", { class: "run-meta" }, [r.tasks ? `${r.tasks} PR${r.tasks === 1 ? "" : "s"}` : null, vs, r.judged === false ? "tests only, no judge" : null, when(r.started)].filter(Boolean).join(" · ")),
         actions));
     const p = r.progress, k = r.checking;
     let line = null, share = null;

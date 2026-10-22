@@ -152,7 +152,7 @@ class App:
             "id": job_dir.name, "title": title, "started": meta.get("created_at"), "tasks": len(run_tasks),
             "active_at": max(last),  # ISO times in UTC sort as text
             "models": [{"key": m["key"], "label": m["label"], "kind": m.get("kind")} for m in models],
-            "phase": phase, "detail": detail, "note": meta.get("note"),
+            "phase": phase, "detail": detail, "note": meta.get("note"), "judged": bool(meta.get("judge")),
             "progress": {"done": done, "total": total},
             "checking": {"done": sum((tasks_dir / c / "validation" / "result.json").is_file() for c in candidates),
                          "total": len(candidates)},
