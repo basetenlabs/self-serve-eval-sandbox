@@ -533,6 +533,14 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual((meta["tasks"], meta["left_out"], meta["checked"]), (["a"], {"b": "reference-fails"}, True))
         self.assertEqual(meta["status"]["phase"], "running")
 
+    def test_a_resumed_run_still_lists_the_prs_it_left_out_before(self):
+        job = SimpleNamespace(meta={"left_out": {"old": "reference-fails"}})
+        with contextlib.redirect_stdout(io.StringIO()):
+            pipeline.leave_out(job, {"a": "valid", "b": "base-passes"})  # resume checks only the kept tasks
+            self.assertEqual(job.meta["left_out"], {"old": "reference-fails", "b": "base-passes"})
+            pipeline.leave_out(job, {"old": "valid", "b": "valid"})  # checked again, and passing now
+        self.assertEqual(job.meta["left_out"], {})
+
     def test_a_run_name_is_the_repository_and_the_time(self):
         self.assertTrue(pipeline.default_name(pipeline.Request(repos=["o/my-repo"])).startswith("my-repo-"))
         self.assertTrue(pipeline.default_name(pipeline.Request()).startswith("sample-"))
