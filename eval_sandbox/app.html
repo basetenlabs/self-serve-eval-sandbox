@@ -314,7 +314,8 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     base: ["Tests before fix", "live"], reference: ["Tests with fix", "live"],
   };
   const LANG = { Python: "PY", Go: "GO", TypeScript: "TS", JavaScript: "JS" };
-  const clock = (s) => s == null ? "" : s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  const clock = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
+    : `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, "0")}m`;
   const since = (iso) => Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
   const PHASE = { collecting: "Finding PRs", checking: "Checking PRs", running: "Running", done: "Done", stopped: "Stopped", failed: "Failed" };
 
@@ -529,7 +530,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
         el("span", { class: "r" }, LANG[row.language] ? el("span", { class: "lang" }, LANG[row.language]) : null,
           row.url ? el("a", { href: row.url, target: "_blank", rel: "noopener" }, `${row.repo}#${row.pr}`) : `${row.repo}#${row.pr}`))),
       el("td", {}, checkChip(row.check)),
-      row.cells.map((c) => el("td", {}, attemptChip(c)))));
+      row.cells.map((c) => el("td", {}, attemptChip(c, r.judged)))));
     const board = el("div", { class: "board-wrap" }, el("table", { class: "board" }, el("thead", {}, head), el("tbody", {}, rows)));
     const legend = el("div", { class: "legend", "aria-label": "Each attempt's steps" },
       ["Start its sandbox and a verifier", "Install dependencies", "Agent codes", "Delete agent sandbox, run hidden tests", "Judge reviews the change"].map((t) => el("span", {}, t)));
@@ -543,14 +544,14 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
       c.why ? el("div", { class: "sub" }, c.why) : null);
   }
 
-  function attemptChip(c) {
+  function attemptChip(c, judged) {
     const [label, style] = STAGE[c.stage] || [c.stage, "idle"];
     const step = STEPS.indexOf(c.stage);
     let sub = null;
     if (step >= 0) {
       sub = el("div", { class: "dots", "aria-hidden": "true" }, STEPS.map((_, i) => el("i", { class: i < step ? "on" : i === step ? "now" : null })));
     } else if (c.stage === "solved" || c.stage === "failed") {
-      const why = c.stage === "failed" ? (c.tests_passed === false ? "tests failed" : c.judge === "fail" ? "judge said no" : null) : "tests + judge";
+      const why = c.stage === "failed" ? (c.tests_passed === false ? "tests failed" : c.judge === "fail" ? "judge said no" : null) : judged ? "tests + judge" : "tests passed";
       sub = el("div", { class: "sub" }, [why, clock(c.seconds), c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · "));
     } else if (c.stage === "invalid") {
       sub = el("div", { class: "sub" }, c.reason || "");
