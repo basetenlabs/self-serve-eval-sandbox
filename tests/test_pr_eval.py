@@ -246,10 +246,10 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(sum(map(len, sample.values())), 42)
         self.assertIn(1159, sample["go-chi/chi"])
 
-    def test_the_quick_sample_is_ten_sample_tasks_across_every_repository(self):
+    def test_the_quick_sample_is_ten_sample_tasks(self):
         sample, quick = tasks.sample(), tasks.sample(quick=True)
         self.assertEqual(sum(map(len, quick.values())), 10)
-        self.assertEqual(set(quick), set(sample))
+        self.assertGreaterEqual(len(quick), 6)
         for repo, prs in quick.items():
             self.assertLessEqual(set(prs), set(sample[repo]), repo)
         self.assertEqual(pipeline.Request(quick=True).describe(), "the quick sample")

@@ -3,7 +3,7 @@
     pr-eval serve                       the local page: pick a repository and models, start, watch
     pr-eval run owner/repo              the same from the terminal: PRs -> check -> models -> report
     pr-eval run                         the sample tasks instead of a repository
-    pr-eval run --quick                 the quick sample: ten fast PRs across seven repositories
+    pr-eval run --quick                 the quick sample: ten fast PRs, a few minutes
 
 (Not `eval`: that is a shell builtin, so a command by that name can never be called.)
 """
@@ -155,7 +155,7 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--setup", help="command that installs dependencies (Go and Python have a default)")
     p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
-    p.add_argument("--quick", action="store_true", help="the quick sample: ten fast PRs across all seven sample repositories")
+    p.add_argument("--quick", action="store_true", help="the quick sample: ten fast PRs across the sample repositories")
     p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
                    help=f"when picking recent PRs, skip ones that change more lines than this (default {tasks.DEFAULT_MAX_LINES}; --pr allows up to {tasks.MAX_LINES})")
 
