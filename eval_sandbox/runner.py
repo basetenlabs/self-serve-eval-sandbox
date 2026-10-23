@@ -64,6 +64,15 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def stage(path: Path, name: str, **extra) -> None:
+    """What an attempt or a check is doing right now, for the page's live view; result.json
+    replaces it when the attempt is done. Never fails the work it describes."""
+    try:
+        write_json(path, {"stage": name, "at": now(), **extra})
+    except OSError:
+        pass
+
+
 def write_json(path: Path, data: dict) -> None:
     """Write through a temporary file, so a run killed mid-write never leaves half a file."""
     tmp = path.with_name(path.name + ".tmp")
@@ -434,11 +443,14 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             write_json(trial_dir / "result.json", result)
         return result
 
+    live = trial_dir / "stage.json"
     helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
     try:
         secrets_env = credential_env(model)
+        stage(live, "sandboxes", started_at=result["started_at"])
         verifier_ready = helper.submit(ready_verifier)
         start_container(container, run_id, settings, memory)
+        stage(live, "setup", started_at=result["started_at"])
         reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
@@ -447,6 +459,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
+        stage(live, "agent", started_at=result["started_at"])
         agent = run_agent(container, model, secrets_env, trial_dir / "agent.jsonl", agent_timeout)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         result["agent"] = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
@@ -459,6 +472,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
 
         # A finished top-level process is not proof its detached children stopped.
         # Destroy the entire agent VM BEFORE any hidden tests leave this host.
+        stage(live, "tests", started_at=result["started_at"], diff=result["diff"])
         runtime.delete(container)
         alive.remove(container)
         reason, result["verifier_setup"] = verifier_ready.result()
@@ -502,6 +516,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         return finish("failed")
     if settings.judge is None:
         return finish("solved" if tests["passed"] else "failed")
+    stage(live, "judge", started_at=result["started_at"], diff=result["diff"], tests_passed=tests["passed"])
     result["judge"], outcome, reason = judge_attempt(settings.judge, task, patch, tests, test_output, trial_dir)
     return finish(outcome, reason)
 
@@ -532,12 +547,16 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
     log_dir.mkdir(exist_ok=True)
     container = container_name(run_id)
     record = {"task_id": task.id, **environment_identity(settings), "checked_at": now(), "status": None}
+    live = log_dir / "stage.json"
     try:
+        stage(live, "sandboxes", run_id=run_id)
         start_container(container, run_id, settings, sandbox_memory(task, settings))
+        stage(live, "setup", run_id=run_id)
         reason, record["setup"] = prepare_workspace(container, task, log_dir)
         if reason:
             record["status"] = reason
             return record
+        stage(live, "base", run_id=run_id)
         base = run_tests(container, task, log_dir / "base.log")
         sh(container, "git reset -q --hard && git clean -qfd", timeout=120)
         runtime.upload(container, task.path / "solution" / "reference.patch", "/tmp/reference.patch")
@@ -546,6 +565,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
             (log_dir / "apply.log").write_text(out)
             record["status"] = "reference-apply-error"
             return record
+        stage(live, "reference", run_id=run_id)
         reference = run_tests(container, task, log_dir / "reference.log")
         record["base"] = {k: v for k, v in base.items() if k != "output"}
         record["reference"] = {k: v for k, v in reference.items() if k != "output"}
@@ -568,6 +588,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
             record["cleanup_error"] = str(exc)
         if not STOPPING.is_set():  # a check cut short by a stop proves nothing; run it again next time
             write_json(log_dir / "result.json", record)
+        live.unlink(missing_ok=True)
 
 
 # Check results that say nothing about the task itself; such a task is checked again.

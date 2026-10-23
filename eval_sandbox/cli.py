@@ -3,6 +3,7 @@
     pr-eval serve                       the local page: pick a repository and models, start, watch
     pr-eval run owner/repo              the same from the terminal: PRs -> check -> models -> report
     pr-eval run                         the sample tasks instead of a repository
+    pr-eval run --quick                 the quick sample: ten fast PRs across seven repositories
 
 (Not `eval`: that is a shell builtin, so a command by that name can never be called.)
 """
@@ -40,8 +41,11 @@ def cmd_run(args) -> int:
         if args.pr and len(args.repos) != 1:
             sys.exit("--pr needs exactly one repository")
         models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config)
+        if args.quick and (args.repos or args.task):
+            sys.exit("--quick is the quick sample; it doesn't take repositories or --task")
         request = pipeline.Request(repos=args.repos, prs=args.pr, limit=args.limit, since=args.since, setup=args.setup,
-                                   test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task)
+                                   test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task,
+                                   quick=args.quick)
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
                                jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks,
                                workspace=args.workspace, region=args.region)
@@ -49,6 +53,8 @@ def cmd_run(args) -> int:
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
                                region=args.region, workspace=args.workspace, agent_timeout=args.agent_timeout,
                                judge=judge, keep_sandboxes=args.keep_sandboxes)
+    job.meta["concurrency"] = settings.concurrency  # the page shows how many attempts run side by side
+    job.save()
     return pipeline.execute(job, models, settings, skip_check=args.skip_validation)
 
 
@@ -60,7 +66,7 @@ def cmd_serve(args) -> int:
 def cmd_collect(args) -> int:
     if args.pr and len(args.repos) != 1:
         sys.exit("--pr needs exactly one repository")
-    wanted = {repo: args.pr for repo in args.repos} or tasks.sample()
+    wanted = {repo: args.pr for repo in args.repos} or tasks.sample(args.quick)
     written = []
     for repo, prs in wanted.items():
         written += tasks.collect(repo, args.out, prs=prs, limit=args.limit, since=args.since, setup=args.setup,
@@ -149,6 +155,7 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--setup", help="command that installs dependencies (Go and Python have a default)")
     p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
+    p.add_argument("--quick", action="store_true", help="the quick sample: ten fast PRs across all seven sample repositories")
     p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
                    help=f"when picking recent PRs, skip ones that change more lines than this (default {tasks.DEFAULT_MAX_LINES}; --pr allows up to {tasks.MAX_LINES})")
 

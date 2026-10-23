@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TASKS = ROOT / "tasks"
 DEFAULT_REPOS = ROOT / "data" / "repos"
 SAMPLE = ROOT / "configs" / "sample_tasks.toml"
+QUICK = ROOT / "configs" / "quick_tasks.toml"
 
 # A PR makes a good task when it changes code and tests together and is a reviewable size.
 # Scans of recent PRs take only those up to DEFAULT_MAX_LINES; bigger ones cost a lot per
@@ -474,9 +475,10 @@ def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = Non
     return written
 
 
-def sample() -> dict[str, list[int]]:
-    """The sample tasks' repositories and PR numbers, from configs/sample_tasks.toml."""
-    return tomllib.loads(SAMPLE.read_text())
+def sample(quick: bool = False) -> dict[str, list[int]]:
+    """The sample tasks' repositories and PR numbers, from configs/sample_tasks.toml
+    (configs/quick_tasks.toml for the quick sample)."""
+    return tomllib.loads((QUICK if quick else SAMPLE).read_text())
 
 
 def spread(rows, limit, repo=lambda row: row["repo"]):

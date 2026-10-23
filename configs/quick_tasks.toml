@@ -1,0 +1,13 @@
+# The quick sample: ten of the sample tasks, picked because every model's attempt on them
+# finished in a few minutes in earlier runs, across all seven repositories (Go, TypeScript
+# and Python). The page's default, so a first run shows results fast.
+#
+# repository = [PR numbers]
+
+"go-chi/chi" = [1220]
+"honojs/hono" = [5514]
+"more-itertools/more-itertools" = [1251, 1279]
+"pallets/click" = [3769, 3884]
+"spf13/cobra" = [2356]
+"spf13/pflag" = [484, 507]
+"stretchr/testify" = [1400]

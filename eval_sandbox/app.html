@@ -37,6 +37,7 @@
   --shadow: none;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body { background: var(--page); color: var(--ink); font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
 a { color: var(--accent); text-decoration: none; }
@@ -76,7 +77,7 @@ form.card { padding: 20px 22px 22px; display: grid; gap: 18px; }
 input[type=text], select { border: 1px solid var(--hairline); background: var(--page); border-radius: 9px; height: 40px; padding: 0 12px; width: 100%; }
 input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 .source { display: flex; gap: 8px; flex-wrap: wrap; }
-.source label { flex: 1; min-width: 200px; border: 1px solid var(--hairline); border-radius: 10px; padding: 10px 12px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; }
+.source label { flex: 1; min-width: 160px; border: 1px solid var(--hairline); border-radius: 10px; padding: 10px 12px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; }
 .source label:has(input:checked) { border-color: var(--accent); background: var(--accent-wash); }
 .source b { display: block; font-size: 14px; }
 .source span { color: var(--muted); font-size: 12.5px; }
@@ -133,6 +134,59 @@ aside.card { padding: 20px 22px; }
 pre.log { margin: 0; max-height: 220px; overflow: auto; background: var(--page); border: 1px solid var(--hairline); border-radius: 8px; padding: 8px 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; }
 .empty { color: var(--muted); padding: 20px; text-align: center; }
 
+/* live board */
+.timeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.step { border-radius: 9px; padding: 8px 10px; background: var(--surface-2); color: var(--muted); font-size: 12.5px; line-height: 1.3; position: relative; overflow: hidden; }
+.step b { display: block; font-size: 13px; color: var(--ink-2); font-weight: 650; }
+.step.done { background: var(--good-wash); }
+.step.done b { color: var(--good-ink); }
+.step.done b::before { content: "✓ "; }
+.step.now { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent); }
+.step.now b { color: var(--accent); }
+.step.now::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 40%; background: var(--accent); animation: sweep 2s ease-in-out var(--t, 0s) infinite; }
+@media (max-width: 640px) { .timeline { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.stats { display: flex; flex-wrap: wrap; gap: 10px; }
+.stat { border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 14px; min-width: 120px; background: var(--page); }
+.stat .n { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 8px; }
+.stat .l { font-size: 12px; color: var(--muted); }
+.stat.live .n::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--good); animation: pulse 1s ease-in-out var(--t, 0s) infinite; }
+.board-wrap { overflow-x: auto; border: 1px solid var(--hairline); border-radius: 10px; }
+table.board { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13px; }
+.board th { text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--hairline); background: var(--surface-2); white-space: nowrap; }
+.board td { padding: 7px 10px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+.board tr:last-child td { border-bottom: 0; }
+.board tr.out td { opacity: .55; }
+.pr { display: grid; gap: 1px; min-width: 210px; }
+.pr .t { color: var(--ink); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 330px; }
+.pr .r { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.lang { font-size: 10.5px; font-weight: 650; border-radius: 4px; padding: 0 5px; background: var(--surface-3); color: var(--ink-2); }
+.chip { display: grid; gap: 4px; width: 190px; border-radius: 8px; padding: 6px 9px; background: var(--surface-2); color: var(--ink-2); position: relative; overflow: hidden; }
+.chip .hd { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.chip .sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chip .clock { font: 11.5px var(--mono); color: inherit; opacity: .8; }
+.chip.live { background: var(--accent-wash); color: var(--accent); }
+.chip.live::before { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.35) 50%, transparent 70%); background-size: 250% 100%; animation: shimmer 2s linear var(--t, 0s) infinite; pointer-events: none; }
+.chip > * { position: relative; z-index: 1; }
+.chip.agent { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.chip.good { background: var(--good-wash); color: var(--good-ink); }
+.chip.bad { background: var(--bad-wash); color: var(--bad-ink); }
+.chip.warn { background: var(--warn-wash); color: var(--warn-ink); }
+.chip.idle { color: var(--muted); }
+.chip.small { width: auto; max-width: 230px; }
+.chip.small .sub { white-space: normal; }
+.dots { display: flex; gap: 3px; }
+.dots i { width: 14px; height: 4px; border-radius: 2px; background: currentColor; opacity: .18; }
+.dots i.on { opacity: .9; }
+.dots i.now { opacity: .9; animation: blink 1s ease-in-out var(--t, 0s) infinite; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; }
+.legend span::before { content: counter(step) ". "; counter-increment: step; }
+.legend { counter-reset: step; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+@keyframes blink { 0%, 100% { opacity: .9; } 50% { opacity: .3; } }
+@keyframes shimmer { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+@keyframes sweep { 0% { left: -40%; } 100% { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .chip.live::before, .step.now::after, .stat.live .n::before, .dots i.now { animation: none; } }
+
 .how ol { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); max-width: 820px; }
 .how li { margin: 6px 0; }
 footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
@@ -152,7 +206,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
 <main class="wrap">
   <div class="hero">
     <h1>Can an open model do your team's coding work?</h1>
-    <p class="lede">Pick a GitHub repository. Its recent merged pull requests become tasks: every model gets the same request and the code as it was before the change, works on it with Claude Code in its own Blaxel sandbox, and the PR's own tests plus an AI judge decide whether it solved it. You get solve rate and cost per solved task, side by side.</p>
+    <p class="lede">Start with the quick sample, or pick a GitHub repository. Recent merged pull requests become tasks: every model gets the same request and the code as it was before the change, works on it with Claude Code in its own Blaxel sandbox, and the PR's own tests plus an AI judge decide whether it solved it. You get solve rate and cost per solved task, side by side.</p>
   </div>
 
   <section class="start" aria-label="Start a run">
@@ -162,18 +216,19 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
       <div class="field">
         <span class="sr-only" id="source-label">What to test on</span>
         <div class="source" role="radiogroup" aria-labelledby="source-label">
-          <label><input type="radio" name="source" value="repo" checked><div><b>Your repository</b><span>Recent merged PRs from any GitHub repo you can read</span></div></label>
-          <label><input type="radio" name="source" value="sample"><div><b>The sample</b><span id="sample-text">Merged PRs from public repos, ready to go</span></div></label>
+          <label><input type="radio" name="source" value="quick" checked><div><b>Quick sample</b><span id="quick-text">10 fast PRs, 7 repos, all at once</span></div></label>
+          <label><input type="radio" name="source" value="sample"><div><b>Full sample</b><span id="sample-text">Merged PRs from public repos, ready to go</span></div></label>
+          <label><input type="radio" name="source" value="repo"><div><b>Your repository</b><span>Recent merged PRs from any public repo</span></div></label>
         </div>
       </div>
 
-      <div class="field" id="repo-field">
+      <div class="field" id="repo-field" hidden>
         <label for="repo">GitHub repository</label>
         <input type="text" id="repo" placeholder="owner/repo, or paste the GitHub link" autocomplete="off" spellcheck="false">
         <div class="repo-status" id="repo-status" role="status"></div>
       </div>
 
-      <div class="inline">
+      <div class="inline" id="limit-field">
         <div class="field">
           <label for="limit">Pull requests</label>
           <select id="limit"></select>
@@ -186,7 +241,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
         <div class="models" id="models"><span class="hint">Loading…</span></div>
       </fieldset>
 
-      <details class="commands" id="commands">
+      <details class="commands" id="commands" hidden>
         <summary>Install and test commands <span class="hint" id="commands-hint">(optional for Go and Python)</span></summary>
         <div class="grid">
           <p class="hint">Run inside the Blaxel sandbox, in the repository's folder. <code>{test_files}</code> becomes the PR's changed test files.</p>
@@ -245,6 +300,22 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
   const usd = (x) => x == null ? "–" : x >= 1 ? `$${x.toFixed(2)}` : `$${x.toFixed(3)}`;
   const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
   const ACTIVE = ["collecting", "checking", "running"];
+  // What an attempt is doing, in order: [label, chip style]. Its sandbox and the verifier's start together.
+  const STEPS = ["sandboxes", "setup", "agent", "tests", "judge"];
+  const STAGE = {
+    queued: ["Queued", "idle"], waiting: ["Waits for its check", "idle"], "not-run": ["Not run", "idle"], "left-out": ["Left out", "idle"],
+    sandboxes: ["Starting sandboxes", "live"], setup: ["Installing deps", "live"], agent: ["Agent coding", "live agent"],
+    tests: ["Hidden tests", "live"], judge: ["Judge reviewing", "live"],
+    solved: ["Solved", "good"], failed: ["Not solved", "bad"], invalid: ["Not scored", "warn"], interrupted: ["Stopped", "idle"],
+  };
+  const CHECK = {
+    passed: ["Checked", "good"], "left-out": ["Left out", "idle"], queued: ["Queued", "idle"], stopped: ["Not checked", "idle"],
+    sandboxes: ["Starting sandbox", "live"], setup: ["Installing deps", "live"],
+    base: ["Tests before fix", "live"], reference: ["Tests with fix", "live"],
+  };
+  const LANG = { Python: "PY", Go: "GO", TypeScript: "TS", JavaScript: "JS" };
+  const clock = (s) => s == null ? "" : s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  const since = (iso) => Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
   const PHASE = { collecting: "Finding PRs", checking: "Checking PRs", running: "Running", done: "Done", stopped: "Stopped", failed: "Failed" };
 
   // theme
@@ -269,7 +340,8 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
   function buildForm() {
     const limit = $("limit");
     for (const n of [5, 10, 20, 40]) limit.append(el("option", { value: n, selected: n === state.default_limit }, `${n} pull requests`));
-    $("sample-text").textContent = `${state.sample.tasks} merged PRs from ${state.sample.repos} public repos, ready to go`;
+    $("sample-text").textContent = `${state.sample.tasks} PRs, ${state.sample.repos} repos, a few at a time`;
+    $("quick-text").textContent = `${state.quick.tasks} fast PRs, ${state.quick.repos} repos, all at once`;
     const models = $("models");
     models.replaceChildren();
     for (const m of state.models) {
@@ -280,10 +352,12 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
         el("div", {}, el("b", {}, m.label), el("span", {}, m.missing ? "Needs its API key (see the checklist)" : `${kind} · ${where}`))));
     }
     document.querySelectorAll("input[name=source]").forEach((r) => r.addEventListener("change", () => {
-      $("repo-field").hidden = source() === "sample";
-      $("commands").hidden = source() === "sample";
+      $("repo-field").hidden = source() !== "repo";
+      $("commands").hidden = source() !== "repo";
+      $("limit-field").hidden = source() === "quick";
       plan();
     }));
+    $("limit-field").hidden = source() === "quick";
     limit.addEventListener("change", plan);
     let timer;
     $("repo").addEventListener("input", () => { clearTimeout(timer); repoInfo = null; status("", ""); timer = setTimeout(lookUp, 500); plan(); });
@@ -315,13 +389,16 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
 
   function plan() {
     if (!formReady) return;
-    const keys = chosenModels(), n = Number($("limit").value);
+    const quick = source() === "quick";
+    const keys = chosenModels(), n = quick ? state.quick.tasks : Number($("limit").value);
     const models = state.models.filter((m) => keys.includes(m.key));
-    let text = `${n} PRs × ${keys.length} ${keys.length === 1 ? "model" : "models"} = up to ${n * keys.length} attempts.`;
+    let text = `${n} PRs × ${keys.length} ${keys.length === 1 ? "model" : "models"} = ${quick ? "" : "up to "}${n * keys.length} attempts`
+      + (quick ? `, side by side in their own Blaxel sandboxes.` : ".");
     if (models.length && models.every((m) => m.cost_per_attempt != null)) {
       const cost = models.reduce((s, m) => s + m.cost_per_attempt * n, 0);
       const minutes = Math.max(...models.map((m) => m.seconds_per_attempt || 0)) * n * keys.length / 4 / 60;
-      text += ` About ${usd(cost)}${minutes ? ` and ${Math.max(5, Math.round(minutes / 5) * 5)} minutes` : ""}, going by earlier runs.`;
+      text += quick ? ` About ${usd(cost)} and 5 minutes.`
+        : ` About ${usd(cost)}${minutes ? ` and ${Math.max(5, Math.round(minutes / 5) * 5)} minutes` : ""}, going by earlier runs.`;
     }
     $("plan").textContent = text;
     $("start").disabled = !keys.length || (state && state.busy);
@@ -331,7 +408,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
   async function start(e) {
     e.preventDefault();
     $("form-error").textContent = "";
-    const body = { sample: source() === "sample", repo: $("repo").value, limit: Number($("limit").value),
+    const body = { sample: source() === "sample", quick: source() === "quick", repo: $("repo").value, limit: Number($("limit").value),
                    models: chosenModels(), setup: $("setup").value, test: $("test").value };
     $("start").disabled = true;
     $("start").textContent = "Starting…";
@@ -364,6 +441,8 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
   // ---------- runs ----------
   function renderRuns() {
     const host = $("runs");
+    // Every render rebuilds the board; starting each animation at the wall clock's phase keeps it smooth.
+    document.documentElement.style.setProperty("--t", `-${Date.now() % 2000}ms`);
     if (!state.runs.length) { host.replaceChildren(el("div", { class: "card empty" }, "No runs yet. Start one above.")); return; }
     host.replaceChildren(...state.runs.map(runCard));
   }
@@ -397,6 +476,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     } else if (r.phase !== "done") {
       line = r.detail;
     }
+    if (r.board) card.append(...live(r));
     if (line) card.append(el("p", { class: "detail" }, line));
     if (share != null) card.append(el("div", { class: "meter" }, el("i", { style: `width:${100 * share}%` })));
     const results = r.models.filter((m) => r.summary[m.key] && r.summary[m.key].valid);
@@ -411,6 +491,76 @@ footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 40px; }
     if (r.log) card.append(el("details", { class: "left-out", open: r.phase === "failed" }, el("summary", {}, "Last lines of the run's log"), el("pre", { class: "log" }, r.log)));
     return card;
   }
+
+  // ---------- live board ----------
+  function live(r) {
+    const b = r.board, cells = b.rows.flatMap((row) => row.cells), active = ACTIVE.includes(r.phase);
+    const doing = (stages) => cells.some((c) => stages.includes(c.stage));
+    const checksLive = b.rows.some((row) => CHECK[row.check.stage]?.[1] === "live");
+    const checked = b.rows.length && b.rows.every((row) => ["passed", "left-out"].includes(row.check.stage));
+    const finished = cells.filter((c) => ["solved", "failed", "invalid"].includes(c.stage)).length;
+    const scored = cells.filter((c) => c.stage !== "left-out").length;
+    const done = r.phase === "done";
+    const steps = [
+      ["Find PRs", "merged, with tests", r.phase !== "collecting", r.phase === "collecting"],
+      ["Check each PR", "tests fail before, pass after", checked, checksLive],
+      ["Models code", "Claude Code, one sandbox each", done || (checked && !doing(["queued", "sandboxes", "setup", "agent"])), doing(["sandboxes", "setup", "agent"])],
+      ["Grade", "hidden tests + judge", done, doing(["tests", "judge"])],
+      ["Report", "solve rate, cost", done && !!r.report, false],
+    ];
+    const timeline = el("div", { class: "timeline", "aria-label": "Run steps" }, steps.map(([name, what, ok, now]) =>
+      el("div", { class: `step${ok ? " done" : now && active ? " now" : ""}` }, el("b", {}, name), what)));
+    const elapsed = r.started ? Math.round(((active ? Date.now() : new Date(r.active_at)) - new Date(r.started)) / 1000) : null;
+    const stats = el("div", { class: "stats" },
+      active ? el("div", { class: "stat live" }, el("div", { class: "n" }, b.sandboxes), el("div", { class: "l" }, "Blaxel sandboxes running now")) : null,
+      el("div", { class: "stat" }, el("div", { class: "n" }, `${finished}/${scored || "–"}`), el("div", { class: "l" }, "attempts finished")),
+      elapsed != null ? el("div", { class: "stat" }, el("div", { class: "n", ...(active ? { "data-since": r.started } : {}) }, clock(elapsed)), el("div", { class: "l" }, active ? "elapsed" : "took")) : null,
+      ...r.models.map((m) => {
+        const mine = cells.filter((c) => c.model === m.key), solved = mine.filter((c) => c.stage === "solved").length;
+        const graded = mine.filter((c) => ["solved", "failed"].includes(c.stage)).length;
+        return el("div", { class: "stat" }, el("div", { class: "n" }, graded ? `${solved}/${graded}` : "–"), el("div", { class: "l" }, `${m.label} solved`));
+      }));
+    if (!b.rows.length) return [timeline, stats];
+    const head = el("tr", {}, el("th", {}, "Pull request"), el("th", {}, "Check"),
+      r.models.map((m) => el("th", {}, m.label)));
+    const rows = b.rows.map((row) => el("tr", { class: row.check.stage === "left-out" ? "out" : null },
+      el("td", {}, el("div", { class: "pr" },
+        el("span", { class: "t", title: row.title }, row.title || `#${row.pr}`),
+        el("span", { class: "r" }, LANG[row.language] ? el("span", { class: "lang" }, LANG[row.language]) : null,
+          row.url ? el("a", { href: row.url, target: "_blank", rel: "noopener" }, `${row.repo}#${row.pr}`) : `${row.repo}#${row.pr}`))),
+      el("td", {}, checkChip(row.check)),
+      row.cells.map((c) => el("td", {}, attemptChip(c)))));
+    const board = el("div", { class: "board-wrap" }, el("table", { class: "board" }, el("thead", {}, head), el("tbody", {}, rows)));
+    const legend = el("div", { class: "legend", "aria-label": "Each attempt's steps" },
+      ["Start its sandbox and a verifier", "Install dependencies", "Agent codes", "Delete agent sandbox, run hidden tests", "Judge reviews the change"].map((t) => el("span", {}, t)));
+    return [timeline, stats, board, legend];
+  }
+
+  function checkChip(c) {
+    const [label, style] = CHECK[c.stage] || [c.stage, "idle"];
+    return el("div", { class: `chip small ${style}`, title: c.why || null },
+      el("div", { class: "hd" }, el("span", {}, label), c.at && style === "live" ? el("span", { class: "clock", "data-since": c.at }, clock(since(c.at))) : null),
+      c.why ? el("div", { class: "sub" }, c.why) : null);
+  }
+
+  function attemptChip(c) {
+    const [label, style] = STAGE[c.stage] || [c.stage, "idle"];
+    const step = STEPS.indexOf(c.stage);
+    let sub = null;
+    if (step >= 0) {
+      sub = el("div", { class: "dots", "aria-hidden": "true" }, STEPS.map((_, i) => el("i", { class: i < step ? "on" : i === step ? "now" : null })));
+    } else if (c.stage === "solved" || c.stage === "failed") {
+      const why = c.stage === "failed" ? (c.tests_passed === false ? "tests failed" : c.judge === "fail" ? "judge said no" : null) : "tests + judge";
+      sub = el("div", { class: "sub" }, [why, clock(c.seconds), c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · "));
+    } else if (c.stage === "invalid") {
+      sub = el("div", { class: "sub" }, c.reason || "");
+    }
+    const timer = step >= 0 && c.started_at ? el("span", { class: "clock", "data-since": c.started_at }, clock(since(c.started_at))) : null;
+    return el("div", { class: `chip ${style}`, title: c.stage === "invalid" ? "Lost to setup, sandbox or provider trouble, not the model" : null },
+      el("div", { class: "hd" }, el("span", {}, label), timer), sub);
+  }
+
+  setInterval(() => document.querySelectorAll("[data-since]").forEach((n) => { n.textContent = clock(since(n.dataset.since)); }), 1000);
 
   async function stop(id) {
     stopping.add(id); renderRuns();
