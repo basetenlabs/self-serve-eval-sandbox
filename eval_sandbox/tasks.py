@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import threading
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,7 +48,7 @@ TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|__snapshots__|testing|testdata|f
                        r"|(?:_test\.go|[._](?:test|spec)\.[cm]?[jt]sx?|^test_[^/]+\.py|/test_[^/]+\.py|\.snap)$", re.I)
 SOURCE_FILE = re.compile(r"\.(?:py|go|[cm]?[jt]sx?|rs|c|cc|cpp|h|hpp|java|kt|kts|scala|swift|cs|rb|php|ex|exs)$", re.I)
 MAINTENANCE = re.compile(r"\b(bump|dependabot|renovate|release|changelog|typo|readme|ci|workflow|pre-commit|"
-                         r"formatting|linting|translations?)\b", re.I)
+                         r"formatting|linting|translations?|backport|merge \S+ into)\b", re.I)
 CLOSES_ISSUE = re.compile(r"\b(?:fix(?:es|ed)?|clos(?:e[sd]?|ing)|resolv(?:e[sd]?|ing))\s+"
                           r"(?:(?:https://github.com/([^/\s]+/[^/\s]+)/issues/)|(?:(\w[\w.-]*/[\w.-]+))?#)(\d+)", re.I)
 # A line that defines a name: a function, method, class or type (group 1), or a top-level
@@ -56,6 +57,8 @@ DEFINITION = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+|export\s+(?:default\s+)?)?(?:async\s+)?"
     r"(?:func\s+(?:\([^)]*\)\s*)?|def\s+|fn\s+|function\*?\s+|class\s+|interface\s+|struct\s+|enum\s+|trait\s+)(\w+)"
     r"|^(?:export\s+)?(?:type|var|const|let)\s+(\w+)")
+# A pull request as people paste it: its GitHub link, or owner/repo#number.
+PULL = re.compile(r"(?:(?:https?://)?(?:www\.)?github\.com/)?([\w.-]+/[\w.-]+?)(?:/pulls?/|#)(\d+)(?:[/?#].*)?")
 GO_IMPORT_BLOCK = re.compile(r"^import\s*\((.*?)^\)", re.M | re.S)
 GO_IMPORT_LINE = re.compile(r'^import\s+(?:[\w.]+\s+)?"([^"]+)"', re.M)
 
@@ -70,6 +73,29 @@ class Task:
 
 class Skip(Exception):
     """A pull request that can't be a task, and why."""
+
+
+def parse_pull(text: str) -> tuple[str, int] | None:
+    """(owner/repo, number) from a pull request's link or owner/repo#number, else None."""
+    match = PULL.fullmatch(text.strip())
+    return (match[1], int(match[2])) if match else None
+
+
+def role(path: str) -> str:
+    """What a changed file is to a task: a test, the implementation, or support (docs, config)."""
+    if TEST_FILE.search(path):
+        return "test"
+    return "implementation" if SOURCE_FILE.search(path) and not path.startswith(("docs/", "examples/")) else "support"
+
+
+def unfit(files: list[dict], max_lines: int = MAX_LINES) -> str | None:
+    """Why a PR changing these files ({path, role, lines}) can't be a task, or None."""
+    if not any(f["role"] == "test" for f in files) or not any(f["role"] == "implementation" for f in files):
+        return "doesn't change both code and tests"
+    lines = sum(f["lines"] for f in files)
+    if len(files) > MAX_FILES or lines > max_lines:
+        return f"too large ({len(files)} files, {lines} lines)"
+    return None
 
 
 def recipe(repo: str, language: str, test_paths: list[str], package_json: dict | None = None,
@@ -227,11 +253,8 @@ def changed_files(mirror: Path, base: str, reference: str) -> list[dict]:
     for entry in git(mirror, "diff", "--no-renames", "--numstat", "-z", base, reference).decode().split("\0"):
         if entry:
             added, deleted, path = entry.split("\t", 2)
-            role = ("test" if TEST_FILE.search(path) else
-                    "implementation" if SOURCE_FILE.search(path) and not path.startswith(("docs/", "examples/"))
-                    else "support")
             # binary files show "-" for both counts
-            files.append({"path": path, "role": role, "lines": sum(int(n) for n in (added, deleted) if n.isdigit())})
+            files.append({"path": path, "role": role(path), "lines": sum(int(n) for n in (added, deleted) if n.isdigit())})
     return files
 
 
@@ -334,11 +357,9 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     base = base_commit(mirror, repo, pr, reference)
     files = changed_files(mirror, base, reference)
     test_paths = [f["path"] for f in files if f["role"] == "test"]
-    if not test_paths or not any(f["role"] == "implementation" for f in files):
-        raise Skip("doesn't change both code and tests")
+    if why := unfit(files, max_lines):
+        raise Skip(why)
     lines = sum(f["lines"] for f in files)
-    if len(files) > MAX_FILES or lines > max_lines:
-        raise Skip(f"too large ({len(files)} files, {lines} lines)")
     patch = git(mirror, "diff", "--binary", "--no-renames", base, reference)
     if len(patch) > MAX_PATCH_BYTES:
         raise Skip("diff too large")
@@ -414,6 +435,46 @@ def merged_prs(repo: str, since: str | None = None, pages: int = 10):
         for pr in listing:
             if pr.get("merged_at") and (not since or pr["merged_at"][:10] >= since):
                 yield pr
+
+
+def browse(repo: str, numbers: list[int] | None = None, count: int = 30) -> list[dict]:
+    """Pull requests to pick from, and whether each can be a task: `numbers`, in that order,
+    else the most recently merged, newest first.
+
+    Reads each one's changed files from GitHub (not the clone), so it answers in seconds.
+    """
+    def fetch(number: int) -> dict:
+        try:
+            return gh(f"repos/{repo}/pulls/{number}")
+        except RuntimeError:
+            return {"number": number, "html_url": f"https://github.com/{repo}/pull/{number}", "missing": True}
+
+    def row(pr: dict) -> dict:
+        files, why = [], None
+        if pr.get("missing"):
+            why = "GitHub has no such pull request"
+        elif not pr.get("merged_at"):
+            why = "not merged"
+        else:
+            try:
+                files = [{"path": f["filename"], "role": role(f["filename"]), "lines": f["additions"] + f["deletions"]}
+                         for f in gh(f"repos/{repo}/pulls/{pr['number']}/files?per_page=100")]
+                why = unfit(files)
+            except RuntimeError:
+                why = "GitHub didn't list its files"
+        title = pr.get("title") or ""
+        return {"number": pr["number"], "title": title, "url": pr["html_url"], "merged_at": pr.get("merged_at"),
+                "author": (pr.get("user") or {}).get("login"), "files": len(files),
+                "lines": sum(f["lines"] for f in files), "tests": sum(f["role"] == "test" for f in files),
+                "why": why, "maintenance": bool(MAINTENANCE.search(title))}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        if numbers:
+            prs = list(pool.map(fetch, numbers))
+        else:
+            listing = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100")
+            prs = sorted((pr for pr in listing if pr.get("merged_at")), key=lambda pr: pr["merged_at"], reverse=True)[:count]
+        return list(pool.map(row, prs))
 
 
 def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = None, limit: int = 20,

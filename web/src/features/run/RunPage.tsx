@@ -5,7 +5,7 @@ import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
-import { Results, Tasks } from "@/features/report/ReportView";
+import { Results, TaskDrawer, Tasks } from "@/features/report/ReportView";
 import { post, useReport } from "@/lib/api";
 import { plural, when } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
@@ -15,8 +15,8 @@ import type { AppState, Run } from "@/lib/types";
 import { LivePanel } from "./LivePanel";
 import { Pipeline } from "./Pipeline";
 
-export function RunPage({ id, tab, state, go, hurry }: {
-  id: string; tab?: string; state: AppState | null; go: (r: Route, replace?: boolean) => void; hurry: () => void;
+export function RunPage({ id, tab, task, state, go, hurry }: {
+  id: string; tab?: string; task?: string; state: AppState | null; go: (r: Route, replace?: boolean) => void; hurry: () => void;
 }) {
   const run = state?.runs.find((r) => r.id === id);
   // report.json is rewritten as attempts finish; fetch it again whenever the count moves.
@@ -39,6 +39,9 @@ export function RunPage({ id, tab, state, go, hurry }: {
   const current = tab === "results" || tab === "tasks" || tab === "board" ? tab : active || !run.report ? "board" : "results";
   const models = ordered(run.models);
   const colors = palette(models);
+  // An open task lives in the address, so a link can point straight at one attempt's trace.
+  const open = (taskId: string | null) => go({ page: "run", id, tab: current, task: taskId ?? undefined }, true);
+  const finished = report ? new Set(report.trials.map((t) => t.task_id)) : null;
   return (
     <>
       <RunHeader run={run} state={state} sentence={report ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} />
@@ -53,9 +56,12 @@ export function RunPage({ id, tab, state, go, hurry }: {
             <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>
             <TabsTrigger value="tasks" disabled={!run.report}>Tasks{report ? <span className="text-muted-foreground">{report.tasks.length}</span> : null}</TabsTrigger>
           </TabsList>
-          <TabsContent value="board"><LivePanel run={run} models={models} colors={colors} /></TabsContent>
+          <TabsContent value="board">
+            <LivePanel run={run} models={models} colors={colors} onOpen={finished ? (t) => finished.has(t) && open(t) : undefined} />
+            {report && current === "board" && <TaskDrawer report={report} taskId={task ?? null} onClose={() => open(null)} />}
+          </TabsContent>
           <TabsContent value="results">{report ? <Results report={report} /> : <Loading />}</TabsContent>
-          <TabsContent value="tasks">{report ? <Tasks report={report} /> : <Loading />}</TabsContent>
+          <TabsContent value="tasks">{report ? <Tasks report={report} openId={task ?? null} onOpen={open} /> : <Loading />}</TabsContent>
         </Tabs>
       </section>
     </>

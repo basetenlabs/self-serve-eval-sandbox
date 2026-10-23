@@ -9,6 +9,7 @@ import type { Swatch as SwatchT } from "@/lib/models";
 import type { Model, Report, Task, Trial } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { taskState, type TrialsFor } from "./TasksTable";
+import { TraceView } from "./TraceView";
 
 /** One task: what the agent was asked, then each model's attempts with diffs, tests and the judge. */
 export function TaskSheet({ task, report, ranked, colors, trialsFor, onClose }: {
@@ -53,9 +54,9 @@ function Body({ task: t, report, ranked, colors, trialsFor }: { task: Task; repo
             Check the task before blaming the models: PR tests sometimes assert details, such as an exact error message, that the request never states.
           </div>
         )}
-        <div className="grid gap-6">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
           {ranked.flatMap((m) => trialsFor(t.id, m.key).map((r) => (
-            <Attempt key={`${m.key}-${r.attempt}`} t={t} r={r} m={m} swatch={colors[m.key]} />
+            <Attempt key={`${m.key}-${r.attempt}`} t={t} r={r} m={m} swatch={colors[m.key]} runId={report.run.run_id} />
           )))}
         </div>
       </div>
@@ -69,12 +70,14 @@ const OUTCOME = {
   invalid: { label: "Not scored", variant: "warn" as const },
 };
 
-function Attempt({ t, r, m, swatch }: { t: Task; r: Trial; m: Model; swatch?: SwatchT }) {
+function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swatch?: SwatchT; runId: string }) {
   const a = r.agent ?? {};
+  const [view, setView] = React.useState("diff");
   const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") : "";
   const setAside = r.tests?.set_aside ?? [];
   const views = [
     { key: "diff", label: "Agent's diff", text: r.patch },
+    { key: "trace", label: "Trace", text: null },
     { key: "merged", label: "Merged diff", text: t.reference_patch },
     { key: "tests", label: "Test output", text: r.verifier_tail },
     { key: "message", label: "Last message", text: a.final_message },
@@ -82,8 +85,8 @@ function Attempt({ t, r, m, swatch }: { t: Task; r: Trial; m: Model; swatch?: Sw
   const rows: [string, React.ReactNode][] = [];
   if (r.outcome === "invalid") rows.push(["Why not scored", r.invalid_reason || "unknown"]);
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
-  if (r.tests) rows.push(["Hidden tests", `${r.tests.passed ? "Passed" : "Failed"}${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`]);
-  if (r.judge) rows.push(["Judge", r.judge.error ? `Error: ${r.judge.error}` : `${r.judge.verdict === "pass" ? "Pass" : "Fail"}${r.judge.reason ? ` · ${r.judge.reason}` : ""}`]);
+  if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`} />]);
+  if (r.judge) rows.push(["Judge", r.judge.error ? `Error: ${r.judge.error}` : <Lead word={r.judge.verdict === "pass" ? "Pass" : "Fail"} rest={r.judge.reason ? ` · ${r.judge.reason}` : ""} />]);
   if (r.diff) rows.push(["Change", `${r.diff.files} files, +${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`]);
   const o = OUTCOME[r.outcome];
   return (
@@ -108,23 +111,29 @@ function Attempt({ t, r, m, swatch }: { t: Task; r: Trial; m: Model; swatch?: Sw
           {rows.map(([k, v]) => (
             <div key={k} className="grid gap-1 bg-background py-2 sm:grid-cols-[9rem_1fr] sm:gap-4">
               <dt className="label-mono pt-0.5 text-[10.5px] text-muted-foreground">{k}</dt>
-              <dd className="text-[13.5px] leading-snug">{v}</dd>
+              <dd className="text-[13.5px] leading-snug [overflow-wrap:anywhere]">{v}</dd>
             </div>
           ))}
         </dl>
       )}
-      <Tabs defaultValue="diff">
+      <Tabs value={view} onValueChange={setView}>
         <TabsList className="gap-5">
           {views.map((v) => <TabsTrigger key={v.key} value={v.key} className="h-9 text-[11px]">{v.label}</TabsTrigger>)}
         </TabsList>
         {views.map((v) => (
           <TabsContent key={v.key} value={v.key} className="mt-2">
-            <Code text={v.text} diff={v.key === "diff" || v.key === "merged"} />
+            {v.key === "trace" ? <TraceView runId={runId} trial={r.trial} active={view === "trace"} />
+              : <Code text={v.text} diff={v.key === "diff" || v.key === "merged"} />}
           </TabsContent>
         ))}
       </Tabs>
     </article>
   );
+}
+
+/** A verdict word the eye can find down a column of attempts, then the details. */
+function Lead({ word, rest }: { word: string; rest: string }) {
+  return <><span className="font-medium">{word}</span>{rest}</>;
 }
 
 function Code({ text, diff }: { text?: string | null; diff: boolean }) {

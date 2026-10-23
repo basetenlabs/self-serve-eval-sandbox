@@ -12,6 +12,19 @@ import { TaskSheet } from "./TaskSheet";
 
 export type TrialsFor = (taskId: string, model: string) => Trial[];
 
+/** Each task's attempts by model, in attempt order. */
+export function useTrialsFor(report: Report): TrialsFor {
+  const byTask = React.useMemo(() => {
+    const map = new Map<string, Trial[]>();
+    for (const t of report.trials) {
+      const k = `${t.task_id}|${t.model}`;
+      map.set(k, [...(map.get(k) ?? []), t].sort((a, b) => a.attempt - b.attempt));
+    }
+    return map;
+  }, [report.trials]);
+  return React.useCallback((taskId, model) => byTask.get(`${taskId}|${model}`) ?? [], [byTask]);
+}
+
 export function taskState(t: Task, models: Model[], trialsFor: TrialsFor) {
   const tried = models.map((m) => trialsFor(t.id, m.key));
   const solvedBy = tried.filter((ts) => ts.some((r) => r.outcome === "solved")).length;
@@ -29,23 +42,20 @@ const SHOW = [
   { value: "invalid", label: "Has attempts not scored" },
 ];
 
-/** Every task and how each model's attempts went; a task opens its attempts, diffs and verdicts. */
-export function TasksTable({ report, ranked, colors }: { report: Report; ranked: Model[]; colors: Record<string, SwatchT> }) {
+/** Every task and how each model's attempts went; a task opens its attempts, diffs and verdicts.
+ * The open task is the page's to keep (in its address) when it passes `onOpen`. */
+export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
+  report: Report; ranked: Model[]; colors: Record<string, SwatchT>; openId?: string | null; onOpen?: (id: string | null) => void;
+}) {
   const [q, setQ] = React.useState("");
   const [lang, setLang] = React.useState("");
   const [repo, setRepo] = React.useState("");
   const [show, setShow] = React.useState("");
-  const [openId, setOpenId] = React.useState<string | null>(null);
+  const [ownId, setOwnId] = React.useState<string | null>(null);
+  const openId = onOpen ? given ?? null : ownId;
+  const setOpenId = onOpen ?? setOwnId;
   const tasks = report.tasks;
-  const byTask = React.useMemo(() => {
-    const map = new Map<string, Trial[]>();
-    for (const t of report.trials) {
-      const k = `${t.task_id}|${t.model}`;
-      map.set(k, [...(map.get(k) ?? []), t].sort((a, b) => a.attempt - b.attempt));
-    }
-    return map;
-  }, [report.trials]);
-  const trialsFor: TrialsFor = React.useCallback((taskId, model) => byTask.get(`${taskId}|${model}`) ?? [], [byTask]);
+  const trialsFor = useTrialsFor(report);
   const languages = [...new Set(tasks.map((t) => t.language).filter(Boolean) as string[])].sort();
   const repos = [...new Set(tasks.map((t) => t.repo))].sort();
   const needle = q.trim().toLowerCase();
@@ -73,7 +83,36 @@ export function TasksTable({ report, ranked, colors }: { report: Report; ranked:
         <span className="inline-flex items-center gap-1.5"><Pip outcome="invalid" small />Not scored: setup, sandbox or provider trouble</span>
         <span className="inline-flex items-center gap-1.5"><Pip small />Not run yet</span>
       </div>
-      <div className="bg-surface shadow-[inset_0_0_0_1px_var(--frame)]">
+      <ul className="grid gap-px bg-frame shadow-[0_0_0_1px_var(--frame)] md:hidden" aria-label="Tasks">
+        {rows.map((t) => (
+          <li key={t.id}>
+            <button type="button" onClick={() => setOpenId(t.id)} className="grid w-full gap-2 bg-surface p-3 text-left active:bg-muted">
+              <span className="min-w-0">
+                <span className="line-clamp-2 text-[14px] font-medium">{t.title}</span>
+                <span className="mt-0.5 block truncate font-mono text-[11.5px] text-muted-foreground">
+                  {t.repo} #{t.pr ?? ""}{t.language ? ` · ${t.language}` : ""}{t.size ? ` · ${t.lines_changed} lines` : ""}
+                </span>
+              </span>
+              <span className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                {ranked.map((m) => {
+                  const ts = trialsFor(t.id, m.key);
+                  return (
+                    <span key={m.key} className="flex min-w-0 items-center gap-2">
+                      <span className="flex shrink-0 gap-0.5">
+                        {ts.map((r) => <Pip key={r.attempt} outcome={r.outcome} fill={colors[m.key]?.fill} ink={colors[m.key]?.ink} small />)}
+                        {Array.from({ length: Math.max(0, attempts - ts.length) }, (_, k) => <Pip key={`p${k}`} small />)}
+                      </span>
+                      <span className="truncate text-[12px] text-muted-foreground">{m.label}</span>
+                    </span>
+                  );
+                })}
+              </span>
+            </button>
+          </li>
+        ))}
+        {!rows.length && <li className="bg-surface py-10 text-center text-[14px] text-muted-foreground">No tasks match these filters.</li>}
+      </ul>
+      <div className="bg-surface shadow-[inset_0_0_0_1px_var(--frame)] max-md:hidden">
         <Table>
           <THead>
             <TR>

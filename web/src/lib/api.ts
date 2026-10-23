@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppState, RepoInfo, Report } from "./types";
+import type { AppState, PullList, RepoInfo, Report, Trace } from "./types";
 
 // The page polls quickly while a run is going and slowly otherwise. Every action goes through
 // `pr-eval serve`, which runs it as an ordinary `pr-eval run` process.
@@ -28,16 +28,53 @@ export async function post<T = { ok?: boolean; id?: string; error?: string }>(ur
 export const repoInfo = (name: string, signal?: AbortSignal) =>
   getJSON<RepoInfo>(`/api/repo?name=${encodeURIComponent(name)}`, signal);
 
-export function useAppState() {
+/** A repository's latest merged pull requests, or the given ones, with whether each can be a task. */
+export function usePulls(repo: string | null, numbers?: number[]) {
+  const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}` : null;
+  const [got, setGot] = useState<{ url: string; list: PullList } | null>(null);
+  useEffect(() => {
+    if (!url) return;
+    const abort = new AbortController();
+    // The server's own answers carry `error`, sent with HTTP 400, so read the body either way.
+    fetch(url, { cache: "no-store", signal: abort.signal, headers: { accept: "application/json" } })
+      .then((res) => res.json() as Promise<PullList>)
+      .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }) as PullList)
+      .then((list) => { if (!abort.signal.aborted) setGot({ url, list }); });
+    return () => abort.abort();
+  }, [url]);
+  const list = got && got.url === url ? got.list : null;
+  return { list, loading: !!url && !list };
+}
+
+/** One attempt's condensed trace, fetched when `enabled` first turns true. */
+export function useTrace(runId: string, trial: string, enabled: boolean) {
+  const [trace, setTrace] = useState<Trace | null>(null);
+  useEffect(() => {
+    if (!enabled || trace) return;
+    const abort = new AbortController();
+    fetch(`/api/trace?run=${encodeURIComponent(runId)}&trial=${encodeURIComponent(trial)}`,
+      { cache: "no-store", signal: abort.signal, headers: { accept: "application/json" } })
+      .then((res) => res.json() as Promise<Trace>)
+      .catch(() => ({ error: "The trace didn't load. Is the page server still running?" }) as Trace)
+      .then((t) => { if (!abort.signal.aborted) setTrace(t); });
+    return () => abort.abort();
+  }, [runId, trial, enabled, trace]);
+  return trace;
+}
+
+/** The page's state; `viewing` names the run on screen, so its board comes along even when it isn't the latest. */
+export function useAppState(viewing?: string) {
   const [state, setState] = useState<AppState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const fast = useRef(false);
+  const run = useRef(viewing);
+  run.current = viewing;
 
   const refresh = useCallback(async () => {
     window.clearTimeout(timer.current);
     try {
-      const next = await getJSON<AppState>("/api/state");
+      const next = await getJSON<AppState>(`/api/state${run.current ? `?run=${encodeURIComponent(run.current)}` : ""}`);
       setState(next);
       setError(null);
       fast.current = next.busy;
@@ -62,7 +99,7 @@ export function useAppState() {
       window.clearTimeout(timer.current);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [refresh, viewing]); // again when another run comes on screen
 
   return { state, error, refresh, hurry };
 }

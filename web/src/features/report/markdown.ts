@@ -20,7 +20,7 @@ export function benchMarkdown(report: Report, ranked: Model[]): string {
     ...rows.map((r) => `| ${r.join(" | ")} |`),
     "",
     `Claude Code ${run.harness_version || ""}, ${report.tasks.length} merged PRs from ${repos} ${repos === 1 ? "repo" : "repos"}, ` +
-      `${run.attempts} attempt(s) each. Time per task: median agent time. Total wall clock: first attempt to last result, ` +
-      "including waits and pauses. Cost: all valid attempts / solved attempts.",
+      `${run.attempts} attempt(s) each. Time per task: median agent time. Total wall clock: start to last result, ` +
+      "leaving out time the run sat stopped before a resume. Cost: all valid attempts / solved attempts.",
   ].join("\n").replace(/ {2,}/g, " ");
 }

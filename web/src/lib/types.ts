@@ -24,7 +24,7 @@ export interface Checks {
   bl_cli: boolean;
   gh: boolean;
   image: boolean;
-  judge: { model: string; effort?: string | null; env: string; ok: boolean; problem?: string | null };
+  judge: { model: string; label?: string; effort?: string | null; env: string; ok: boolean; problem?: string | null };
 }
 
 export type Phase = "collecting" | "checking" | "running" | "judging" | "reporting" | "done" | "stopped" | "failed" | string;
@@ -99,7 +99,6 @@ export interface AppState {
   checks: Checks;
   models: CatalogModel[];
   runs: Run[];
-  sample: { tasks: number; repos: number };
   quick: { tasks: number; repos: number };
   default_limit: number;
   max_limit: number;
@@ -111,6 +110,40 @@ export interface RepoInfo {
   language?: string;
   private?: boolean;
   defaults?: boolean;
+  error?: string;
+}
+
+/** A pull request to pick, from /api/prs; `why` says why it can't be a task. */
+export interface PullRow {
+  number: number;
+  title: string;
+  url: string;
+  merged_at?: string | null;
+  author?: string | null;
+  files: number;
+  lines: number;
+  tests: number;
+  why?: string | null;
+  maintenance?: boolean;
+}
+
+export interface PullList extends RepoInfo {
+  prs?: PullRow[];
+}
+
+// ---------- /api/trace ----------
+
+export type TraceStep =
+  | { kind: "thinking" | "text"; text: string; nested?: boolean }
+  | { kind: "tool"; tool: string; title: string; detail?: string | null; output?: string; error?: boolean; at?: number; nested?: boolean };
+
+export interface Trace {
+  steps: TraceStep[];
+  hidden_thinking: number;
+  dropped: number;
+  tool_calls: number;
+  tool_errors: number;
+  finished?: { turns?: number | null; seconds?: number | null; error?: boolean; subtype?: string } | null;
   error?: string;
 }
 
@@ -214,7 +247,7 @@ export interface Report {
     harness_version?: string;
     judge?: { model?: string; effort?: string } | null;
     note?: string | null;
-    request?: { quick?: boolean; repos?: string[] } | null;
+    request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;
   };
   models: Model[];
   summary: Record<string, Summary>;

@@ -8,7 +8,8 @@ import { HeadToHead } from "./HeadToHead";
 import { Leaderboard } from "./Leaderboard";
 import { Scatter } from "./Scatter";
 import { Slices } from "./Slices";
-import { TasksTable } from "./TasksTable";
+import { TaskSheet } from "./TaskSheet";
+import { TasksTable, useTrialsFor } from "./TasksTable";
 
 /** Derived once per report: colours, ranking and the headline comparison. */
 export function useReportModel(report: Report) {
@@ -77,7 +78,15 @@ export function Results({ report }: { report: Report }) {
   );
 }
 
-export function Tasks({ report }: { report: Report }) {
+export function Tasks({ report, openId, onOpen }: { report: Report; openId?: string | null; onOpen?: (id: string | null) => void }) {
   const { colors, ranked } = useReportModel(report);
-  return <TasksTable report={report} ranked={ranked} colors={colors} />;
+  return <TasksTable report={report} ranked={ranked} colors={colors} openId={openId} onOpen={onOpen} />;
+}
+
+/** One task's attempts in a drawer, opened from anywhere on the run page (the live board). */
+export function TaskDrawer({ report, taskId, onClose }: { report: Report; taskId: string | null; onClose: () => void }) {
+  const { colors, ranked } = useReportModel(report);
+  const trialsFor = useTrialsFor(report);
+  const task = taskId ? report.tasks.find((t) => t.id === taskId) ?? null : null;
+  return <TaskSheet task={task} report={report} ranked={ranked} colors={colors} trialsFor={trialsFor} onClose={onClose} />;
 }

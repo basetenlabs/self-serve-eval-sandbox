@@ -2,6 +2,7 @@
 
     pr-eval serve                       the local page: pick a repository and models, start, watch
     pr-eval run owner/repo              the same from the terminal: PRs -> check -> models -> report
+    pr-eval run <PR link> <PR link>     exactly these pull requests (or owner/repo#123)
     pr-eval run                         the sample tasks instead of a repository
     pr-eval run --quick                 the quick sample: ten fast PRs, a few minutes
 
@@ -22,6 +23,19 @@ def csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def wanted(args) -> tuple[list[str], dict[str, list[int]]]:
+    """The repositories to scan and the exact pull requests among the arguments."""
+    repos, pulls = [], {}
+    for text in args.repos:
+        if pull := tasks.parse_pull(text):
+            pulls.setdefault(pull[0], []).append(pull[1])
+        else:
+            repos.append(text)
+    if args.pr and len(repos) != 1:
+        sys.exit("--pr needs exactly one repository")
+    return repos, pulls
+
+
 def cmd_run(args) -> int:
     if args.resume:
         # A resumed run keeps its own tasks. --attempts may grow it and --models may add
@@ -38,12 +52,11 @@ def cmd_run(args) -> int:
         job.meta["attempts"] = max(args.attempts or 0, job.meta.get("attempts", 1))
         job.save()
     else:
-        if args.pr and len(args.repos) != 1:
-            sys.exit("--pr needs exactly one repository")
+        repos, pulls = wanted(args)
         models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config)
         if args.quick and (args.repos or args.task):
             sys.exit("--quick is the quick sample; it doesn't take repositories or --task")
-        request = pipeline.Request(repos=args.repos, prs=args.pr, limit=args.limit, since=args.since, setup=args.setup,
+        request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
                                    test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task,
                                    quick=args.quick)
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
@@ -64,11 +77,9 @@ def cmd_serve(args) -> int:
 
 
 def cmd_collect(args) -> int:
-    if args.pr and len(args.repos) != 1:
-        sys.exit("--pr needs exactly one repository")
-    wanted = {repo: args.pr for repo in args.repos} or tasks.sample(args.quick)
+    repos, pulls = wanted(args)
     written = []
-    for repo, prs in wanted.items():
+    for repo, prs in (({repo: args.pr for repo in repos} | pulls) or tasks.sample(args.quick)).items():
         written += tasks.collect(repo, args.out, prs=prs, limit=args.limit, since=args.since, setup=args.setup,
                                  test=args.test, language=args.language, force=args.force, max_lines=args.max_lines)
     print(f"{len(written)} tasks in {args.out}")
@@ -148,7 +159,7 @@ def cmd_cleanup(args) -> int:
 def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     """Options that say which pull requests become tasks, shared by `run` and `collect`."""
     p.add_argument("repos", nargs="*", metavar="owner/repo",
-                   help="GitHub repositories, public or private (none: the sample tasks)")
+                   help="GitHub repositories, public or private, or pull request links (none: the sample tasks)")
     p.add_argument("--limit", type=int, default=pipeline.DEFAULT_LIMIT, help=limit_help)
     p.add_argument("--pr", type=int, action="append", help="this PR number; repeatable (one repository)")
     p.add_argument("--since", help="only PRs merged on or after this date (YYYY-MM-DD)")

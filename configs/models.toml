@@ -72,11 +72,17 @@ provider = "baseten"
 model = "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B"
 prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_input = 0.04, output = 0.50 }
 
-# The judge compares the agent's diff with the merged diff. Any OpenAI-compatible Chat
-# Completions endpoint works; `api_key_env` names the variable holding its key.
+# The judge compares the agent's diff with the merged diff. It runs on Baseten Model APIs,
+# like the open models: DeepSeek V4 Pro is the strongest model there and isn't one of the
+# default contestants. Any OpenAI-compatible Chat Completions endpoint works; `api_key_env`
+# names the variable holding its key.
 [judge]
-model = "gpt-6.1-sol"
+model = "deepseek-ai/DeepSeek-V4-Pro-0813"
+label = "DeepSeek V4 Pro"
 effort = "high"  # sent as reasoning_effort
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
+base_url = "https://inference.baseten.co/v1"
+api_key_env = "BASETEN_API_KEY"
+# With response_format json_object, Baseten returns this model's answer as reasoning and
+# leaves the reply empty (2026-10-23). The prompt asks for JSON, so send it without.
+json_mode = false
 # Judge tokens are reported separately: they are the cost of grading, not of the work.

@@ -10,7 +10,7 @@ import { Activity, useActivity } from "./Activity";
 import { Board, BoardLegend, toneStyle } from "./Board";
 
 /** The run as it happens: the sandbox fleet, progress, scores so far, the board and a feed. */
-export function LivePanel({ run, models, colors }: { run: Run; models: Model[]; colors: Record<string, SwatchT> }) {
+export function LivePanel({ run, models, colors, onOpen }: { run: Run; models: Model[]; colors: Record<string, SwatchT>; onOpen?: (taskId: string) => void }) {
   const active = isActive(run.phase);
   const now = useNow(1000, active);
   const labels = React.useMemo(() => Object.fromEntries(models.map((m) => [m.key, m.label])), [models]);
@@ -28,8 +28,8 @@ export function LivePanel({ run, models, colors }: { run: Run; models: Model[]; 
       </div>
       {b.rows.length > 0 && (
         <div className={cn("grid gap-10", active && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
-          <Column heading="Board" aside={<span className="label-mono text-muted-foreground">One row per PR · one cell per attempt</span>} className="min-w-0">
-            <Board run={run} models={models} colors={colors} now={now} />
+          <Column heading="Board" aside={<span className="label-mono text-muted-foreground">{onOpen ? "Open a finished cell for its diff and trace" : "One row per PR · one cell per attempt"}</span>} className="min-w-0">
+            <Board run={run} models={models} colors={colors} now={now} onOpen={onOpen} />
             <div className="mt-4"><BoardLegend judged={run.judged !== false} /></div>
           </Column>
           {active && <Activity feed={feed} colors={colors} />}

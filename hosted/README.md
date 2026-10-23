@@ -26,8 +26,9 @@ bl push -d hosted --name pr-eval-host --type sandbox -w pr-eval-01db4d88   # the
 `deploy.py` reads the keys from the environment or the macOS Keychain (the list is at the top of
 the file), creates the volume, sandbox and public preview when they don't exist yet, uploads the
 app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
-401). `--seed` copies finished runs' summaries (run.json, report.json, report.html and each
-trial's result.json, scanned for credentials first); transcripts and patches stay on your Mac.
+401). `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
+trial's result.json and condensed, redacted trace, all scanned for credentials first); full
+transcripts stay on your Mac.
 
 Logs: `bl logs sandbox pr-eval-host -w pr-eval-01db4d88`.
 

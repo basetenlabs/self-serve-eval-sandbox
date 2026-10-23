@@ -19,13 +19,12 @@ printf '%s\n' '{"workspace":"dedicated-eval-workspace"}' > ~/.config/pr-eval/bla
 
 Alternatively, set `PR_EVAL_BLAXEL_WORKSPACE` or pass `--workspace dedicated-eval-workspace` to `pr-eval serve` or a cloud command. The saved JSON contains only the workspace name, never credentials. There is no fallback to the CLI's current workspace, and `main` is rejected. Authentication uses your Blaxel login or `BL_API_KEY` from the environment. See the [Blaxel CLI install guide](https://docs.blaxel.ai/cli-reference/introduction).
 
-You also need three provider keys:
+You also need two provider keys:
 
 | Variable | For |
 | --- | --- |
-| `BASETEN_API_KEY` | open models on Baseten Model APIs |
+| `BASETEN_API_KEY` | open models on Baseten Model APIs, and the judge (DeepSeek V4 Pro, set in `configs/models.toml`) |
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Claude models |
-| `OPENAI_API_KEY` | the judge (`gpt-6.1-sol`, set in `configs/models.toml`); the key needs access to that model |
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate && pip install -e .  # includes the Blaxel Python SDK
@@ -34,11 +33,11 @@ pr-eval serve
 
 `serve` opens http://127.0.0.1:8765. There you:
 
-1. type a GitHub repository (or pick the sample: 42 merged PRs from 7 public repos),
-2. choose how many pull requests (the most recent that change code and tests, up to 400 lines each) and which models to compare (Claude Opus 5.5 and DeepSeek V4.1 Flash to start),
+1. pick the **Quick sample** (10 merged PRs from 6 public repos, every attempt at once, a few minutes), or **Your pull requests**: paste pull request links, or type a repository and take its latest merges (the most recent that change code and tests, up to 400 lines each) or tick the ones you want from a list,
+2. choose which models to compare (Claude Opus 5.5 and DeepSeek V4.1 Flash to start),
 3. press **Start run** and watch it go: finding PRs, checking them, then running each model. Stop and Resume are on the run.
 
-When it finishes, **Open report** shows solve rate and cost per solved task side by side, with every attempt's diff, test output and the judge's reason. The checklist on the page says what's missing before you start: the dedicated Blaxel connection, build CLI, GitHub login, or a key. The first run builds the trial image remotely on Blaxel, which takes a few minutes once.
+When it finishes, **Open report** shows solve rate, cost per solved task and time per task side by side, with every attempt's diff, step-by-step trace, test output and the judge's reason. Any finished cell on the run's board opens that attempt. The checklist on the page says what's missing before you start: the dedicated Blaxel connection, build CLI, GitHub login, or a key. The first run builds the trial image remotely on Blaxel, which takes a few minutes once.
 
 Private repositories work through your own `gh` login (the sample needs it too). Go and Python repositories have default install and test commands, which run the whole test suite; for grafana/grafana, too big for that, they run only the Go packages the PR's tests are in. For anything else, open **Install and test commands** and say how, for example `npm ci` and `npx vitest run {test_files}`, where `{test_files}` becomes the PR's changed test files. Changing the commands and starting again sets the PRs up afresh. The trial image has Go, Node and Python; another language's toolchain goes in `docker/Dockerfile`, and dependencies from a private registry need their access in the install command.
 
@@ -46,7 +45,7 @@ Before any model runs on a PR, the PR is checked in the same Blaxel image the mo
 
 ### Where your code goes
 
-The repository clone stays in local `data/repos/`. Each attempt uploads its base snapshot and setup instructions to a fresh sandbox in your dedicated Blaxel workspace, and to a fresh verifier sandbox that gets ready at the same time; only after the agent stops and its sandbox is deleted are its diff and the hidden tests uploaded to the verifier for grading. Reference patches are uploaded only to separate task-validation sandboxes. The agent never shares a sandbox with the hidden answer. Execution artifacts are downloaded into local `jobs/`, and the page and HTML reports stay on this machine. Code the agent reads also goes to the model being tested (Anthropic or Baseten), and diffs go to the judge (OpenAI). This is cloud execution, not local-only processing.
+The repository clone stays in local `data/repos/`. Each attempt uploads its base snapshot and setup instructions to a fresh sandbox in your dedicated Blaxel workspace, and to a fresh verifier sandbox that gets ready at the same time; only after the agent stops and its sandbox is deleted are its diff and the hidden tests uploaded to the verifier for grading. Reference patches are uploaded only to separate task-validation sandboxes. The agent never shares a sandbox with the hidden answer. Execution artifacts are downloaded into local `jobs/`, and the page and HTML reports stay on this machine. Code the agent reads also goes to the model being tested (Anthropic or Baseten), and diffs go to the judge (DeepSeek V4 Pro on Baseten). This is cloud execution, not local-only processing.
 
 Sandboxes are deleted after use, including failed attempts. `--keep-sandboxes` retains verifier sandboxes for debugging; agent sandboxes are always deleted before hidden tests are uploaded. Ctrl-C or **Stop** cleans up that run's sandboxes. If the process is killed, use `pr-eval cleanup --workspace dedicated-eval-workspace`, optionally with `--run-id <run>`, to delete leftover eval sandboxes in that workspace. Cleanup does not delete other resources or the reusable trial image. Kept verifier sandboxes retain uploaded code and hidden tests until deleted; treat transcripts and local reports as sensitive too.
 
@@ -62,6 +61,7 @@ The page runs this same command, so either works:
 pr-eval run your-org/your-repo --limit 10 --models claude-opus,deepseek-v4.1-flash
 pr-eval run                                   # the sample tasks instead (10 of them; --limit 42 for all)
 pr-eval run your-org/your-repo --pr 123 --pr 456   # exactly these PRs (up to 1,600 lines each)
+pr-eval run https://github.com/o/a/pull/12 x/b#9    # or links to them, from any number of repositories
 ```
 
 It prints one line per attempt and keeps the report current. Stop it with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`; the same command with `--attempts 3` adds attempts to a finished run, and with `--models kimi-k3` adds a model on the same tasks. Resume also runs again any attempt lost to a sandbox, setup or provider problem (those never count against a model), and the page offers Resume on a finished run that has one. Resume restores the recorded Blaxel workspace, immutable image reference, region, sandbox size and judge (a tests-only run stays tests only), rather than switching to the current defaults. The default image name includes a hash of its build files; each run resolves that name to an immutable registry reference before validation. Old Docker runs remain readable as reports but cannot be resumed or retested on Blaxel: start a new run.
@@ -73,7 +73,7 @@ It prints one line per attempt and keeps the report current. Stop it with Ctrl-C
 1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request; the repository just before the merge is the starting point; the merged diff and the PR's tests are kept aside as the answer. When those tests call something the PR added by name, or a function whose parameters it changed, the request lists those signatures (never the code), so a correct fix isn't failed for naming a helper differently.
 2. **Run.** Each attempt gets a fresh Blaxel sandbox. Claude Code works on the request with the model under test; open models on Baseten go through a small proxy in the sandbox that sets the same reasoning effort on every request. GitHub, package registries and Claude Code's web tools are blocked while the agent works.
 3. **Grade.** The agent's diff is saved and its sandbox deleted, then a fresh verifier sandbox, set up while the agent worked, runs the PR's hidden tests against its code (its own test changes are set aside, so a test it wrote can't clash with the PR's), then an LLM judge compares its whole diff with the merged one and gives a one-sentence reason. Solved means the tests pass and the judge agrees.
-4. **Report.** One HTML page per run, plus `report.json`: solve rate, cost per solved task, time and tokens, results by language, change size and repository, and every attempt's diff, test output and judge reason.
+4. **Report.** One HTML page per run, plus `report.json`: solve rate, cost per solved task, time and tokens, results by language, change size and repository, and every attempt's diff, test output and judge reason. On the page each attempt also has its trace: every command, file read and edit the agent made, with its output, condensed from `agent.jsonl` with anything shaped like a credential masked.
 
 ## What the numbers mean
 
