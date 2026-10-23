@@ -96,7 +96,7 @@ class App:
             cached = {"blaxel": problem is None, "blaxel_problem": problem,
                       "bl_cli": bl_cli, "gh": gh, "image": image, "judge": judge.problem()}
             self.checked = (time.monotonic(), cached)
-        return {**cached, "judge": {"model": judge.model, "env": judge.api_key_env, "ok": not cached["judge"],
+        return {**cached, "judge": {"model": judge.model, "effort": judge.effort, "env": judge.api_key_env, "ok": not cached["judge"],
                                     "problem": cached["judge"]}}
 
     def describe(self, job_dir: Path) -> dict | None:

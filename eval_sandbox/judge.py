@@ -58,6 +58,7 @@ def grade(judge: Judge, task: Task, agent_patch: str, tests: dict, test_output: 
             f"## Hidden tests\n\n{'passed' if tests['passed'] else 'failed'}: {tests.get('summary', '')}\n\n"
             f"```\n{test_output[-3000:]}\n```")
     body = json.dumps({"model": judge.model, "response_format": {"type": "json_object"},
+                       **({"reasoning_effort": judge.effort} if judge.effort else {}),
                        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]}).encode()
     request = urllib.request.Request(f"{judge.base_url}/chat/completions", data=body, headers={
         "authorization": f"Bearer {judge.api_key}", "content-type": "application/json"})
@@ -71,7 +72,8 @@ def grade(judge: Judge, task: Task, agent_patch: str, tests: dict, test_output: 
                 raise ValueError(f"unexpected verdict {verdict!r}")
             usage = data.get("usage") or {}
             return {"verdict": verdict["verdict"], "reason": str(verdict.get("reason", "")).strip(),
-                    "model": judge.model, "prompt_version": PROMPT_VERSION, "input_tokens": usage.get("prompt_tokens"),
+                    "model": judge.model, "effort": judge.effort, "prompt_version": PROMPT_VERSION,
+                    "input_tokens": usage.get("prompt_tokens"),
                     "output_tokens": usage.get("completion_tokens")}
         except urllib.error.HTTPError as exc:
             last_error = f"HTTP {exc.code}: {exc.read()[:200].decode(errors='replace')}"

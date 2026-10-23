@@ -119,7 +119,7 @@ def new_job(request: Request, models: list[config.Model], judge: config.Judge | 
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
         "harness_version": None, "backend": "blaxel", "workspace": workspace, "image": image, "region": region,
         "attempts": attempts, "models": [m.as_dict() for m in models],
-        "judge": {"model": judge.model, "base_url": judge.base_url} if judge else None,
+        "judge": {"model": judge.model, "base_url": judge.base_url, "effort": judge.effort} if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
 

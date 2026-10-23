@@ -729,6 +729,25 @@ class JudgeTest(unittest.TestCase):
         from eval_sandbox import judge
         self.assertIn("error", judge.grade(self.judge, self.task, "diff", {"passed": True}, ""))
 
+    def test_the_judge_asks_for_its_configured_reasoning_effort(self):
+        from unittest import mock
+        from eval_sandbox import judge
+        self.assertEqual(config.load()[1].effort, "high")
+        sent = {}
+
+        def respond(request, timeout):
+            sent.update(json.loads(request.data))
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
+        with tempfile.TemporaryDirectory() as d, mock_env(PR_EVAL_TEST_KEY="k"), \
+                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
+            (Path(d) / "solution").mkdir()
+            (Path(d) / "solution" / "reference.patch").write_text("diff")
+            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
+            graded = judge.grade(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY", effort="high"),
+                                 task, "diff", {"passed": True}, "")
+        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual((graded["verdict"], graded["effort"]), ("pass", "high"))
+
     def test_solved_needs_the_tests_and_the_judge(self):
         from unittest import mock
         cases = [(True, {"verdict": "pass"}, ("solved", None)), (True, {"verdict": "fail"}, ("failed", None)),

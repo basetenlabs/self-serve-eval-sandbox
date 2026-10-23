@@ -73,6 +73,7 @@ class Judge:
     model: str
     base_url: str
     api_key_env: str
+    effort: str | None = None  # reasoning_effort sent with every grading request
 
     @property
     def api_key(self) -> str | None:
@@ -110,7 +111,8 @@ def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Judge]:
             raise SystemExit(f"{path}: models.{key} has unknown setting(s) {', '.join(sorted(unknown))}")
         models[key] = Model.from_dict({"label": key, "effort": default_effort, **spec, "key": key})
     j = data["judge"]
-    return models, Judge(model=j["model"], base_url=j["base_url"].rstrip("/"), api_key_env=j["api_key_env"])
+    return models, Judge(model=j["model"], base_url=j["base_url"].rstrip("/"), api_key_env=j["api_key_env"],
+                         effort=j.get("effort"))
 
 
 def keychain(service: str) -> str | None:
