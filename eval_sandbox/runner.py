@@ -52,6 +52,24 @@ HARNESS_ENV = {
     "IS_SANDBOX": "1",
 }
 
+# The hidden tests run in a network of their own, with only loopback: the sandbox's API holds
+# port 8080 on every interface, and tests that serve on it (gin's, for one) would fail on the
+# base and merged code alike. Offline like the agent was, and as the same unprivileged user:
+# the namespace's capabilities only bring loopback up and are gone at exec.
+VERIFIER = "own-network"
+OWN_NETWORK = """import ctypes, fcntl, os, socket, struct, sys
+uid, gid = os.getuid(), os.getgid()
+if ctypes.CDLL(None, use_errno=True).unshare(0x10000000 | 0x40000000):  # CLONE_NEWUSER | CLONE_NEWNET
+    sys.exit("pr-eval: no network of their own for the tests: " + os.strerror(ctypes.get_errno()))
+for name, text in (("uid_map", f"{uid} {uid} 1"), ("setgroups", "deny"), ("gid_map", f"{gid} {gid} 1")):
+    with open(f"/proc/self/{name}", "w") as f:
+        f.write(text)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+flags = struct.unpack("16sh", fcntl.ioctl(s, 0x8913, struct.pack("16sh", b"lo", 0)))[1]  # SIOCGIFFLAGS
+fcntl.ioctl(s, 0x8914, struct.pack("16sh", b"lo", flags | 1))  # SIOCSIFFLAGS, IFF_UP
+os.execvp(sys.argv[1], sys.argv[1:])
+"""
+
 # Egress is enforced by the Blaxel proxy firewall, not hostname overrides.
 DISALLOWED_TOOLS = "WebFetch,WebSearch"
 
@@ -337,8 +355,13 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
         return "workspace-error", {}
     started = time.monotonic()
     timeout = int(task.meta["environment"].get("setup_timeout_sec", 900))
-    code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
-    (log_dir / "setup.log").write_text(out)
+    logs = []
+    for _ in range(2):  # a download can drop mid-file, and installing dependencies twice is harmless
+        code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
+        logs.append(out)
+        if code == 0 or timed_out:
+            break
+    (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
     stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
     if code != 0:
         return ("setup-timeout" if timed_out else "setup-error"), stats
@@ -404,8 +427,10 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
     runtime.upload(container, task.path / "tests", "/tests")
     started = time.monotonic()
     timeout = int(task.meta["verifier"].get("timeout_sec", 900))
-    code, out, timed_out = sh(container, "bash /tests/test.sh", timeout=timeout)
+    code, out, timed_out = sh(container, f"python3 -c {shlex.quote(OWN_NETWORK)} bash /tests/test.sh", timeout=timeout)
     log_path.write_text(out)
+    if code and "pr-eval: no network of their own" in out:
+        raise runtime.RuntimeError("The sandbox can't give the hidden tests a network of their own.")
     return {"exit_code": code, "passed": code == 0 and not timed_out, "timed_out": timed_out,
             "seconds": round(time.monotonic() - started, 1), "summary": test_summary(out), "output": out}
 
@@ -623,7 +648,7 @@ def validation_status(task: Task, settings: Settings | None = None) -> str | Non
 
 def environment_identity(settings: Settings) -> dict:
     return {"backend": "blaxel", "workspace": runtime.workspace(settings.workspace),
-            "image": settings.image, "region": settings.region}
+            "image": settings.image, "region": settings.region, "verifier": VERIFIER}
 
 
 def diff_stats(numstat: str) -> dict:

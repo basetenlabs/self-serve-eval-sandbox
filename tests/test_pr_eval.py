@@ -530,6 +530,24 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertIn("+new", patch)
         self.assertEqual(runner.diff_stats(numstat)["files"], 1)
 
+    def test_a_setup_that_fails_is_tried_once_more(self):
+        task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"environment": {"setup": "SETUP"}})
+        for setups, expected in (([(1, "unexpected EOF", False), (0, "ok", False)], None),
+                                 ([(1, "no such module", False), (1, "no such module", False)], "setup-error"),
+                                 ([(1, "", True)], "setup-timeout")):  # not again after a timeout
+            answers = list(setups)
+            def fake_sh(container, script, *, timeout):
+                if script == "SETUP":
+                    return answers.pop(0)
+                return 0, "a" * 40 if "rev-parse" in script else "", False
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(runner, "sh", fake_sh), \
+                    mock.patch.object(runner, "snapshot"), mock.patch.object(runner.runtime, "upload"), \
+                    mock.patch.object(runner, "block_lookups"):
+                reason, _ = runner.prepare_workspace("unused", task, Path(d))
+                log = (Path(d) / "setup.log").read_text()
+            self.assertEqual((reason, answers), (expected, []))
+            self.assertIn(setups[0][1], log)
+
     def test_the_agents_own_tests_are_set_aside_before_the_hidden_ones(self):
         import subprocess
         from unittest import mock
@@ -552,6 +570,27 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertEqual(files, {"lib.go": "fixed", "lib_test.go": "old", "fix_test.go": None})
         self.assertTrue(runner.touches_tests("diff --git a/lib.go b/lib.go\ndiff --git a/x_test.go b/x_test.go\n"))
         self.assertFalse(runner.touches_tests("diff --git a/lib.go b/lib.go\n"))
+
+    def test_the_hidden_tests_run_in_a_network_of_their_own(self):
+        task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"verifier": {}})
+        compile(runner.OWN_NETWORK, "own-network", "exec")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(runner.runtime, "upload"):
+            with mock.patch.object(runner, "sh", return_value=(0, "1 passed", False)) as sh:
+                self.assertTrue(runner.run_tests("unused", task, Path(d) / "tests.log")["passed"])
+            script = sh.call_args.args[1]
+            self.assertTrue(script.startswith("python3 -c ") and script.endswith(" bash /tests/test.sh"))
+            # without one, the attempt is lost to infrastructure, not failed
+            refused = (1, "pr-eval: no network of their own for the tests: Operation not permitted", False)
+            with mock.patch.object(runner, "sh", return_value=refused), self.assertRaises(runner.runtime.RuntimeError):
+                runner.run_tests("unused", task, Path(d) / "tests.log")
+            # a check from before is made again
+            (Path(d) / "validation").mkdir()
+            (Path(d) / "validation" / "result.json").write_text(json.dumps(
+                {"backend": "blaxel", "workspace": "w", "image": "i", "region": "r", "status": "reference-fails"}))
+            checked = tasks.Task(id="t", path=Path(d), instruction="", meta={})
+            settings = runner.Settings(image="i", region="r", workspace="w")
+            self.assertIsNone(runner.validation_status(checked, settings))
+            self.assertEqual(runner.validation_status(checked), "reference-fails")
 
 class QueueTest(unittest.TestCase):
     def test_a_task_runs_as_soon_as_its_own_check_passes(self):
