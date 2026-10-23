@@ -9,10 +9,10 @@ import { Readiness } from "./Readiness";
 import { RunsList } from "./RunsList";
 
 const STEPS = [
-  { n: "01", title: "Find PRs", text: "Recent merged pull requests that came with tests." },
+  { n: "01", title: "Pick PRs", text: "Paste pull request links, or take a repository's latest merges that came with tests." },
   { n: "02", title: "Check", text: "Keep a PR only if its tests fail before the change and pass after." },
   { n: "03", title: "Models code", text: "Each model gets the PR's request in its own sandbox, without the answer." },
-  { n: "04", title: "Grade", text: "Hidden tests run in a fresh sandbox, then a judge reads the change." },
+  { n: "04", title: "Grade", text: "Hidden tests run in a fresh sandbox, then a judge model reads the change." },
 ];
 
 export function HomePage({ state, error, go, hurry }: {
@@ -28,7 +28,7 @@ export function HomePage({ state, error, go, hurry }: {
         </h1>
         <p className="mt-5 max-w-[60ch] text-[17px] leading-relaxed text-muted-foreground">
           Replay real merged pull requests against open models on Baseten and a closed model side by side.
-          Every attempt runs in its own Blaxel sandbox; you get solve rate, cost and time per task.
+          Every attempt runs in its own Blaxel sandbox; you get solve rate, cost and time per task, and every step each agent took.
         </p>
         <ol className="mt-10 grid gap-x-6 gap-y-8 sm:grid-cols-2 lg:grid-cols-4" aria-label="How a run works">
           {STEPS.map((s, i) => (

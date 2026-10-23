@@ -1,4 +1,4 @@
-import { AlertCircleIcon, CheckIcon, ChevronRightIcon, GitBranchIcon, LoaderIcon } from "lucide-react";
+import { AlertCircleIcon, CheckIcon, ChevronRightIcon, GitPullRequestIcon, LoaderIcon } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import * as React from "react";
 import { Column } from "@/components/brand";
@@ -9,13 +9,16 @@ import { Input, Kbd, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { post, repoInfo } from "@/lib/api";
-import { dur, usd } from "@/lib/format";
+import { dur, plural, usd } from "@/lib/format";
+import { parsePasted, pullCount } from "@/lib/github";
 import { type Route, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
-import type { AppState, CatalogModel, RepoInfo } from "@/lib/types";
+import type { AppState, CatalogModel, PullList, RepoInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { PastedPulls, PullChooser } from "./PullPicker";
 
-type Source = "quick" | "sample" | "repo";
+type Source = "quick" | "repo";
+type Pick = "latest" | "choose";
 const LIMITS = [5, 10, 20, 40];
 const QUICK_MINUTES = 5; // every quick-sample attempt starts at once; a few minutes end to end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -23,49 +26,71 @@ const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
 export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) => void; hurry: () => void }) {
   const toast = useToast();
-  const [source, setSource] = useStored<Source>("pr-eval-source", "quick");
+  const [stored, setSource] = useStored<string>("pr-eval-source", "quick");
+  const source: Source = stored === "repo" ? "repo" : "quick";
+  const [text, setText] = useStored("pr-eval-pulls", "");
+  const [pick, setPick] = useStored<Pick>("pr-eval-pick", "latest");
   const [limit, setLimit] = React.useState(state.default_limit);
-  const [repo, setRepo] = useStored("pr-eval-repo", "");
+  const [chosen, setChosen] = React.useState<number[]>([]);
+  const [checked, setChecked] = React.useState<Record<string, PullList | null>>({});
   const [setup, setSetup] = React.useState("");
   const [test, setTest] = React.useState("");
   const [info, setInfo] = React.useState<RepoInfo | null>(null);
   const [looking, setLooking] = React.useState(false);
   const usable = state.models.filter((m) => !m.missing);
   const defaults = usable.filter((m) => m.default).map((m) => m.key);
-  const [stored, setStored] = useStored<string[] | null>("pr-eval-models", null);
-  const chosen = (stored ?? defaults).filter((k) => usable.some((m) => m.key === k));
+  const [storedModels, setStoredModels] = useStored<string[] | null>("pr-eval-models", null);
+  const chosenModels = (storedModels ?? defaults).filter((k) => usable.some((m) => m.key === k));
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const form = React.useRef<HTMLFormElement>(null);
 
+  // What was typed: one repository to take PRs from, or links to exact pull requests.
+  const pasted = React.useMemo(() => parsePasted(text), [text]);
+  const pastedRepos = Object.keys(pasted.pulls);
+  const mode = source === "quick" ? "quick" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
+  const repo = mode === "repo" ? pasted.repos[0] : null;
+
   // Look the repository up as it's typed: language, whether it has default commands, access.
   React.useEffect(() => {
     setInfo(null);
-    if (source !== "repo" || !repo.trim()) return;
+    setChosen([]);
+    if (!repo) return;
     const abort = new AbortController();
     const timer = window.setTimeout(() => {
       setLooking(true);
-      repoInfo(repo.trim(), abort.signal)
+      repoInfo(repo, abort.signal)
         .then(setInfo)
         .catch(() => {})
         .finally(() => !abort.signal.aborted && setLooking(false));
     }, 450);
     return () => { abort.abort(); window.clearTimeout(timer); setLooking(false); };
-  }, [repo, source]);
+  }, [repo]);
 
-  const prs = source === "quick" ? state.quick.tasks : limit;
-  const models = state.models.filter((m) => chosen.includes(m.key));
+  // Pasted PRs that can't be tasks (not merged, no tests) stay out of the run.
+  const pastedPulls = Object.fromEntries(pastedRepos
+    .map((r) => [r, pasted.pulls[r].filter((n) => !checked[r]?.prs?.find((p) => p.number === n)?.why)] as const)
+    .filter(([, list]) => list.length));
+  const checking = mode === "pasted" && pastedRepos.some((r) => !checked[r]);
+  const lookups = mode === "pasted" ? pastedRepos.flatMap((r) => checked[r] ?? []) : info ? [info] : [];
+  const lookupError = lookups.find((l) => l.error)?.error;
+  const needsCommands = lookups.find((l) => l.repo && !l.error && l.defaults === false);
+  const prs = mode === "quick" ? state.quick.tasks : mode === "pasted" ? pullCount(pastedPulls)
+    : mode === "repo" ? (pick === "choose" ? chosen.length : limit) : 0;
+
+  const models = state.models.filter((m) => chosenModels.includes(m.key));
   const attempts = prs * models.length;
   const priced = models.length > 0 && models.every((m) => m.cost_per_attempt != null);
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
-  const minutes = source === "quick" ? QUICK_MINUTES : Math.max(5, Math.round((slowest * attempts) / 4 / 60 / 5) * 5);
-  const needsCommands = source === "repo" && info?.repo && !info.defaults && !info.error;
-  const blocked = state.busy || !models.length || (source === "repo" && (!repo.trim() || !!info?.error || (needsCommands && !(setup.trim() && test.trim()))));
+  const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(5, Math.round((slowest * attempts) / 4 / 60 / 5) * 5);
+  const commandsGiven = !!(setup.trim() && test.trim());
+  const blocked = state.busy || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
+    || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
-  const toggle = (key: string, on: boolean) => {
+  const toggleModel = (key: string, on: boolean) => {
     setError(null);
-    setStored(on ? [...chosen, key] : chosen.filter((k) => k !== key));
+    setStoredModels(on ? [...chosenModels, key] : chosenModels.filter((k) => k !== key));
   };
 
   async function start(e?: React.FormEvent) {
@@ -73,15 +98,16 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     if (blocked || starting) return;
     setError(null);
     setStarting(true);
-    const res = await post("/api/runs", {
-      quick: source === "quick", sample: source === "sample", repo, limit, models: chosen, setup, test,
-    });
+    const which = mode === "quick" ? { quick: true }
+      : mode === "pasted" ? { pulls: pastedPulls }
+        : pick === "choose" ? { pulls: { [repo!]: chosen } } : { repo, limit };
+    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test });
     setStarting(false);
     if (res.error || !res.id) {
       setError(res.error ?? "The run didn't start.");
       return;
     }
-    toast("Run started", { body: `${attempts} attempts on ${prs} pull requests.` });
+    toast("Run started", { body: `${attempts} attempts on ${plural(prs, "pull request")}.` });
     hurry();
     go({ page: "run", id: res.id });
   }
@@ -94,46 +120,65 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     return () => removeEventListener("keydown", onKey);
   }, []);
 
+  const removePull = (r: string, n: number) =>
+    setText(text.split(/[\s,]+/).filter((t) => {
+      const one = parsePasted(t).pulls;
+      return !(one[r]?.length === 1 && one[r][0] === n);
+    }).join("\n"));
+
   return (
     <form ref={form} onSubmit={start} onInput={() => setError(null)} className="grid gap-10" aria-label="New run">
       <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
-        <RadioGroup.Root value={source} onValueChange={(v) => setSource(v as Source)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
+        <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-2" aria-label="Pull requests">
           <SourceTile value="quick" title="Quick sample" figure={`${state.quick.tasks} PRs`} tag="Fast"
-            text={`${state.quick.repos} repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
-          <SourceTile value="sample" title="Full sample" figure={`${state.sample.tasks} PRs`}
-            text={`${state.sample.repos} open-source repos in Go, TypeScript and Python.`} />
-          <SourceTile value="repo" title="Your repository" figure="Any repo" text="Recent merged PRs from a GitHub repository." />
+            text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
+          <SourceTile value="repo" title="Your pull requests" figure="Any repo"
+            text="Paste pull request links, or pick from a repository's latest merges." />
         </RadioGroup.Root>
 
-        {source !== "quick" && (
-          <div className="mt-4 grid animate-enter gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)] sm:grid-cols-[1fr_auto]">
-            {source === "repo" ? (
-              <div className="grid gap-1.5">
-                <Label htmlFor="repo">GitHub repository</Label>
-                <div className="relative">
-                  <GitBranchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input id="repo" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo or a GitHub link"
-                    className="pl-9 font-mono text-[13px]" autoComplete="off" spellCheck={false} aria-invalid={!!info?.error} aria-describedby="repo-status" />
-                </div>
-                <RepoStatus id="repo-status" info={info} looking={looking} />
+        {source === "repo" && (
+          <div className="mt-4 grid animate-enter gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+            <div className="grid gap-1.5">
+              <Label htmlFor="pulls">Repository or pull request links</Label>
+              <div className="relative">
+                <GitPullRequestIcon className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" />
+                <textarea
+                  id="pulls" value={text} onChange={(e) => setText(e.target.value)} rows={1} autoComplete="off" spellCheck={false}
+                  placeholder="owner/repo, or paste links to pull requests"
+                  aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
+                  className={cn(
+                    "block max-h-48 min-h-10 w-full resize-none bg-surface py-2.5 pr-3 pl-9 font-mono text-[13px] leading-5 [field-sizing:content]",
+                    "shadow-[inset_0_0_0_1px_var(--rule)] outline-none transition-shadow placeholder:text-muted-foreground/80 hover:shadow-[inset_0_0_0_1px_var(--line)]",
+                    "focus-visible:shadow-[inset_0_0_0_1px_var(--foreground)] aria-invalid:shadow-[inset_0_0_0_1px_var(--danger)]",
+                  )}
+                />
               </div>
-            ) : <div className="self-center text-[14px] text-muted-foreground">Pull requests are spread across the sample's repositories.</div>}
-            <div className="grid content-start gap-1.5">
-              <Label>How many</Label>
-              <div className="flex gap-0.5 bg-node p-0.5" role="radiogroup" aria-label="How many pull requests">
-                {LIMITS.map((n) => (
-                  <button key={n} type="button" role="radio" aria-checked={limit === n} onClick={() => setLimit(n)}
-                    className={cn("h-9 min-w-11 px-3 font-mono text-[12px] transition-colors", limit === n ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
-                    {n}
-                  </button>
-                ))}
-              </div>
+              <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} />
             </div>
-            {source === "repo" && (
-              <details className="group sm:col-span-2" open={!!needsCommands}>
-                <summary className="label-mono flex cursor-pointer list-none items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+
+            {mode === "repo" && (
+              <div className="grid gap-4">
+                <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+                  <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
+                    options={[{ value: "latest", label: "Latest merged" }, { value: "choose", label: "Choose" }]} />
+                  {pick === "latest" && (
+                    <Segmented label="How many" value={String(limit)} onChange={(v) => setLimit(Number(v))}
+                      options={LIMITS.map((n) => ({ value: String(n), label: String(n) }))} />
+                  )}
+                </div>
+                {pick === "choose" && <PullChooser repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit} />}
+              </div>
+            )}
+
+            {mode === "pasted" && (
+              <PastedPulls pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull} />
+            )}
+
+            {(mode === "repo" || mode === "pasted") && (
+              <details className="group" open={!!needsCommands}>
+                <summary className="label-mono flex cursor-pointer list-none flex-wrap items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
                   <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-                  Install and test commands {needsCommands ? <Badge variant="warn">Needed for {info?.language}</Badge> : <span className="normal-case tracking-normal">(optional for Go and Python)</span>}
+                  Install and test commands {needsCommands ? <Badge variant="warn">Needed for {needsCommands.language}</Badge> : <span className="normal-case tracking-normal">(optional for Go and Python)</span>}
                 </summary>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div className="grid gap-1.5">
@@ -145,6 +190,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                     <Input id="test" value={test} onChange={(e) => setTest(e.target.value)} placeholder="npx vitest run {test_files}" className="font-mono text-[13px]" spellCheck={false} />
                   </div>
                 </div>
+                {mode === "pasted" && Object.keys(pastedPulls).length > 1 && (
+                  <p className="mt-2 text-[12.5px] text-muted-foreground">Commands apply to one repository: paste pull requests from one at a time to use them.</p>
+                )}
               </details>
             )}
           </div>
@@ -152,18 +200,18 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
       </Column>
 
       <Column heading="2. Models" aside={<span className="label-mono text-muted-foreground">{models.length} chosen</span>}>
-        <ModelPicker models={state.models} chosen={chosen} onToggle={toggle} />
+        <ModelPicker models={state.models} chosen={chosenModels} onToggle={toggleModel} />
       </Column>
 
       <Column heading="3. Start">
         <div className="grid grid-cols-2 bg-surface shadow-[inset_0_0_0_1px_var(--frame)] sm:grid-cols-5">
-          <PlanStat label="Pull requests" value={prs} />
-          <PlanStat label="Attempts" value={attempts} />
-          <PlanStat label="Sandboxes at once" value={source === "quick" ? attempts * 2 : "≤ 8"}
+          <PlanStat label="Pull requests" value={prs || "–"} />
+          <PlanStat label="Attempts" value={attempts || "–"} />
+          <PlanStat label="Sandboxes at once" value={!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
             tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests." />
-          <PlanStat label="Estimated cost" value={cost == null ? "–" : `≈ ${usd(cost)}`}
+          <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
             tip={priced ? "From each model's cost per attempt in its most recent run." : "No earlier run to estimate from yet."} />
-          <PlanStat label="Estimated time" value={models.length ? `≈ ${minutes} min` : "–"}
+          <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
             tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
         </div>
         {error && (
@@ -182,7 +230,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           <span className="text-[13px] text-muted-foreground">
             {state.busy ? "A run is going. You can start another when it finishes."
               : !models.length ? "Choose at least one model."
-                : "Runs keep going if you close this page. Sandboxes are deleted as each attempt ends."}
+                : checking ? "Checking the pull requests on GitHub."
+                : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request." : "Name a repository or paste pull request links.")
+                  : "Runs keep going if you close this page. Sandboxes are deleted as each attempt ends."}
           </span>
         </div>
       </Column>
@@ -211,20 +261,57 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
   );
 }
 
-function RepoStatus({ id, info, looking }: { id: string; info: RepoInfo | null; looking: boolean }) {
-  let body: React.ReactNode = <span className="text-muted-foreground">Public repositories work everywhere; private ones need your own GitHub login.</span>;
-  if (looking) body = <span className="inline-flex items-center gap-1.5 text-muted-foreground"><LoaderIcon className="size-3.5 animate-spin" /> Looking it up</span>;
-  else if (info?.error) body = <span className="text-[#AC0EB2] dark:text-[#FFA9FD]">{info.error}</span>;
-  else if (info?.repo) body = (
-    <span className="inline-flex flex-wrap items-center gap-1.5">
-      <CheckIcon className="size-3.5" />
-      <span className="font-mono text-[12px]">{info.repo}</span>
-      <Badge>{info.language}</Badge>
-      {info.private && <Badge variant="warn">Private</Badge>}
-      <span className="text-muted-foreground">{info.defaults ? "Ready: it has default commands." : "Give its install and test commands below."}</span>
-    </span>
-  );
+/** What the box understood: a repository and whether it's ready, or how many pull requests. */
+function SourceStatus({ id, mode, info, looking, pasted, pastedRepos }: {
+  id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[];
+}) {
+  const danger = "text-[#AC0EB2] dark:text-[#FFA9FD]";
+  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose. Public repositories work everywhere; private ones need your own GitHub login.</span>;
+  if (mode === "many") body = <span className={danger}>One repository at a time, or paste links to pull requests.</span>;
+  else if (mode === "pasted") {
+    const n = pullCount(pasted.pulls);
+    body = (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <CheckIcon className="size-3.5" />
+        {plural(n, "pull request")}{pastedRepos.length > 1 ? ` from ${pastedRepos.length} repositories` : ` from ${pastedRepos[0]}`}
+        {(pasted.unknown.length > 0 || pasted.repos.length > 0) && (
+          <span className="text-muted-foreground">· ignoring {[...pasted.repos, ...pasted.unknown].slice(0, 3).join(", ")}{pasted.repos.length + pasted.unknown.length > 3 ? "…" : ""}</span>
+        )}
+      </span>
+    );
+  } else if (mode === "repo") {
+    if (looking) body = <span className="inline-flex items-center gap-1.5 text-muted-foreground"><LoaderIcon className="size-3.5 animate-spin" /> Looking it up</span>;
+    else if (info?.error) body = <span className={danger}>{info.error}</span>;
+    else if (info?.repo) body = (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <CheckIcon className="size-3.5" />
+        <span className="font-mono text-[12px]">{info.repo}</span>
+        <Badge>{info.language}</Badge>
+        {info.private && <Badge variant="warn">Private</Badge>}
+        <span className="text-muted-foreground">{info.defaults ? "Ready: it has default commands." : "Give its install and test commands below."}</span>
+      </span>
+    );
+  } else if (pasted.unknown.length) body = <span className={danger}>Not a repository or pull request: {pasted.unknown[0]}</span>;
   return <div id={id} className="min-h-5 text-[13px]" aria-live="polite">{body}</div>;
+}
+
+function Segmented({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[];
+}) {
+  return (
+    <div className="grid content-start gap-1.5">
+      <span className="label-mono text-muted-foreground">{label}</span>
+      <div className="flex gap-0.5 bg-node p-0.5" role="radiogroup" aria-label={label}>
+        {options.map((o) => (
+          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}
+            className={cn("h-9 min-w-11 px-3 font-mono text-[12px] uppercase tracking-[0.04em] transition-colors",
+              value === o.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; chosen: string[]; onToggle: (k: string, on: boolean) => void }) {

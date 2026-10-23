@@ -4,7 +4,7 @@ import { Swatch } from "@/components/brand";
 import { Tip } from "@/components/ui/tooltip";
 import { clock, secondsSince, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
-import { CHECK, failReason, isLive, STAGE, STEPS, stepIndex, type Tone } from "@/lib/stages";
+import { CHECK, failReason, isFinal, isLive, STAGE, STEPS, stepIndex, type Tone } from "@/lib/stages";
 import type { BoardRow, Cell, Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -24,58 +24,87 @@ export function toneStyle(tone: Tone, swatch?: SwatchT): { className: string; st
   }
 }
 
-/** Every PR against every model: each cell is one attempt, live while it runs. */
-export function Board({ run, models, colors, now }: { run: Run; models: Model[]; colors: Record<string, SwatchT>; now: number }) {
+/** Every PR against every model: each cell is one attempt, live while it runs. A table on wide
+ * screens; on a phone, one card per PR with its attempts stacked. */
+export function Board({ run, models, colors, now, onOpen }: { run: Run; models: Model[]; colors: Record<string, SwatchT>; now: number; onOpen?: (taskId: string) => void }) {
   const b = run.board!;
   const active = run.phase === "collecting" || run.phase === "checking" || run.phase === "running";
+  const judged = run.judged !== false;
+  const cell = (row: BoardRow, m: Model) => {
+    const c = row.cells.find((x) => x.model === m.key);
+    if (!c) return <div className="placeholder-cell h-12" />;
+    const body = <AttemptCell c={c} swatch={colors[c.model]} now={now} judged={judged} />;
+    return onOpen && isFinal(c) ? (
+      <button type="button" onClick={() => onOpen(row.id)} aria-label={`${row.repo}#${row.pr}, ${m.label}: open the attempt`}
+        className="block w-full text-left transition-[box-shadow] hover:shadow-[0_0_0_1px_var(--foreground)] focus-visible:outline-offset-1">
+        {body}
+      </button>
+    ) : body;
+  };
   return (
-    <div className="overflow-x-auto bg-surface shadow-[inset_0_0_0_1px_var(--frame)]">
-      <table className="w-full table-fixed border-collapse" style={{ minWidth: 300 + 132 + models.length * 156 }}>
-        <colgroup>
-          <col />
-          <col className="w-[132px]" />
-          {models.map((m) => <col key={m.key} className="w-[156px]" />)}
-        </colgroup>
-        <thead>
-          <tr className="border-b border-rule">
-            <th className="label-mono h-10 px-3 text-left font-normal text-muted-foreground">Pull request</th>
-            <th className="label-mono h-10 px-1 text-left font-normal text-muted-foreground">Check</th>
-            {models.map((m) => (
-              <th key={m.key} className="h-10 px-1 text-left font-normal">
-                <span className="label-mono flex min-w-0 items-center gap-2 text-foreground"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {b.rows.map((row) => {
-            const out = row.check.stage === "left-out";
-            const cells = models.map((m) => row.cells.find((c) => c.model === m.key));
-            return (
-              <tr key={row.id} className={cn("border-b border-frame last:border-0", out && "opacity-55")}>
-                <td className="px-3 py-2">
-                  <div className="truncate text-[14px] font-medium" title={row.title}>{row.title || `#${row.pr}`}</div>
-                  <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-                    {row.language && <span className="rounded-chip bg-node px-1 text-[10px] uppercase text-foreground">{langShort(row.language)}</span>}
-                    {row.url ? (
-                      <a href={row.url} target="_blank" rel="noopener" className="inline-flex items-center gap-0.5 hover:text-foreground hover:underline">
-                        {row.repo}#{row.pr}<ArrowUpRightIcon className="size-3" />
-                      </a>
-                    ) : <span>{row.repo}#{row.pr}</span>}
-                    {row.lines ? <span>±{row.lines}</span> : null}
-                  </div>
-                </td>
+    <>
+      <div className="overflow-x-auto bg-surface shadow-[inset_0_0_0_1px_var(--frame)] max-md:hidden">
+        <table className="w-full table-fixed border-collapse" style={{ minWidth: 300 + 132 + models.length * 156 }}>
+          <colgroup>
+            <col />
+            <col className="w-[132px]" />
+            {models.map((m) => <col key={m.key} className="w-[156px]" />)}
+          </colgroup>
+          <thead>
+            <tr className="border-b border-rule">
+              <th className="label-mono h-10 px-3 text-left font-normal text-muted-foreground">Pull request</th>
+              <th className="label-mono h-10 px-1 text-left font-normal text-muted-foreground">Check</th>
+              {models.map((m) => (
+                <th key={m.key} className="h-10 px-1 text-left font-normal">
+                  <span className="label-mono flex min-w-0 items-center gap-2 text-foreground"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {b.rows.map((row) => (
+              <tr key={row.id} className={cn("border-b border-frame last:border-0", row.check.stage === "left-out" && "opacity-55")}>
+                <td className="px-3 py-2"><PullTitle row={row} /></td>
                 <td className="px-1 py-1.5"><CheckCell row={row} now={now} active={active} /></td>
-                {cells.map((c, i) => (
-                  <td key={models[i].key} className="px-1 py-1.5">
-                    {c ? <AttemptCell c={c} swatch={colors[c.model]} now={now} judged={run.judged !== false} /> : <div className="placeholder-cell h-12" />}
-                  </td>
-                ))}
+                {models.map((m) => <td key={m.key} className="px-1 py-1.5">{cell(row, m)}</td>)}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ul className="grid gap-px bg-frame shadow-[0_0_0_1px_var(--frame)] md:hidden" aria-label="Board">
+        {b.rows.map((row) => (
+          <li key={row.id} className={cn("grid gap-2 bg-surface p-3", row.check.stage === "left-out" && "opacity-55")}>
+            <PullTitle row={row} />
+            {row.check.stage !== "passed" && <CheckCell row={row} now={now} active={active} />}
+            <div className="grid grid-cols-2 gap-1">
+              {models.map((m) => (
+                <div key={m.key} className="min-w-0">
+                  <div className="label-mono mb-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground"><Swatch swatch={colors[m.key]} size={8} /><span className="truncate">{m.label}</span></div>
+                  {cell(row, m)}
+                </div>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function PullTitle({ row }: { row: BoardRow }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-[14px] font-medium" title={row.title}>{row.title || `#${row.pr}`}</div>
+      <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+        {row.language && <span className="rounded-chip bg-node px-1 text-[10px] uppercase text-foreground">{langShort(row.language)}</span>}
+        {row.url ? (
+          <a href={row.url} target="_blank" rel="noopener" className="inline-flex min-w-0 items-center gap-0.5 hover:text-foreground hover:underline">
+            <span className="truncate">{row.repo}#{row.pr}</span><ArrowUpRightIcon className="size-3 shrink-0" />
+          </a>
+        ) : <span className="truncate">{row.repo}#{row.pr}</span>}
+        {row.lines ? <span className="shrink-0">±{row.lines}</span> : null}
+      </div>
     </div>
   );
 }
