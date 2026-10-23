@@ -120,11 +120,23 @@ def host():
             "volumes": [{"name": VOLUME, "mount_path": "/data", "read_only": False}],
             "labels": LABELS,
         })
+        ready(sandbox)
     # The gateway owns sign-in, so the preview itself is public.
     preview = sandbox.previews.create_if_not_exists({"metadata": {"name": "web"},
                                                      "spec": {"port": PORT, "public": True, "prefixUrl": PREFIX}})
     url = preview.spec.url
     return sandbox, url.rstrip("/")
+
+
+def ready(sandbox) -> None:
+    """A new sandbox can refuse commands for a while after it is created (WORKLOAD_UNAVAILABLE)."""
+    for wait in (1, 2, 4, 8, 15, 30, 30):
+        try:
+            sandbox.process.exec({"command": "true", "waitForCompletion": True, "timeout": 30})
+            return
+        except Exception:  # noqa: BLE001 - the platform says to retry until the workload is up
+            time.sleep(wait)
+    raise SystemExit(f"sandbox {SANDBOX} didn't start; see: bl logs sandbox {SANDBOX} -w {WORKSPACE}")
 
 
 def upload(sandbox, files: dict[str, bytes], remote: str) -> None:
@@ -216,6 +228,16 @@ def verify(origin: str) -> None:
 def delete(volume: bool) -> None:
     Sandbox, Volume = sdk()
     Sandbox.delete(SANDBOX)
+    for _ in range(60):  # gone before a deploy can create it afresh
+        try:
+            left = Sandbox.get(SANDBOX)
+        except Exception:  # noqa: BLE001 - not found: deleted
+            break
+        if left.status == "TERMINATED":  # one can stay listed like this until deleted again (2026-10-23)
+            Sandbox.delete(SANDBOX)
+        time.sleep(3)
+    else:
+        raise SystemExit(f"sandbox {SANDBOX} is still there; try again in a minute")
     print(f"deleted sandbox {SANDBOX}")
     if volume:
         for _ in range(60):
