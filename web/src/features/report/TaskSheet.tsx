@@ -85,8 +85,8 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   const rows: [string, React.ReactNode][] = [];
   if (r.outcome === "invalid") rows.push(["Why not scored", r.invalid_reason || "unknown"]);
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
-  if (r.tests) rows.push(["Hidden tests", `${r.tests.passed ? "Passed" : "Failed"}${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`]);
-  if (r.judge) rows.push(["Judge", r.judge.error ? `Error: ${r.judge.error}` : `${r.judge.verdict === "pass" ? "Pass" : "Fail"}${r.judge.reason ? ` · ${r.judge.reason}` : ""}`]);
+  if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`} />]);
+  if (r.judge) rows.push(["Judge", r.judge.error ? `Error: ${r.judge.error}` : <Lead word={r.judge.verdict === "pass" ? "Pass" : "Fail"} rest={r.judge.reason ? ` · ${r.judge.reason}` : ""} />]);
   if (r.diff) rows.push(["Change", `${r.diff.files} files, +${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`]);
   const o = OUTCOME[r.outcome];
   return (
@@ -129,6 +129,11 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
       </Tabs>
     </article>
   );
+}
+
+/** A verdict word the eye can find down a column of attempts, then the details. */
+function Lead({ word, rest }: { word: string; rest: string }) {
+  return <><span className="font-medium">{word}</span>{rest}</>;
 }
 
 function Code({ text, diff }: { text?: string | null; diff: boolean }) {
