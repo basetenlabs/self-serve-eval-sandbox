@@ -48,16 +48,17 @@ body.auth-page{margin:0;background:var(--bg);color:var(--fg)}
 @media (max-width:767px){.auth-frame{border-inline:0}.auth-top,.auth-foot{padding-inline:16px}}
 @media (max-width:480px){.auth-card{margin:40px 0}.auth-card h1{font-size:30px}}
 
-/* Sign out, added to the eval page by the gateway. Bottom left: the page's toasts use the right. */
-.auth-session{position:fixed;bottom:16px;left:16px;z-index:40;display:flex;flex-direction:column;align-items:flex-start;gap:6px;font-family:"Geist Mono Variable","Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
-.auth-session [role="status"]{display:block;max-width:290px;padding:6px 10px;font-size:12px;line-height:1.4;color:#000000;background:#ffffff;box-shadow:inset 0 0 0 1px #c7d4c4}
-.auth-session [role="status"]:empty{display:none}
-.auth-session button{padding:8px 12px;border:0;font:inherit;font-size:11px;line-height:16px;letter-spacing:.06em;text-transform:uppercase;color:#000000;background:#ffffff;box-shadow:inset 0 0 0 1px #a2ae9d;cursor:pointer}
-.auth-session button:hover{box-shadow:inset 0 0 0 1px #000000}
-.auth-session button:disabled{opacity:.6;cursor:progress}
-.auth-session button:focus-visible{outline:2px solid #000000;outline-offset:2px}
-.dark .auth-session [role="status"],.dark .auth-session button{color:#ffffff;background:#000000;box-shadow:inset 0 0 0 1px #575d56}
-.dark .auth-session button:hover{box-shadow:inset 0 0 0 1px #ffffff}
-.dark .auth-session button:focus-visible{outline-color:#19e76e}
+/* Sign out, added to the eval page by the gateway. The page moves it into its top bar; until it does
+   (or if the page fails to load), it sits bottom left, clear of the toasts. */
+body>.auth-session{position:fixed;bottom:16px;left:16px;z-index:40;display:flex;flex-direction:column;align-items:flex-start;gap:6px;font-family:"Geist Mono Variable","Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}
+body>.auth-session [role="status"]{display:block;max-width:290px;padding:6px 10px;font-size:12px;line-height:1.4;color:#000000;background:#ffffff;box-shadow:inset 0 0 0 1px #c7d4c4}
+body>.auth-session [role="status"]:empty{display:none}
+body>.auth-session button{padding:8px 12px;border:0;font:inherit;font-size:11px;line-height:16px;letter-spacing:.06em;text-transform:uppercase;color:#000000;background:#ffffff;box-shadow:inset 0 0 0 1px #a2ae9d;cursor:pointer}
+body>.auth-session button:hover{box-shadow:inset 0 0 0 1px #000000}
+body>.auth-session button:disabled{opacity:.6;cursor:progress}
+body>.auth-session button:focus-visible{outline:2px solid #000000;outline-offset:2px}
+.dark body>.auth-session [role="status"],.dark body>.auth-session button{color:#ffffff;background:#000000;box-shadow:inset 0 0 0 1px #575d56}
+.dark body>.auth-session button:hover{box-shadow:inset 0 0 0 1px #ffffff}
+.dark body>.auth-session button:focus-visible{outline-color:#19e76e}
 
 @media (prefers-reduced-motion:reduce){.auth-page *,.auth-page *::before{animation:none!important;transition:none!important}}
