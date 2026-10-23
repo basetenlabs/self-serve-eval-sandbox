@@ -1,6 +1,7 @@
 """Model catalog and pricing, read from configs/models.toml."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -74,6 +75,8 @@ class Judge:
     base_url: str
     api_key_env: str
     effort: str | None = None  # reasoning_effort sent with every grading request
+    label: str | None = None  # how the page names it
+    json_mode: bool = True  # ask for a JSON reply with response_format; the prompt asks for JSON either way
 
     @property
     def api_key(self) -> str | None:
@@ -88,17 +91,17 @@ class Judge:
         """
         if not self.api_key:
             return f"the judge needs {self.api_key_env}; set it, or pass --judge none to score on tests only"
-        request = urllib.request.Request(f"{self.base_url}/models/{self.model}",
-                                         headers={"authorization": f"Bearer {self.api_key}"})
+        cannot = (f"the key in {self.api_key_env} can't use the judge model {self.model}"
+                  "{}; use a key that can, or set [judge] model in configs/models.toml")
+        request = urllib.request.Request(f"{self.base_url}/models", headers={"authorization": f"Bearer {self.api_key}"})
         try:
-            urllib.request.urlopen(request, timeout=10).close()
+            with urllib.request.urlopen(request, timeout=10) as response:
+                listed = {m.get("id") for m in json.loads(response.read()).get("data") or []}
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403, 404):
-                return (f"the key in {self.api_key_env} can't use the judge model {self.model} (HTTP {exc.code}); "
-                        "use a key that can, or set [judge] model in configs/models.toml")
-        except (urllib.error.URLError, TimeoutError):
-            pass
-        return None
+            return cannot.format(f" (HTTP {exc.code})") if exc.code in (401, 403) else None
+        except (urllib.error.URLError, TimeoutError, ValueError, AttributeError):
+            return None
+        return cannot.format(f" (not in {self.base_url}/models)") if listed and self.model not in listed else None
 
 
 def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Judge]:
@@ -112,7 +115,7 @@ def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Judge]:
         models[key] = Model.from_dict({"label": key, "effort": default_effort, **spec, "key": key})
     j = data["judge"]
     return models, Judge(model=j["model"], base_url=j["base_url"].rstrip("/"), api_key_env=j["api_key_env"],
-                         effort=j.get("effort"))
+                         effort=j.get("effort"), label=j.get("label"), json_mode=j.get("json_mode", True))
 
 
 def keychain(service: str) -> str | None:

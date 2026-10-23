@@ -8,6 +8,7 @@ with a one-sentence reason, which the report shows next to every attempt.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -42,6 +43,21 @@ style, comments, docs and changelog entries.
 Answer with JSON only: {"verdict": "pass" | "fail", "reason": "<one sentence, under 30 words>"}"""
 
 
+def parse(reply: str | None) -> dict:
+    """The verdict in a reply: JSON, maybe wrapped in a code fence or a sentence."""
+    text = (reply or "").strip()
+    try:
+        verdict = json.loads(text)
+    except json.JSONDecodeError:
+        found = re.search(r"\{.*\}", text, re.S)
+        if not found:
+            raise ValueError(f"no JSON in the reply {text[:200]!r}") from None
+        verdict = json.loads(found[0])
+    if not isinstance(verdict, dict) or verdict.get("verdict") not in ("pass", "fail"):
+        raise ValueError(f"unexpected verdict {verdict!r}")
+    return verdict
+
+
 def clip(text: str, limit: int = MAX_PATCH_CHARS) -> str:
     if len(text) <= limit:
         return text
@@ -57,7 +73,7 @@ def grade(judge: Judge, task: Task, agent_patch: str, tests: dict, test_output: 
             f"## Agent's change\n\n```diff\n{clip(agent_patch)}\n```\n\n"
             f"## Hidden tests\n\n{'passed' if tests['passed'] else 'failed'}: {tests.get('summary', '')}\n\n"
             f"```\n{test_output[-3000:]}\n```")
-    body = json.dumps({"model": judge.model, "response_format": {"type": "json_object"},
+    body = json.dumps({"model": judge.model, **({"response_format": {"type": "json_object"}} if judge.json_mode else {}),
                        **({"reasoning_effort": judge.effort} if judge.effort else {}),
                        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]}).encode()
     request = urllib.request.Request(f"{judge.base_url}/chat/completions", data=body, headers={
@@ -67,9 +83,7 @@ def grade(judge: Judge, task: Task, agent_patch: str, tests: dict, test_output: 
         try:
             with urllib.request.urlopen(request, timeout=300) as response:
                 data = json.loads(response.read())
-            verdict = json.loads(data["choices"][0]["message"]["content"])
-            if verdict.get("verdict") not in ("pass", "fail"):
-                raise ValueError(f"unexpected verdict {verdict!r}")
+            verdict = parse(data["choices"][0]["message"].get("content"))
             usage = data.get("usage") or {}
             return {"verdict": verdict["verdict"], "reason": str(verdict.get("reason", "")).strip(),
                     "model": judge.model, "effort": judge.effort, "prompt_version": PROMPT_VERSION,
