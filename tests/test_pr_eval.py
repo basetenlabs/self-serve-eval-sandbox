@@ -484,6 +484,36 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertEqual(runner.diff_stats(numstat)["files"], 2)
 
 
+    def test_caches_from_running_code_are_not_part_of_the_diff(self):
+        import subprocess
+        import tarfile
+        with tempfile.TemporaryDirectory() as d:
+            work, source = Path(d) / "workspace", Path(d) / "source.tar.gz"
+            work.mkdir()
+            (Path(d) / "lib.py").write_text("old\n")
+            with tarfile.open(source, "w:gz") as tar:  # an archive without the repository's .gitignore
+                tar.add(Path(d) / "lib.py", "lib.py")
+
+            def local_sh(container, script, *, timeout, **_):  # /workspace and /tmp, here
+                script = script.replace("/tmp/source.tar.gz", str(source)).replace("/workspace", str(work))
+                p = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True, text=True,
+                                   env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull})
+                return p.returncode, p.stdout + p.stderr, False
+            task = tasks.Task(id="t", path=Path(d), instruction="", meta={"environment": {
+                "setup": "mkdir -p __pycache__ && echo setup > __pycache__/lib.cpython-314.pyc"}})
+            with mock.patch.object(runner, "sh", local_sh), mock.patch.object(runner, "snapshot", return_value=source), \
+                    mock.patch.object(runner.runtime, "upload"), mock.patch.object(runner, "block_lookups"):
+                reason, setup = runner.prepare_workspace("unused", task, Path(d))
+                self.assertIsNone(reason)
+                local_sh(None, "echo new > lib.py && echo run > __pycache__/lib.cpython-314.pyc && "
+                               "mkdir -p .pytest_cache && echo x > .pytest_cache/v", timeout=9)
+                with mock.patch.object(runner.runtime, "download",
+                                       side_effect=lambda c, remote, local, **_: local.write_bytes(
+                                           Path(remote.replace("/workspace", str(work))).read_bytes())):
+                    patch, numstat = runner.capture_patch("unused", setup["baseline"], Path(d) / "agent.patch")
+        self.assertIn("+new", patch)
+        self.assertEqual(runner.diff_stats(numstat)["files"], 1)
+
     def test_the_agents_own_tests_are_set_aside_before_the_hidden_ones(self):
         import subprocess
         from unittest import mock
@@ -978,6 +1008,14 @@ class JudgeTest(unittest.TestCase):
                                     "system", "user")
         self.assertEqual((sent["reasoning_effort"], sent["response_format"]), ("high", {"type": "json_object"}))
         self.assertEqual(graded["verdict"], "pass")
+
+    def test_judges_read_text_changes_and_only_the_names_of_binary_ones(self):
+        cache = "diff --git a/x.pyc b/x.pyc\nnew file mode 100644\nGIT binary patch\nliteral 9\nzcmV\n\n"
+        code = "diff --git a/lib.py b/lib.py\n--- a/lib.py\n+++ b/lib.py\n@@ -1 +1 @@\n-old\n+new\n"
+        shown = judge.readable(cache * 3 + code)
+        self.assertTrue(shown.startswith(code))
+        self.assertIn("[3 binary files not shown: x.pyc, x.pyc, x.pyc]", shown)
+        self.assertEqual(judge.readable(code), code)
 
     def test_a_verdict_is_read_from_a_fenced_or_chatty_reply(self):
         self.assertEqual(judge.parse('{"verdict": "fail", "reason": "x"}')["verdict"], "fail")

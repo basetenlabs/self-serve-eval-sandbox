@@ -96,12 +96,28 @@ def clip(text: str, limit: int = MAX_PATCH_CHARS) -> str:
     return text[:limit] + f"\n... [{len(text) - limit} more characters not shown]"
 
 
+def readable(patch: str) -> str:
+    """The patch's text files, with its binary ones named once at the end.
+
+    A judge can't read a binary hunk, and an agent's test runs can leave thousands of
+    them (caches) that would push its actual change past the clip.
+    """
+    text, binary = [], []
+    for f in re.split(r"(?m)^(?=diff --git )", patch):
+        (binary if re.search(r"(?m)^(GIT binary patch|Binary files .* differ)$", f) else text).append(f)
+    if not binary:
+        return patch
+    names = [m[1] for f in binary if (m := re.match(r"diff --git a/(\S+)", f))]
+    shown = ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
+    return "".join(text) + f"\n[{len(binary)} binary files not shown: {shown}]\n"
+
+
 def evidence(task: Task, agent_patch: str, tests: dict, test_output: str) -> str:
     """What every judge reads: the request, both diffs and the hidden tests' result."""
     reference = (task.path / "solution" / "reference.patch").read_text(errors="replace")
     return (f"## Change request ({task.meta['task']['repo']})\n\n{task.instruction.strip()}\n\n"
-            f"## Merged change\n\n```diff\n{clip(reference)}\n```\n\n"
-            f"## Agent's change\n\n```diff\n{clip(agent_patch)}\n```\n\n"
+            f"## Merged change\n\n```diff\n{clip(readable(reference))}\n```\n\n"
+            f"## Agent's change\n\n```diff\n{clip(readable(agent_patch))}\n```\n\n"
             f"## Hidden tests\n\n{'passed' if tests['passed'] else 'failed'}: {tests.get('summary', '')}\n\n"
             f"```\n{test_output[-3000:]}\n```")
 

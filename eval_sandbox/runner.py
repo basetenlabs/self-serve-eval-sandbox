@@ -55,6 +55,11 @@ HARNESS_ENV = {
 # Egress is enforced by the Blaxel proxy firewall, not hostname overrides.
 DISALLOWED_TOOLS = "WebFetch,WebSearch"
 
+# Caches that running code leaves behind are nobody's change. A repository can keep its
+# .gitignore out of the archive the task is cut from, and then every .pyc the agent's test
+# runs wrote would be in its diff, burying the change under megabytes of binary.
+CACHES = ("__pycache__/", "*.py[co]", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/")
+
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 PROVIDER_ERROR = re.compile(r"API Error|authentication|unauthori[sz]ed|invalid api key|credit balance|"
                             r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed", re.I)
@@ -320,12 +325,13 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
     """Base source in /workspace, dependencies installed, both committed as the baseline.
 
     Returns (invalid reason or None, setup stats). The baseline includes whatever setup
-    wrote outside .gitignore, so the agent's diff is only the agent's.
+    wrote outside .gitignore and CACHES, so the agent's diff is only the agent's.
     """
     runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
     commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
     code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
-                                 f"git init -q -b main && git add -A && {commit} base", timeout=300)
+                                 f"git init -q -b main && printf '%s\\n' {' '.join(map(shlex.quote, CACHES))} "
+                                 f">>.git/info/exclude && git add -A && {commit} base", timeout=300)
     if code != 0:
         (log_dir / "setup.log").write_text(out)
         return "workspace-error", {}
