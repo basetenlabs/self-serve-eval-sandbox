@@ -182,6 +182,9 @@ class App:
             data = tasks.gh(f"repos/{repo}")
         except (RuntimeError, SystemExit) as exc:
             return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
+        # The hosted page shares one GitHub login among everyone signed in; it never reads private code.
+        if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"):
+            return {"repo": repo, "error": "This hosted page runs public repositories only."}
         language = data.get("language") or "unknown"
         try:
             tasks.recipe(repo, language, [])
@@ -225,11 +228,11 @@ class App:
         if not 1 <= limit <= MAX_LIMIT:
             return {"error": f"Choose between 1 and {MAX_LIMIT} pull requests."}
         setup, test = (str(form.get(k) or "").strip()[:500] or None for k in ("setup", "test"))
-        if repo and not (setup and test):
+        if repo and (os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not (setup and test)):
             info = self.repo_info(repo)
             if info.get("error"):
                 return info
-            if not info["defaults"]:
+            if not info["defaults"] and not (setup and test):
                 return {"error": f"{repo} is {info['language']}: give the install and test commands "
                                  "(Go and Python repositories have defaults)."}
         run_id = f"{repo.split('/')[-1] if repo else 'sample'}-{datetime.now():%Y%m%d-%H%M%S}"

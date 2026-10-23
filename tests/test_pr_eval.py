@@ -590,6 +590,17 @@ class AppTest(unittest.TestCase):
         self.assertTrue(dead_run["resumable"])
         self.assertIn("boom", dead_run["log"])
 
+    def test_the_hosted_page_refuses_private_repositories(self):
+        from unittest import mock
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}):
+            self.assertNotIn("error", page.repo_info("o/r"))
+            with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                self.assertIn("public repositories only", page.repo_info("o/r")["error"])
+        with mock.patch.object(app.tasks, "gh", return_value={"private": False, "language": "Go"}), \
+                mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+            self.assertNotIn("error", page.repo_info("o/r"))
+
     def test_only_this_page_can_start_runs(self):
         import http.client
         import threading
