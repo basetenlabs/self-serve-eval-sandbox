@@ -94,7 +94,7 @@ class App:
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for r in runs)}
 
-    def checks(self, judge: config.Judge) -> dict:
+    def checks(self, judge: config.Panel) -> dict:
         """Dedicated Blaxel workspace, build CLI and GitHub; cache remote checks briefly."""
         when, cached = self.checked
         if time.monotonic() - when > 15:
@@ -110,8 +110,8 @@ class App:
             cached = {"blaxel": problem is None, "blaxel_problem": problem,
                       "bl_cli": bl_cli, "gh": gh, "image": image, "judge": judge.problem()}
             self.checked = (time.monotonic(), cached)
-        return {**cached, "judge": {"model": judge.model, "label": judge.label or judge.model, "effort": judge.effort, "env": judge.api_key_env, "ok": not cached["judge"],
-                                    "problem": cached["judge"]}}
+        return {**cached, "judge": {"label": judge.label, "chair": judge.chair.name if judge.chair else None,
+                                    "effort": judge.judges[0].effort, "ok": not cached["judge"], "problem": cached["judge"]}}
 
     def describe(self, job_dir: Path) -> dict | None:
         log = job_dir / "log.txt"

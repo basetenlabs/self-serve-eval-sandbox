@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import judge as judge_mod
 from . import runtime
-from .config import BASETEN_URL, Judge, Model, credential_env
+from .config import BASETEN_URL, Model, Panel, credential_env
 from .tasks import TEST_FILE, Task, snapshot
 from .tasks import load as load_task
 
@@ -88,7 +88,7 @@ class Settings:
     region: str = "us-pdx-1"
     workspace: str | None = None
     agent_timeout: int | None = None   # overrides the task's own
-    judge: Judge | None = None
+    judge: Panel | None = None
     keep_sandboxes: bool = False
 
 
@@ -521,11 +521,11 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     return finish(outcome, reason)
 
 
-def judge_attempt(judge: Judge, task: Task, patch: str, tests: dict, test_output: str,
+def judge_attempt(judge: Panel, task: Task, patch: str, tests: dict, test_output: str,
                   trial_dir: Path) -> tuple[dict, str, str | None]:
     """Grade one attempt and save the verdict. Returns (verdict, outcome, invalid reason).
 
-    Solved needs both: the hidden tests passed and the judge agreed.
+    Solved needs both: the hidden tests passed and the judges' final verdict was pass.
     """
     started = time.monotonic()
     verdict = judge_mod.grade(judge, task, patch, tests, test_output)
@@ -856,10 +856,10 @@ def cleanup(run_id: str | None = None, workspace: str | None = None) -> list[str
     return runtime.cleanup(run_id, workspace)
 
 
-def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 8, force: bool = False) -> list[dict]:
-    """Grade finished attempts again with this judge, without re-running any agent.
+def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = 8, force: bool = False) -> list[dict]:
+    """Grade finished attempts again with these judges, without re-running any agent.
 
-    Skips attempts already graded by the same judge model and prompt version unless
+    Skips attempts already graded by the same judges and prompt version unless
     `force`. Attempts that never reached the judge (setup, provider or verifier errors,
     empty diffs) are left as they are.
     """
@@ -872,7 +872,7 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 
         if result["outcome"] == "invalid" and result.get("invalid_reason") != "judge-error":
             return None
         old = result.get("judge") or {}
-        if not force and old.get("model") == judge.model and old.get("prompt_version") == judge_mod.PROMPT_VERSION:
+        if not force and old.get("model") == judge.name and old.get("prompt_version") == judge_mod.PROMPT_VERSION:
             return None
         before = result["outcome"]
         verdict, result["outcome"], result["invalid_reason"] = judge_attempt(
@@ -888,6 +888,6 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 
         changed = [r for r in pool.map(one, dirs) if r]
     meta_path = job_dir / "run.json"
     meta = json.loads(meta_path.read_text())
-    meta["judge"] = {"model": judge.model, "base_url": judge.base_url, "prompt_version": judge_mod.PROMPT_VERSION}
+    meta["judge"] = {**judge.as_dict(), "prompt_version": judge_mod.PROMPT_VERSION}
     write_json(meta_path, meta)
     return changed

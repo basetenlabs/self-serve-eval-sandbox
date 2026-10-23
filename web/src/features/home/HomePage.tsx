@@ -12,7 +12,7 @@ const STEPS = [
   { n: "01", title: "Pick PRs", text: "Paste pull request links, or take a repository's latest merges that came with tests." },
   { n: "02", title: "Check", text: "Keep a PR only if its tests fail before the change and pass after." },
   { n: "03", title: "Models code", text: "Each model gets the PR's request in its own sandbox, without the answer." },
-  { n: "04", title: "Grade", text: "Hidden tests run in a fresh sandbox, then a judge model reads the change." },
+  { n: "04", title: "Grade", text: "Hidden tests run in a fresh sandbox, then a panel of AI judges reviews the change." },
 ];
 
 export function HomePage({ state, error, go, hurry }: {

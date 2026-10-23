@@ -175,7 +175,7 @@ class BlaxelFlowTest(unittest.TestCase):
             self.assertFalse(serve.call_args.kwargs["open_browser"])
 
     def test_page_reports_connection_problem_instead_of_docker(self):
-        judge = config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")
+        judge = config.Panel([config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")])
         with tempfile.TemporaryDirectory() as root, \
                 mock.patch.object(judge, "problem", return_value="missing key"), \
                 mock.patch.object(app.runtime, "check_connection", side_effect=app.runtime.RuntimeError("workspace missing")), \
@@ -186,7 +186,7 @@ class BlaxelFlowTest(unittest.TestCase):
         self.assertNotIn("docker", checks)
 
     def test_page_checks_work_without_build_cli(self):
-        judge = config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")
+        judge = config.Panel([config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")])
         with tempfile.TemporaryDirectory() as root, \
                 mock.patch.object(judge, "problem", return_value=None), \
                 mock.patch.object(app.runtime, "check_connection"), \

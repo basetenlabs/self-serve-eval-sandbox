@@ -94,7 +94,7 @@ function RunHeader({ run, state, sentence, hurry }: { run: Run; state: AppState;
       </a>
       <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
         <div className="min-w-0 max-w-[860px] lg:flex-1">
-          <Eyebrow parts={[run.tasks ? plural(run.tasks, "PR") : null, vs, run.judged === false ? "Hidden tests only" : "Hidden tests + judge", when(run.started)]} />
+          <Eyebrow parts={[run.tasks ? plural(run.tasks, "PR") : null, vs, run.judged === false ? "Hidden tests only" : "Hidden tests + judges", when(run.started)]} />
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <h1 className="text-[36px] leading-tight font-normal tracking-[-0.03em] sm:text-[44px]">{run.title}</h1>
             <PhaseBadge phase={run.phase} className="mt-1" />

@@ -163,7 +163,7 @@ const langShort = (l: string) => (l === "TypeScript" ? "TS" : l === "Python" ? "
 
 /** The stage key, for the legend under the board. */
 export function BoardLegend({ judged }: { judged: boolean }) {
-  const items: [Tone, string][] = [["boot", "Boot sandboxes"], ["setup", "Install deps"], ["agent", "Agent codes"], ["tests", "Hidden tests"], ...(judged ? [["judge", "Judge"] as [Tone, string]] : [])];
+  const items: [Tone, string][] = [["boot", "Boot sandboxes"], ["setup", "Install deps"], ["agent", "Agent codes"], ["tests", "Hidden tests"], ...(judged ? [["judge", "Judges"] as [Tone, string]] : [])];
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2" aria-label="Each attempt's steps">
       {items.map(([tone, label], i) => {

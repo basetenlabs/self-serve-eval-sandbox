@@ -17,7 +17,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval_sandbox import app, cli, config, judge, pipeline, report, runner, tasks, trace  # noqa: E402
-from eval_sandbox.config import Judge, Model  # noqa: E402
+from eval_sandbox.config import Judge, Model, Panel  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 
@@ -55,7 +55,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(models["claude-opus"].kind, "closed")
         for model in models.values():
             self.assertIn(model.model, model.prices, f"{model.key} has no price for its own id")
-        self.assertTrue(judge.api_key_env)
+        self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3"])
+        self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3")
 
     def test_price_from_table(self):
         usage = {"zai-org/GLM-5.3": {"inputTokens": 1_000_000, "cacheReadInputTokens": 1_000_000, "outputTokens": 100_000}}
@@ -81,10 +82,19 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "models.toml"
             path.write_text('[models.m]\nkind = "open"\nprovider = "baseten"\nmodel = "m"\nmax_concurent = 2\n'
-                            '[judge]\nmodel = "j"\nbase_url = "http://x"\napi_key_env = "K"\n')
+                            '[judge]\n[[judge.panel]]\nmodel = "j"\nbase_url = "http://x"\napi_key_env = "K"\n')
             with self.assertRaises(SystemExit) as caught:
                 config.load(path)
         self.assertIn("max_concurent", str(caught.exception))
+
+    def test_a_config_from_before_panels_has_its_one_judge(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "models.toml"
+            path.write_text('[models.m]\nkind = "open"\nprovider = "baseten"\nmodel = "m"\n'
+                            '[judge]\nmodel = "j"\nlabel = "J"\neffort = "high"\nbase_url = "http://x/"\napi_key_env = "K"\n')
+            _, panel = config.load(path)
+        self.assertEqual([(j.model, j.base_url, j.effort) for j in panel.judges], [("j", "http://x", "high")])
+        self.assertIsNone(panel.chair)
 
 
 class CostTest(unittest.TestCase):
@@ -540,6 +550,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
         self.assertEqual(pipeline.resumed_judge({"judge": None}, "gpt-y"), "gpt-y")  # named on the command line
         self.assertEqual(pipeline.resumed_judge({}, "default"), "default")  # a run from before judges were recorded
+        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
+        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, "default"), "default")
+        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, "default"), "a")
 
     def job(self, d, request):
         from unittest import mock
@@ -921,38 +934,50 @@ class ReportTest(unittest.TestCase):
             self.assertNotIn("+</script><b>", html)  # an agent's diff can't end the data block
 
 
+def judged_task(d: str) -> tasks.Task:
+    (Path(d) / "solution").mkdir()
+    (Path(d) / "solution" / "reference.patch").write_text("diff")
+    return tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
+
+
+def chat_reply(content: str):
+    return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
+
+
 class JudgeTest(unittest.TestCase):
     task = tasks.Task(id="x", path=Path("/nonexistent"), meta={"task": {"repo": "a/b"}}, instruction="do it")
     judge = Judge(model="m", base_url="http://localhost:9", api_key_env="PR_EVAL_TEST_UNSET")
 
     def test_a_judge_that_cannot_run_is_caught_before_the_run(self):
         self.assertIn("PR_EVAL_TEST_UNSET", self.judge.problem())
+        with mock_env(CLAUDE_CODE_OAUTH_TOKEN="t"), mock.patch.object(config.shutil, "which", return_value="/bin/claude"):
+            self.assertIn("PR_EVAL_TEST_UNSET", Panel([Judge(model="c", provider="anthropic"), self.judge]).problem())
         with mock_env(PR_EVAL_TEST_KEY="k"):
             unreachable = Judge(model="m", base_url="http://127.0.0.1:9", api_key_env="PR_EVAL_TEST_KEY")
             self.assertIsNone(unreachable.problem())  # a network hiccup doesn't stop a run
 
+    def test_a_claude_judge_needs_claude_code(self):
+        with mock.patch.object(config.shutil, "which", return_value=None):
+            self.assertIn("runs through Claude Code", Judge(model="claude-x", provider="anthropic", label="C").problem())
+
     def test_missing_key_is_an_error_not_a_verdict(self):
-        from eval_sandbox import judge
-        self.assertIn("error", judge.grade(self.judge, self.task, "diff", {"passed": True}, ""))
+        with tempfile.TemporaryDirectory() as d:
+            graded = judge.grade(Panel([self.judge]), judged_task(d), "diff", {"passed": True}, "")
+        self.assertIn("PR_EVAL_TEST_UNSET", graded["error"])
+        self.assertNotIn("verdict", graded)
 
     def test_the_judge_asks_for_its_configured_reasoning_effort(self):
-        from unittest import mock
-        from eval_sandbox import judge
-        self.assertEqual(config.load()[1].effort, "high")
+        self.assertEqual({j.effort for j in config.load()[1].judges}, {"high"})
         sent = {}
 
         def respond(request, timeout):
             sent.update(json.loads(request.data))
-            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
-        with tempfile.TemporaryDirectory() as d, mock_env(PR_EVAL_TEST_KEY="k"), \
-                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
-            (Path(d) / "solution").mkdir()
-            (Path(d) / "solution" / "reference.patch").write_text("diff")
-            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
-            graded = judge.grade(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY", effort="high"),
-                                 task, "diff", {"passed": True}, "")
-        self.assertEqual(sent["reasoning_effort"], "high")
-        self.assertEqual((graded["verdict"], graded["effort"]), ("pass", "high"))
+            return chat_reply('{"verdict": "pass", "reason": "ok"}')
+        with mock_env(PR_EVAL_TEST_KEY="k"), mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
+            graded = judge.ask_chat(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY", effort="high"),
+                                    "system", "user")
+        self.assertEqual((sent["reasoning_effort"], sent["response_format"]), ("high", {"type": "json_object"}))
+        self.assertEqual(graded["verdict"], "pass")
 
     def test_a_verdict_is_read_from_a_fenced_or_chatty_reply(self):
         self.assertEqual(judge.parse('{"verdict": "fail", "reason": "x"}')["verdict"], "fail")
@@ -961,22 +986,16 @@ class JudgeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 judge.parse(reply)
 
-    def test_the_configured_judge_runs_on_baseten_without_json_mode(self):
-        _, configured = config.load()
-        self.assertEqual((configured.base_url, configured.api_key_env), (config.BASETEN_URL, "BASETEN_API_KEY"))
-        self.assertFalse(configured.json_mode)  # Baseten puts this model's JSON-mode answer in its reasoning
-        sent = {}
-
-        def respond(request, timeout):
-            sent.update(json.loads(request.data))
-            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
-        with tempfile.TemporaryDirectory() as d, mock_env(BASETEN_API_KEY="k"), \
-                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
-            (Path(d) / "solution").mkdir()
-            (Path(d) / "solution" / "reference.patch").write_text("diff")
-            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
-            judge.grade(configured, task, "diff", {"passed": True}, "")
-        self.assertNotIn("response_format", sent)
+    def test_the_configured_panel_reaches_each_judge_where_it_runs(self):
+        _, panel = config.load()
+        opus, gpt, kimi = panel.judges
+        self.assertEqual(opus.provider, "anthropic")  # Claude Code, with the Claude models' credential
+        self.assertEqual((gpt.base_url, gpt.api_key_env), ("https://api.openai.com/v1", "OPENAI_API_KEY"))
+        self.assertEqual((kimi.base_url, kimi.api_key_env), (config.BASETEN_URL, "BASETEN_API_KEY"))
+        self.assertIs(panel.chair, kimi)
+        self.assertEqual(panel.only("GPT-6.1 Sol").judges, [gpt])
+        with self.assertRaises(SystemExit):
+            panel.only("gpt-x")
 
     def test_a_judge_model_the_provider_does_not_list_is_caught(self):
         listing = io.BytesIO(json.dumps({"data": [{"id": "other"}]}).encode())
@@ -984,15 +1003,78 @@ class JudgeTest(unittest.TestCase):
             problem = Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY").problem()
         self.assertIn("can't use the judge model m", problem)
 
-    def test_solved_needs_the_tests_and_the_judge(self):
-        from unittest import mock
+    def test_solved_needs_the_tests_and_the_judges(self):
         cases = [(True, {"verdict": "pass"}, ("solved", None)), (True, {"verdict": "fail"}, ("failed", None)),
                  (False, {"verdict": "pass"}, ("failed", None)), (True, {"error": "HTTP 500"}, ("invalid", "judge-error"))]
         for passed, verdict, expected in cases:
             with tempfile.TemporaryDirectory() as d, mock.patch.object(runner.judge_mod, "grade", return_value=dict(verdict)):
-                _, outcome, reason = runner.judge_attempt(self.judge, self.task, "diff", {"passed": passed}, "", Path(d))
+                _, outcome, reason = runner.judge_attempt(Panel([self.judge]), self.task, "diff", {"passed": passed}, "", Path(d))
                 self.assertTrue((Path(d) / "judge.json").is_file())
             self.assertEqual((outcome, reason), expected, (passed, verdict))
+
+
+class PanelTest(unittest.TestCase):
+    panel = Panel([Judge(model="a", label="A"), Judge(model="b", label="B"), Judge(model="c", label="C")],
+                  Judge(model="c", label="C"))
+
+    def grade(self, votes: dict, chair: dict) -> tuple[dict, list[str]]:
+        """The panel's record when each judge answers with `votes[model]` and the chair with `chair`."""
+        asked = []
+
+        def ask(j, system, user):
+            asked.append(user)
+            return dict(chair) if system == judge.CHAIR else dict(votes[j.model])
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(judge, "ask", side_effect=ask):
+            return judge.grade(self.panel, judged_task(d), "diff", {"passed": True}, ""), asked
+
+    def test_the_chair_reads_every_verdict_and_gives_the_final_one(self):
+        votes = {"a": {"verdict": "pass", "reason": "fine"}, "b": {"verdict": "fail", "reason": "gamed"},
+                 "c": {"verdict": "pass", "reason": "ok"}}
+        graded, asked = self.grade(votes, {"verdict": "fail", "reason": "B is right: it hardcodes the value."})
+        self.assertEqual((graded["verdict"], graded["reason"]), ("fail", "B is right: it hardcodes the value."))
+        self.assertEqual([v["label"] for v in graded["panel"]], ["A", "B", "C"])
+        self.assertEqual(graded["chair"]["label"], "C")
+        self.assertIn("- B: fail. gamed", asked[-1])  # the chair sees the judges' reasons
+        self.assertEqual(graded["model"], "a+b+c>c")
+
+    def test_a_judge_that_fails_to_answer_leaves_the_rest_of_the_panel(self):
+        votes = {"a": {"verdict": "pass", "reason": "fine"}, "b": {"error": "HTTP 503"}, "c": {"verdict": "pass", "reason": "ok"}}
+        graded, asked = self.grade(votes, {"verdict": "pass", "reason": "Both judges that answered agree."})
+        self.assertEqual(graded["verdict"], "pass")
+        self.assertIn("- B: no verdict", asked[-1])
+        votes["c"] = {"error": "HTTP 429"}
+        graded, _ = self.grade(votes, {"verdict": "pass", "reason": "x"})
+        self.assertIn("B: HTTP 503", graded["error"])  # one of three is not a panel
+
+    def test_a_unanimous_panel_stands_when_the_chair_fails(self):
+        votes = {k: {"verdict": "fail", "reason": "incomplete"} for k in "abc"}
+        graded, _ = self.grade(votes, {"error": "HTTP 500"})
+        self.assertEqual(graded["verdict"], "fail")
+        votes["a"] = {"verdict": "pass", "reason": "fine"}
+        graded, _ = self.grade(votes, {"error": "HTTP 500"})
+        self.assertIn("chair", graded["error"])  # a split panel needs its chair
+
+    def test_a_claude_judge_runs_claude_code_with_no_tools_and_only_its_credential(self):
+        ran = {}
+
+        def run(command, **kw):
+            ran.update(command=command, **kw)
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+                {"result": '{"verdict": "pass", "reason": "ok"}', "total_cost_usd": 0.02,
+                 "usage": {"input_tokens": 5, "cache_read_input_tokens": 100, "output_tokens": 40}}))
+        with mock_env(CLAUDE_CODE_OAUTH_TOKEN="tok", BASETEN_API_KEY="secret"), \
+                mock.patch.object(judge.shutil, "which", return_value="/bin/claude"), \
+                mock.patch.object(judge.subprocess, "run", side_effect=run):
+            graded = judge.ask_claude(Judge(model="claude-x", provider="anthropic", effort="high"), "be fair", "the diff")
+        command = ran["command"]
+        self.assertEqual(command[command.index("--tools") + 1], "")
+        self.assertEqual(command[command.index("--effort") + 1], "high")
+        self.assertEqual(command[command.index("--system-prompt") + 1], "be fair")
+        self.assertEqual(ran["input"], "the diff")
+        self.assertEqual(ran["env"]["CLAUDE_CODE_OAUTH_TOKEN"], "tok")
+        self.assertNotIn("BASETEN_API_KEY", ran["env"])  # no other key reaches it
+        self.assertEqual(ran["env"]["HOME"], ran["cwd"])  # a throwaway home: no user settings, hooks or memory
+        self.assertEqual((graded["verdict"], graded["input_tokens"], graded["cost_usd"]), ("pass", 105, 0.02))
 
 
 if __name__ == "__main__":

@@ -92,8 +92,12 @@ class Job:
 
 
 def preflight(model_keys: list[str], judge_choice: str = "default",
-              models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Judge | None]:
-    """The models and judge for a run, or SystemExit saying what is missing."""
+              models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Panel | None]:
+    """The models and judges for a run, or SystemExit saying what is missing.
+
+    `judge_choice` is "default" for the configured panel, "none" for tests only, or one
+    judge's model id or label to grade with that judge alone.
+    """
     catalog, judge = config.load(models_config)
     unknown = [k for k in model_keys if k not in catalog]
     if unknown:
@@ -104,13 +108,13 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
     if judge_choice == "none":
         return models, None
     if judge_choice != "default":
-        judge.model = judge_choice
+        judge = judge.only(judge_choice)
     if problem := judge.problem():
         raise SystemExit(problem)
     return models, judge
 
 
-def new_job(request: Request, models: list[config.Model], judge: config.Judge | None, *, attempts: int = 1,
+def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
             name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
             tasks_dir: Path = tasks.DEFAULT_TASKS, workspace: str | None = None,
             region: str = "us-pdx-1") -> Job:
@@ -124,7 +128,7 @@ def new_job(request: Request, models: list[config.Model], judge: config.Judge | 
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
         "harness_version": None, "backend": "blaxel", "workspace": workspace, "image": image, "region": region,
         "attempts": attempts, "models": [m.as_dict() for m in models],
-        "judge": {"model": judge.model, "base_url": judge.base_url, "effort": judge.effort} if judge else None,
+        "judge": judge.as_dict() if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
 
@@ -367,4 +371,9 @@ def resumed_judge(meta: dict, choice: str) -> str:
     """The judge a resumed run started with, unless --judge names one, so a tests-only run stays tests only."""
     if choice != "default" or "judge" not in meta:
         return choice
-    return meta["judge"]["model"] if meta["judge"] else "none"
+    judge = meta["judge"]
+    if not judge:
+        return "none"
+    if "panel" not in judge:  # a run from before judge panels: its single judge
+        return judge["model"]
+    return "default" if judge.get("chair") else judge["panel"][0]["model"]

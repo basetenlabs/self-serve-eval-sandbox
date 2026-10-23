@@ -24,7 +24,7 @@ export interface Checks {
   bl_cli: boolean;
   gh: boolean;
   image: boolean;
-  judge: { model: string; label?: string; effort?: string | null; env: string; ok: boolean; problem?: string | null };
+  judge: { label: string; chair?: string | null; effort?: string | null; ok: boolean; problem?: string | null };
 }
 
 export type Phase = "collecting" | "checking" | "running" | "judging" | "reporting" | "done" | "stopped" | "failed" | string;
@@ -225,9 +225,17 @@ export interface Trial {
   } | null;
   diff?: { files: number; added: number; removed: number } | null;
   tests?: { passed?: boolean; summary?: string; set_aside?: string[] } | null;
-  judge?: { verdict?: string; reason?: string; error?: string } | null;
+  judge?: (Vote & { panel?: Vote[]; chair?: Vote | null }) | null;
   patch?: string | null;
   verifier_tail?: string | null;
+}
+
+/** One judge's verdict on an attempt, or the panel's final one. */
+export interface Vote {
+  label?: string;
+  verdict?: string;
+  reason?: string;
+  error?: string;
 }
 
 export interface Slice {
@@ -245,7 +253,7 @@ export interface Report {
     attempts: number;
     tasks?: string[];
     harness_version?: string;
-    judge?: { model?: string; effort?: string } | null;
+    judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;
     note?: string | null;
     request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;
   };

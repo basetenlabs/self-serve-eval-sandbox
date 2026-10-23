@@ -105,16 +105,16 @@ def cmd_validate(args) -> int:
 def cmd_rejudge(args) -> int:
     _, judge = config.load(args.models_config)
     if args.judge:
-        judge.model = args.judge
-    if not judge.api_key:
-        sys.exit(f"the judge needs {judge.api_key_env}")
+        judge = judge.only(args.judge)
+    if problem := judge.problem():
+        sys.exit(problem)
     meta = json.loads((args.job / "run.json").read_text())
     tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
     changed = runner.rejudge(args.job, tasks_dir, judge, concurrency=args.concurrency, force=args.force)
     flips = [c for c in changed if c["before"] != c["after"]]
     for c in flips:
         print(f"{c['trial']}: {c['before']} -> {c['after']} ({c['reason']})")
-    print(f"regraded {len(changed)} attempt(s) with {judge.model}; {len(flips)} changed outcome")
+    print(f"regraded {len(changed)} attempt(s) with {judge.label}; {len(flips)} changed outcome")
     print(report.build(args.job))
     return 0
 
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--resume", type=Path, help="finish a stopped run in this job directory")
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
-    r.add_argument("--judge", default="default", help="'none' to score on tests only, or a judge model id")
+    r.add_argument("--judge", default="default", help="'none' to score on tests only, or one judge's model id to grade with it alone")
     r.add_argument("--concurrency", type=int, default=8, help="attempts and checks at once (default 8)")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
     r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
@@ -221,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
 
     j = sub.add_parser("rejudge", help="grade a finished run again (new judge model or prompt) without re-running agents")
     j.add_argument("job", type=Path)
-    j.add_argument("--judge", help="judge model id (default from configs/models.toml)")
+    j.add_argument("--judge", help="grade with this one judge from the panel (default: the whole panel)")
     j.add_argument("--force", action="store_true", help="also regrade attempts this judge already graded")
     j.add_argument("--concurrency", type=int, default=8)
     j.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)

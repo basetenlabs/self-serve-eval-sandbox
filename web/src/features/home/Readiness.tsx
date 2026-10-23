@@ -18,7 +18,8 @@ export function readiness(state: AppState): Item[] {
     { ok: c.image ? true : null, label: c.image ? "Trial image built" : "Trial image builds on the first run", fix: "A few minutes, once" },
     { ok: !!baseten && !baseten.missing, label: "Baseten key, for open models", fix: "Set BASETEN_API_KEY, then restart pr-eval serve" },
     { ok: !!claude && !claude.missing, label: "Claude key, for Claude models", fix: "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve" },
-    { ok: c.judge.ok, label: `Judge: ${c.judge.label ?? c.judge.model}${c.judge.env === "BASETEN_API_KEY" ? " on Baseten" : ""}${c.judge.effort ? `, ${c.judge.effort} effort` : ""}`, fix: c.judge.problem || `Set ${c.judge.env}, then restart pr-eval serve` },
+    { ok: c.judge.ok, label: `${c.judge.chair ? "Judges" : "Judge"}: ${c.judge.label}${c.judge.effort ? ` at ${c.judge.effort} effort` : ""}${c.judge.chair ? `; ${c.judge.chair} gives the final verdict` : ""}`,
+      fix: c.judge.problem ? `${c.judge.problem}, then restart pr-eval serve` : "Restart pr-eval serve" },
   ];
 }
 
