@@ -302,7 +302,7 @@ table.board { border-collapse: separate; border-spacing: 0; width: 100%; min-wid
 .t-boot { --c: var(--s-boot); } .t-setup { --c: var(--s-setup); } .t-agent { --c: var(--s-agent); } .t-tests { --c: var(--s-tests); }
 .t-judge { --c: var(--s-judge); } .t-check { --c: var(--s-check); } .t-good { --c: var(--good); } .t-bad { --c: var(--bad); }
 .t-warn { --c: var(--warn); } .t-idle { --c: var(--faint); }
-.cell { width: 178px; border-radius: 10px; padding: 7px 10px; display: grid; gap: 5px; position: relative; overflow: hidden;
+.cell { width: 184px; border-radius: 10px; padding: 7px 10px; display: grid; gap: 5px; position: relative; overflow: hidden;
   background: color-mix(in srgb, var(--c) 9%, var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 26%, transparent); color: var(--ink-2); }
 .cell.t-idle { background: transparent; border-style: dashed; border-color: var(--line-2); color: var(--muted); }
 .cell > * { position: relative; z-index: 1; }
@@ -821,7 +821,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 10px 0 48px; display: 
       ["Find PRs", "merged, with tests", "search", r.phase !== "collecting", r.phase === "collecting"],
       ["Check", "fail before, pass after", "shield", checked, checksLive],
       ["Models code", "one sandbox each", "code", done || (checked && !doing(["queued", "sandboxes", "setup", "agent"])), doing(["sandboxes", "setup", "agent"])],
-      ["Grade", "hidden tests + judge", "gavel", done, doing(["tests", "judge"])],
+      ["Grade", r.judged === false ? "hidden tests" : "hidden tests + judge", "gavel", done, doing(["tests", "judge"])],
       ["Report", "solve rate and cost", "chart", done && !!r.report, false],
     ];
     const stepper = el("div", { class: "stepper", "aria-label": "Run steps" }, steps.map(([name, what, ic, ok, now]) => {
@@ -852,7 +852,8 @@ footer { color: var(--muted); font-size: 12.5px; padding: 10px 0 48px; display: 
         el("span", { class: "t-check" }, el("i"), "PR check")));
 
     const share = scored ? finished / scored : 0, C = 2 * Math.PI * 32;
-    const elapsed = r.started ? Math.round(((active ? Date.now() : new Date(r.active_at)) - new Date(r.started)) / 1000) : null;
+    let elapsed = r.started ? Math.round(((active ? Date.now() : new Date(r.active_at)) - new Date(r.started)) / 1000) : null;
+    if (!active && elapsed > 3 * 3600) elapsed = null;  // regraded or resumed later: the span isn't the run's time
     const prog = el("div", { class: "panel" },
       el("div", { class: "panel-label" }, icon("activity"), "Progress"),
       el("div", { class: "progress" },
@@ -863,7 +864,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 10px 0 48px; display: 
         el("div", { class: "mini" },
           el("span", {}, el("b", {}, `${finished}/${scored || "–"}`), " attempts done"),
           elapsed != null ? el("span", { class: "clock-big", ...(active ? { "data-since": r.started } : {}) }, clock(elapsed)) : null,
-          el("span", {}, active ? "elapsed" : "total time"))));
+          elapsed != null ? el("span", {}, active ? "elapsed" : "total time") : null)));
 
     const scores = el("div", { class: "panel" },
       el("div", { class: "panel-label" }, icon("chart"), active ? "Solved so far" : "Solved"),
@@ -921,7 +922,7 @@ footer { color: var(--muted); font-size: 12.5px; padding: 10px 0 48px; display: 
     let sub = null;
     if (live) sub = el("div", { class: "segs", "aria-hidden": "true" }, STEPS.map((_, i) => el("i", { class: i < step ? "on" : i === step ? "now" : null })));
     else if (c.stage === "solved" || c.stage === "failed") {
-      const why = c.stage === "failed" ? (c.tests_passed === false ? "tests failed" : c.judge === "fail" ? "judge said no" : null) : judged ? "tests + judge" : "tests passed";
+      const why = c.stage === "failed" ? (c.tests_passed === false ? "tests failed" : c.judge === "fail" ? "judge said no" : null) : null;
       sub = el("div", { class: "sub" }, [why, clock(c.seconds), c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · "));
     } else if (c.stage === "invalid") sub = el("div", { class: "sub" }, c.reason || "");
     return el("div", { class: `cell t-${tone}${live ? " live" : ""}`, title: c.stage === "invalid" ? "Lost to setup, sandbox or provider trouble, not the model" : null },
