@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -17,6 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval_sandbox import app, config, pipeline, report, runner, tasks  # noqa: E402
 from eval_sandbox.config import Judge, Model  # noqa: E402
+
+WEB = Path(__file__).resolve().parents[1] / "web"
+
+
+def web_source(entry: str) -> str:
+    """A web/ source file, or every file under a web/ folder, as one string."""
+    full = WEB / entry
+    paths = sorted(p for p in full.rglob("*") if p.is_file()) if full.is_dir() else [full]
+    return "\n".join(p.read_text() for p in paths)
 
 
 def mock_env(**values):
@@ -693,15 +703,15 @@ class ReportTest(unittest.TestCase):
     def test_pages_hide_docker_wording(self):
         page = app.PAGE.read_text()
         self.assertNotIn("Docker", page)
-        self.assertIn('c.blaxel, "Dedicated Blaxel workspace"', page)
-        self.assertNotIn('${run.image}', report.TEMPLATE.read_text())
+        self.assertNotIn("Docker", report.TEMPLATE.read_text())
+        self.assertIn("Dedicated Blaxel workspace", page)
+        self.assertNotIn("run.image", web_source("src/features/report"))  # the trial image stays out of reports
 
     def test_report_header_omits_judge_metadata(self):
-        template = report.TEMPLATE.read_text()
-        header = template.split("// ---------- header + headline ----------", 1)[1].split("const closed =", 1)[0]
-        self.assertNotIn("run.judge", header)
-        self.assertNotIn("Tests only, no judge", header)
-        self.assertIn("if (r.judge)", template)  # keep verdicts in the attempt details
+        view = web_source("src/features/report/ReportView.tsx")
+        header = view.split("export function reportFacts", 1)[1].split("export function Banners", 1)[0]
+        self.assertNotIn("judge", header.lower())
+        self.assertIn("if (r.judge)", web_source("src/features/report/TaskSheet.tsx"))  # verdicts stay in the attempt details
 
     def test_total_timing_distinguishes_parallel_work_from_elapsed_time(self):
         trials = [
@@ -731,22 +741,34 @@ class ReportTest(unittest.TestCase):
 
     def test_report_has_ranked_cards_and_three_way_task_comparison(self):
         template = report.TEMPLATE.read_text()
-        self.assertIn('<ol class="scores" id="scores">', template)
-        self.assertIn('rankedModels.forEach((m, rank)', template)
-        self.assertIn('metric("Total elapsed time', template)
-        self.assertNotIn('Whole run elapsed', template)
-        self.assertNotIn('id="run-timing"', template)
-        self.assertNotIn('id="lede"', template)
-        self.assertNotIn('id="h-scores"', template)
-        self.assertNotIn("Ranked by solve rate, then", template)
-        self.assertNotIn("Agent time adds up work across all attempts", template)
+        for heading in ("Head to head", "All models", "Quality against cost", "By task type", "Total wall clock"):
+            self.assertIn(heading, template)
+        view = web_source("src/features/report")
         for metric in ("pass_at_1", "cost_per_solved", "median_seconds"):
-            self.assertIn(f'data-metric="{metric}"', template)
-        self.assertIn('aria-describedby="metric-hint"', template)
-        self.assertIn('<section aria-labelledby="h-slices" hidden>', template)
-        self.assertIn('<section aria-labelledby="h-tasks" hidden>', template)
-        self.assertNotIn('How this was measured', template)
-        self.assertNotIn('document.getElementById("method")', template)
+            self.assertIn(f'"{metric}"', view)
+        self.assertIn("Agent's diff", template)
+        self.assertIn("Merged diff", template)
+        self.assertNotIn("How this was measured", template)
+
+    def test_built_pages_match_their_sources(self):
+        # Each page carries a hash of the web/ sources it was built from (web/build.ts computes it the
+        # same way). A mismatch means web/ changed without `cd web && npm ci && npm run build`.
+        digest = hashlib.sha256()
+        files = []
+        for entry in ("src", "index.html", "report.html", "vite.config.ts", "build.ts", "package-lock.json"):
+            full = WEB / entry
+            files += [p for p in full.rglob("*") if p.is_file()] if full.is_dir() else [full]
+        for rel in sorted(p.relative_to(WEB).as_posix() for p in files):
+            digest.update(rel.encode() + b"\0" + (WEB / rel).read_bytes() + b"\0")
+        for page in (app.PAGE, report.TEMPLATE):
+            built = page.read_text().partition('<meta name="pr-eval-build" content="')[2][:64]
+            self.assertEqual(built, digest.hexdigest(), f"{page.name} is stale: run `cd web && npm run build`")
+
+    def test_report_template_keeps_one_slot_for_data_and_title(self):
+        template = report.TEMPLATE.read_text()
+        self.assertEqual(template.count("__REPORT_DATA__"), 1)
+        self.assertEqual(template.count("__REPORT_TITLE__"), 1)
+        self.assertNotIn("__REPORT_DATA__", app.PAGE.read_text())
 
     def test_report_builds_from_a_job_directory(self):
         with tempfile.TemporaryDirectory() as d:

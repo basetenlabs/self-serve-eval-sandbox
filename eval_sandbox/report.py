@@ -173,7 +173,7 @@ def build(job_dir: Path) -> Path:
     write_atomic(job_dir / "report.json", json.dumps(data, indent=1))
     html = TEMPLATE.read_text()
     payload = json.dumps(data).replace("</", "<\\/")  # never close the script tag early
-    html = html.replace("__REPORT_DATA__", payload).replace("__REPORT_TITLE__", f"PR eval · {data['run']['run_id']}")
+    html = html.replace("__REPORT_DATA__", payload).replace("__REPORT_TITLE__", f"Eval Sandbox · {data['run']['run_id']}")
     target = job_dir / "report.html"
     write_atomic(target, html)
     return target
