@@ -42,9 +42,10 @@ LEFT_OUT = {
 
 @dataclass
 class Request:
-    """What a run covers: recent merged PRs from `repos`, or the sample tasks when empty."""
+    """What a run covers: recent merged PRs from `repos`, exact ones from `pulls`, or the sample tasks."""
     repos: list[str] = field(default_factory=list)
-    prs: list[int] | None = None
+    prs: list[int] | None = None  # these PRs of the one repository in `repos`
+    pulls: dict[str, list[int]] = field(default_factory=dict)  # exactly these PRs, by repository
     limit: int | None = DEFAULT_LIMIT
     since: str | None = None
     setup: str | None = None
@@ -57,9 +58,12 @@ class Request:
     def describe(self) -> str:
         if self.task_ids:
             return f"{len(self.task_ids)} chosen tasks"
-        if self.repos:
-            return ", ".join(self.repos)
+        if self.repos or self.pulls:
+            return ", ".join(self.named())
         return "the quick sample" if self.quick else "the sample tasks"
+
+    def named(self) -> list[str]:
+        return list(dict.fromkeys([*self.repos, *self.pulls]))
 
 
 def now() -> str:
@@ -127,16 +131,18 @@ def new_job(request: Request, models: list[config.Model], judge: config.Judge | 
 
 def default_name(request: Request) -> str:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{request.repos[0].split('/')[-1] if request.repos else 'quick' if request.quick else 'sample'}-{stamp}"
+    named = request.named()
+    return f"{named[0].split('/')[-1] if named else 'quick' if request.quick else 'sample'}-{stamp}"
 
 
 def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
     """Task folders for the request, collected from GitHub where they don't exist yet."""
     if request.task_ids:
         return tasks.discover(tasks_dir, request.task_ids)
-    if request.repos:
-        paths = [path for repo in request.repos for path in tasks.collect(
-            repo, tasks_dir, prs=request.prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
+    if request.repos or request.pulls:
+        wanted = {repo: request.prs for repo in request.repos} | request.pulls
+        paths = [path for repo, prs in wanted.items() for path in tasks.collect(
+            repo, tasks_dir, prs=prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
             setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines)]
         return [tasks.load(p) for p in paths]
     paths = [path for repo, prs in tasks.sample(request.quick).items() for path in tasks.collect(repo, tasks_dir, prs=prs)]

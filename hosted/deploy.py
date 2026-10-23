@@ -1,7 +1,7 @@
 """Deploy the eval page to a Blaxel sandbox behind "Sign in with Blaxel".
 
     .venv/bin/python hosted/deploy.py                  create or update, then check the signed-out answers
-    .venv/bin/python hosted/deploy.py --seed jobs/x    also copy finished runs' reports to the hosted page
+    .venv/bin/python hosted/deploy.py --seed jobs/x    also copy finished runs' reports and traces to the hosted page
     .venv/bin/python hosted/deploy.py --delete         remove the sandbox (add --volume to drop its data too)
 
 Where it runs (the dedicated trial workspace, so the page can start trials there):
@@ -14,8 +14,7 @@ Where it runs (the dedicated trial workspace, so the page can start trials there
              environment only; never written to the volume, the image or this repository
 
 Keys come from the environment when set, else from the Keychain:
-    OPENAI_API_KEY          Keychain baseten-openai-api-key (the judge)
-    BASETEN_API_KEY         Keychain baseten-api-key (open models)
+    BASETEN_API_KEY         Keychain baseten-api-key (open models and the judge)
     CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models)
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
@@ -24,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import re
 import shlex
@@ -35,6 +35,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from eval_sandbox import trace  # noqa: E402
 WORKSPACE = "pr-eval-01db4d88"
 REGION = "us-pdx-1"
 SANDBOX = "pr-eval-host"
@@ -49,15 +51,15 @@ APP = "/data/app"
 LABELS = {"app": "pr-eval-host", "owner": "mstolarz"}
 # The release: everything the page and its runs read from the repository.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
-# Only a run's summary reaches the hosted page: no transcripts, patches or logs.
+# A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
+# no raw transcripts or logs.
 SEED_FILES = ["run.json", "report.json", "report.html"]
 SECRETS = {
-    "OPENAI_API_KEY": "baseten-openai-api-key",
     "BASETEN_API_KEY": "baseten-api-key",
     "CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-claude-code-oauth-token",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
-LEAK = re.compile(r"sk-(proj|ant|pg)-[A-Za-z0-9_-]{16,}|gh[opsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}")
+LEAK = trace.SECRET
 
 
 def step(message: str) -> None:
@@ -162,6 +164,11 @@ def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
             if LEAK.search(text) or any(value in text for value in keys.values()):
                 raise SystemExit(f"{result} looks like it holds a credential; not uploading it")
             out[f"jobs/{job.name}/trials/{result.parent.name}/result.json"] = result.read_bytes()
+            if condensed := trace.condense(result.parent):
+                text = json.dumps(condensed)
+                if LEAK.search(text) or any(value in text for value in keys.values()):
+                    raise SystemExit(f"{result.parent}'s trace still looks like it holds a credential; not uploading it")
+                out[f"jobs/{job.name}/trials/{result.parent.name}/trace.json"] = text.encode()
     return out
 
 

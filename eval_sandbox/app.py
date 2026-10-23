@@ -1,4 +1,4 @@
-"""The local page: pick a repository and models, start a run, watch it, open its report.
+"""The local page: pick pull requests and models, start a run, watch it, open its report.
 
 `pr-eval serve` starts it on 127.0.0.1. A run started here is an ordinary `pr-eval run`
 in a process of its own, logging to jobs/<run>/log.txt, so the page and the terminal do
@@ -22,11 +22,14 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import config, pipeline, runner, runtime, tasks
+from . import config, pipeline, runner, runtime, tasks, trace
 
 PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 RUN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")  # never "." or ".."
+# The only files under jobs/ the page serves: each run's report. Transcripts, logs and
+# diffs stay on disk; an attempt's trace goes out condensed and redacted, by /api/trace.
+REPORT_FILE = re.compile(r"/([A-Za-z0-9_-][A-Za-z0-9_.-]*)/report\.(html|json)")
 MAX_LIMIT = 50
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
@@ -68,25 +71,25 @@ class App:
         self.lock = threading.RLock()  # one start or resume at a time, so two tabs can't start two runs
         self.checked: tuple[float, dict] = (0.0, {})
         self.task_info: dict[Path, dict] = {}
+        self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
 
     # ---------- what the page shows ----------
 
-    def state(self) -> dict:
+    def state(self, viewing: str = "") -> dict:
         for child in list(self.children.values()):
             child.poll()
         catalog, judge = config.load(self.models_config)
         runs = [r for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
             if self.jobs_dir.is_dir() else []
         runs.sort(key=lambda r: r["active_at"], reverse=True)
-        for i, run in enumerate(runs):  # the live board: every run going, and the latest one
-            if i == 0 or run["phase"] in pipeline.ACTIVE:
+        for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
+            if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
                 run["board"] = self.board(run)
         estimates = self.estimates(runs)
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
-                "sample": {"tasks": sum(map(len, tasks.sample().values())), "repos": len(tasks.sample())},
                 "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True))},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for r in runs)}
@@ -107,7 +110,7 @@ class App:
             cached = {"blaxel": problem is None, "blaxel_problem": problem,
                       "bl_cli": bl_cli, "gh": gh, "image": image, "judge": judge.problem()}
             self.checked = (time.monotonic(), cached)
-        return {**cached, "judge": {"model": judge.model, "effort": judge.effort, "env": judge.api_key_env, "ok": not cached["judge"],
+        return {**cached, "judge": {"model": judge.model, "label": judge.label or judge.model, "effort": judge.effort, "env": judge.api_key_env, "ok": not cached["judge"],
                                     "problem": cached["judge"]}}
 
     def describe(self, job_dir: Path) -> dict | None:
@@ -144,8 +147,8 @@ class App:
         request = meta.get("request") or {}
         repos = sorted({repo_of(t) for t in run_tasks})
         sample = {f"{r.replace('/', '__')}-{n}" for r, prs in tasks.sample().items() for n in prs}
-        if request.get("repos"):
-            title = ", ".join(request["repos"])
+        if named := list(dict.fromkeys([*(request.get("repos") or []), *(request.get("pulls") or {})])):
+            title = ", ".join(named)
         elif request.get("quick"):
             title = "Quick sample"
         elif (run_tasks and set(run_tasks) <= sample) or (request and not request.get("task_ids")):
@@ -254,6 +257,30 @@ class App:
             defaults = False
         return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults}
 
+    def pulls(self, text: str, numbers: str = "") -> dict:
+        """Pull requests in a repository and which can be tasks: these numbers, or the latest merged."""
+        info = self.repo_info(text)
+        if info.get("error"):
+            return info
+        repo, wanted = info["repo"], [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
+        key = f"{repo}#{','.join(map(str, wanted))}"
+        when, found = self.browsed.get(key, (0.0, None))
+        if found and time.monotonic() - when < 300:
+            return found
+        try:
+            found = {**info, "prs": tasks.browse(repo, wanted)}
+        except (RuntimeError, SystemExit) as exc:
+            return {"repo": repo, "error": f"Can't list {repo}'s pull requests ({str(exc)[-80:]})."}
+        self.browsed[key] = (time.monotonic(), found)
+        return found
+
+    def trace(self, run_id: str, trial: str) -> dict:
+        """One attempt's trace, condensed and redacted."""
+        path = self.jobs_dir / run_id / "trials" / trial
+        if not (RUN_ID.fullmatch(run_id) and RUN_ID.fullmatch(trial) and path.is_dir()):
+            return {"error": "No such attempt."}
+        return trace.load(path) or {"error": "This attempt has no trace: its agent hasn't finished, or never ran."}
+
     # ---------- what the page does ----------
 
     def start(self, form: dict) -> dict:
@@ -270,10 +297,12 @@ class App:
         if not checks["bl_cli"]:
             return {"error": "Install the Blaxel CLI (bl): runs use it to build and find the trial image."}
         quick = bool(form.get("quick"))
-        sample = bool(form.get("sample")) or quick
-        repo = None if sample else parse_repo(str(form.get("repo") or ""))
-        if not sample and not repo:
-            return {"error": "Enter a GitHub repository as owner/repo, or choose the sample tasks."}
+        pulls = {} if quick else self.chosen_pulls(form.get("pulls"))
+        if isinstance(pulls, str):
+            return {"error": pulls}
+        repo = None if quick or pulls else parse_repo(str(form.get("repo") or ""))
+        if not (quick or pulls or repo):
+            return {"error": "Enter a GitHub repository as owner/repo, or paste pull request links."}
         if not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
@@ -290,21 +319,37 @@ class App:
         if not 1 <= limit <= MAX_LIMIT:
             return {"error": f"Choose between 1 and {MAX_LIMIT} pull requests."}
         setup, test = (str(form.get(k) or "").strip()[:500] or None for k in ("setup", "test"))
-        if repo and (os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not (setup and test)):
-            info = self.repo_info(repo)
+        repos = list(pulls) or ([repo] if repo else [])
+        if setup and test and len(repos) > 1:
+            return {"error": "Install and test commands are for one repository: paste pull requests from one at a time."}
+        for name in repos if os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not (setup and test) else []:
+            info = self.repo_info(name)
             if info.get("error"):
                 return info
             if not info["defaults"] and not (setup and test):
-                return {"error": f"{repo} is {info['language']}: give the install and test commands "
+                return {"error": f"{name} is {info['language']}: give the install and test commands "
                                  "(Go and Python repositories have defaults)."}
-        run_id = f"{repo.split('/')[-1] if repo else 'quick' if quick else 'sample'}-{datetime.now():%Y%m%d-%H%M%S}"
-        argv = [repo] if repo else []
-        argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else ["--limit", str(limit)]
+        run_id = f"{repos[0].split('/')[-1] if repos else 'quick'}-{datetime.now():%Y%m%d-%H%M%S}"
+        argv = [f"{name}#{n}" for name, numbers in pulls.items() for n in numbers] or ([repo] if repo else [])
+        argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else [] if pulls else ["--limit", str(limit)]
         argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         self.spawn(run_id, argv)
         return {"id": run_id}
+
+    @staticmethod
+    def chosen_pulls(value) -> dict[str, list[int]] | str:
+        """{owner/repo: [numbers]} from the page, or what's wrong with it."""
+        pulls: dict[str, list[int]] = {}
+        for name, numbers in (value or {}).items() if isinstance(value, dict) else []:
+            repo = parse_repo(str(name))
+            if not repo or not isinstance(numbers, list) or not all(isinstance(n, int) and n > 0 for n in numbers):
+                return "Pull requests are owner/repo and their numbers."
+            pulls[repo] = sorted(set(pulls.get(repo, []) + numbers))
+        if sum(map(len, pulls.values())) > MAX_LIMIT:
+            return f"Choose at most {MAX_LIMIT} pull requests."
+        return {repo: numbers for repo, numbers in pulls.items() if numbers}
 
     def stop(self, run_id: str) -> dict:
         run = self.find(run_id)
@@ -390,11 +435,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_error(403)
         if url.path in ("/", "/index.html"):
             return self.send_body(PAGE.read_bytes(), "text/html; charset=utf-8")
+        query = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/api/state":
-            return self.send_json(self.app.state())
+            return self.send_json(self.app.state(query.get("run", "")))
         if url.path == "/api/repo":
-            return self.send_json(self.app.repo_info(parse_qs(url.query).get("name", [""])[0]))
-        return super().do_GET()
+            return self.send_json(self.app.repo_info(query.get("name", "")))
+        if url.path == "/api/prs":
+            return self.send_json(self.app.pulls(query.get("repo", ""), query.get("numbers", "")))
+        if url.path == "/api/trace":
+            return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", "")))
+        if REPORT_FILE.fullmatch(url.path):
+            return super().do_GET()
+        return self.send_error(404)
 
     def do_POST(self):
         # Only this page may start or stop runs: they spend money. A JSON body from another

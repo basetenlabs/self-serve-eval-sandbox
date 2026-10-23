@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval_sandbox import app, config, pipeline, report, runner, tasks  # noqa: E402
+from eval_sandbox import app, cli, config, judge, pipeline, report, runner, tasks, trace  # noqa: E402
 from eval_sandbox.config import Judge, Model  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -398,6 +398,51 @@ class CollectTest(unittest.TestCase):
             tasks.collect("o/r", self.out, prs=[7], setup="make deps", test="pytest")
             export.assert_called_once()
 
+    def test_pull_requests_in_the_forms_people_paste(self):
+        for text in ("https://github.com/o/r/pull/12", "github.com/o/r/pull/12/files", " o/r#12 ",
+                     "https://github.com/o/r/pull/12#discussion_r1", "https://www.github.com/o/r/pulls/12?w=1"):
+            self.assertEqual(tasks.parse_pull(text), ("o/r", 12), text)
+        for text in ("o/r", "https://github.com/o/r", "https://github.com/o/r/issues/12", "o/r#x", "#12"):
+            self.assertIsNone(tasks.parse_pull(text), text)
+
+    def test_a_pr_fits_when_it_changes_code_and_tests_at_a_reviewable_size(self):
+        code, test = {"path": "a.go", "role": "implementation", "lines": 10}, {"path": "a_test.go", "role": "test", "lines": 10}
+        self.assertIsNone(tasks.unfit([code, test]))
+        self.assertIn("both code and tests", tasks.unfit([code]))
+        self.assertIn("too large", tasks.unfit([code, {**test, "lines": tasks.MAX_LINES}]))
+        self.assertEqual([tasks.role(p) for p in ("pkg/a_test.go", "src/a.ts", "docs/a.py", "README.md")],
+                         ["test", "implementation", "support", "support"])
+
+    def test_recent_prs_say_which_can_be_tasks(self):
+        listing = [{"number": n, "title": t, "html_url": f"u{n}", "merged_at": m, "user": {"login": "a"}}
+                   for n, t, m in ((1, "Fix parser", "2026-10-02"), (2, "Bump deps", "2026-10-03"), (3, "Open", None))]
+        files = {1: [{"filename": "p.go", "additions": 5, "deletions": 1}, {"filename": "p_test.go", "additions": 9, "deletions": 0}],
+                 2: [{"filename": "go.mod", "additions": 1, "deletions": 1}]}
+
+        def gh(endpoint):
+            if endpoint.endswith("per_page=100") and "/files" in endpoint:
+                return files[int(endpoint.split("/pulls/")[1].split("/")[0])]
+            return listing
+        with mock.patch.object(tasks, "gh", side_effect=gh):
+            rows = tasks.browse("o/r")
+        self.assertEqual([r["number"] for r in rows], [2, 1])  # merged only, newest first
+        self.assertEqual((rows[1]["why"], rows[1]["lines"], rows[1]["tests"]), (None, 15, 1))
+        self.assertIn("both code and tests", rows[0]["why"])
+        self.assertTrue(rows[0]["maintenance"])
+        self.assertTrue(tasks.MAINTENANCE.search("Merge stable into main"))  # a branch sync, not a change to make
+
+        def by_number(endpoint):
+            if "/files" in endpoint:
+                return gh(endpoint)
+            number = int(endpoint.rsplit("/", 1)[1])
+            if number == 404:
+                raise RuntimeError("HTTP 404")
+            return next(pr for pr in listing if pr["number"] == number)
+        with mock.patch.object(tasks, "gh", side_effect=by_number):
+            pasted = tasks.browse("o/r", [1, 3, 404])
+        self.assertEqual([(r["number"], r["why"]) for r in pasted],
+                         [(1, None), (3, "not merged"), (404, "GitHub has no such pull request")])
+
     def test_a_pr_that_only_changes_tests_is_skipped(self):
         (self.repo / "tests" / "test_lib.py").write_text("another test\n")
         self.git("commit", "-qam", "tests only, squash-merged")
@@ -579,7 +624,24 @@ class PipelineTest(unittest.TestCase):
 
     def test_a_run_name_is_the_repository_and_the_time(self):
         self.assertTrue(pipeline.default_name(pipeline.Request(repos=["o/my-repo"])).startswith("my-repo-"))
+        self.assertTrue(pipeline.default_name(pipeline.Request(pulls={"o/picked": [1]})).startswith("picked-"))
         self.assertTrue(pipeline.default_name(pipeline.Request()).startswith("sample-"))
+
+    def test_pasted_prs_are_collected_by_number_from_each_repository(self):
+        request = pipeline.Request(repos=["o/scan"], pulls={"o/a": [1, 2], "x/b": [9]}, limit=3)
+        with mock.patch.object(pipeline.tasks, "collect", return_value=[]) as collect, \
+                mock.patch.object(pipeline.tasks, "load"):
+            pipeline.find_tasks(request, Path("/nonexistent"))
+        asked = {c.args[0]: c.kwargs["prs"] for c in collect.call_args_list}
+        self.assertEqual(asked, {"o/scan": None, "o/a": [1, 2], "x/b": [9]})
+        self.assertEqual(request.describe(), "o/scan, o/a, x/b")
+        self.assertEqual(pipeline.Request(**json.loads(json.dumps(pipeline.asdict(request)))), request)  # resumes
+
+    def test_the_command_line_takes_pr_links_beside_repositories(self):
+        args = SimpleNamespace(repos=["o/scan", "https://github.com/o/a/pull/1", "o/a#2", "x/b#9"], pr=None)
+        self.assertEqual(cli.wanted(args), (["o/scan"], {"o/a": [1, 2], "x/b": [9]}))
+        with self.assertRaises(SystemExit):
+            cli.wanted(SimpleNamespace(repos=["o/a#1"], pr=[3]))  # --pr still needs one repository to scan
 
 
 class AppTest(unittest.TestCase):
@@ -652,6 +714,51 @@ class AppTest(unittest.TestCase):
                 mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
             self.assertNotIn("error", page.repo_info("o/r"))
 
+    def test_picked_prs_become_the_runs_arguments(self):
+        self.assertEqual(app.App.chosen_pulls({"https://github.com/o/a": [2, 1, 2], "x/b": [9], "y/c": []}),
+                         {"o/a": [1, 2], "x/b": [9]})
+        for bad in ({"o/a": ["1"]}, {"o/a": [0]}, {"not a repo": [1]}, {"o/a": list(range(1, app.MAX_LIMIT + 2))}):
+            self.assertIsInstance(app.App.chosen_pulls(bad), str, bad)
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            ready = {"busy": False, "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(app.pipeline, "preflight"), \
+                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
+                started = page.start({"pulls": {"o/a": [3, 1]}, "models": ["m"]})
+                refused = page.start({"pulls": {"o/a": [1], "x/b": [2]}, "models": ["m"], "setup": "npm ci", "test": "npx t"})
+        self.assertTrue(started["id"].startswith("a-"))
+        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"]])
+        self.assertIn("one repository", refused["error"])
+
+    def test_the_page_serves_reports_and_traces_but_not_raw_logs(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            trial = Path(d) / "r1" / "trials" / "t__m__1"
+            trial.mkdir(parents=True)
+            (trial / "agent.jsonl").write_text("{}\n")
+            (Path(d) / "r1" / "report.json").write_text("{}")
+            handler = type("H", (app.Handler,), {"app": app.App(Path(d))})
+            server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            port = server.server_address[1]
+
+            def get(path):
+                conn = http.client.HTTPConnection("127.0.0.1", port)
+                conn.request("GET", path)
+                response = conn.getresponse()
+                return response.status, response.read()
+            try:
+                self.assertEqual(get("/r1/report.json")[0], 200)
+                self.assertEqual(get("/r1/trials/t__m__1/agent.jsonl")[0], 404)
+                self.assertEqual(get("/r1/run.json")[0], 404)
+                status, body = get("/api/trace?run=r1&trial=t__m__1")
+                self.assertEqual((status, json.loads(body)["steps"]), (200, []))
+                self.assertEqual(get("/api/trace?run=..&trial=r1")[0], 400)
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_only_this_page_can_start_runs(self):
         import http.client
         import threading
@@ -700,6 +807,22 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(record["agent"]["working_seconds"], 70)
         self.assertEqual(report.summarize([record])["median_seconds"], 70)
 
+    def test_a_run_from_another_machine_reads_this_checkouts_tasks(self):
+        with tempfile.TemporaryDirectory() as d:
+            job, tasks_dir = Path(d) / "job", Path(d) / "tasks"
+            (job / "trials" / "o__r-1__m__1").mkdir(parents=True)
+            (job / "trials" / "o__r-1__m__1" / "result.json").write_text(json.dumps(self.trial("o__r-1", "m", "solved", 1.0)))
+            (job / "run.json").write_text(json.dumps({"run_id": "job", "models": [{"key": "m", "label": "M"}], "attempts": 1,
+                                                       "tasks": ["o__r-1"], "tasks_dir": "/Users/someone-else/tasks"}))
+            (tasks_dir / "o__r-1").mkdir(parents=True)
+            (tasks_dir / "o__r-1" / "instruction.md").write_text("# Fix it\n")
+            (tasks_dir / "o__r-1" / "task.toml").write_text(
+                '[task]\nid = "o__r-1"\nrepo = "o/r"\npr_number = 1\nurl = "u"\ntitle = "Fix it"\nlanguage = "Go"\n'
+                'size_bucket = "small"\nlines_changed = 3\nfiles_changed = 1\nmerged_at = "2026-10-20"\n[verifier]\ntest = "go test"\n')
+            with mock.patch.object(report, "DEFAULT_TASKS", tasks_dir):
+                data = report.build_data(job)
+        self.assertEqual(data["tasks"][0]["repo"], "o/r")
+
     def test_pages_hide_docker_wording(self):
         page = app.PAGE.read_text()
         self.assertNotIn("Docker", page)
@@ -726,6 +849,15 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(timing["timed_attempts"], 2)
         run = report.summarize_timing(trials, "2026-10-19T23:59:55+00:00")
         self.assertEqual(run["elapsed_seconds"], 20)  # includes setup before the first attempt
+
+    def test_wall_clock_leaves_out_the_time_a_stopped_run_sat_idle(self):
+        trials = [
+            {"started_at": "2026-10-20T00:00:00+00:00", "finished_at": "2026-10-20T00:10:00+00:00"},
+            {"started_at": "2026-10-20T00:05:00+00:00", "finished_at": "2026-10-20T00:12:00+00:00"},
+            {"started_at": "2026-10-21T09:00:00+00:00", "finished_at": "2026-10-21T09:03:00+00:00"},  # resumed next day
+        ]
+        self.assertEqual(report.summarize_timing(trials)["elapsed_seconds"], 15 * 60)
+        self.assertEqual(report.summarize_timing(trials, "2026-10-19T23:58:00+00:00")["elapsed_seconds"], 17 * 60)
 
     def test_total_timing_does_not_invent_missing_measurements(self):
         self.assertIsNone(report.summarize_timing([])["elapsed_seconds"])
@@ -822,6 +954,36 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(sent["reasoning_effort"], "high")
         self.assertEqual((graded["verdict"], graded["effort"]), ("pass", "high"))
 
+    def test_a_verdict_is_read_from_a_fenced_or_chatty_reply(self):
+        self.assertEqual(judge.parse('{"verdict": "fail", "reason": "x"}')["verdict"], "fail")
+        self.assertEqual(judge.parse('Here:\n```json\n{"verdict": "pass", "reason": "ok"}\n```')["verdict"], "pass")
+        for reply in (None, "", "pass", '{"verdict": "maybe"}'):
+            with self.assertRaises(ValueError):
+                judge.parse(reply)
+
+    def test_the_configured_judge_runs_on_baseten_without_json_mode(self):
+        _, configured = config.load()
+        self.assertEqual((configured.base_url, configured.api_key_env), (config.BASETEN_URL, "BASETEN_API_KEY"))
+        self.assertFalse(configured.json_mode)  # Baseten puts this model's JSON-mode answer in its reasoning
+        sent = {}
+
+        def respond(request, timeout):
+            sent.update(json.loads(request.data))
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
+        with tempfile.TemporaryDirectory() as d, mock_env(BASETEN_API_KEY="k"), \
+                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
+            (Path(d) / "solution").mkdir()
+            (Path(d) / "solution" / "reference.patch").write_text("diff")
+            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
+            judge.grade(configured, task, "diff", {"passed": True}, "")
+        self.assertNotIn("response_format", sent)
+
+    def test_a_judge_model_the_provider_does_not_list_is_caught(self):
+        listing = io.BytesIO(json.dumps({"data": [{"id": "other"}]}).encode())
+        with mock_env(PR_EVAL_TEST_KEY="k"), mock.patch.object(config.urllib.request, "urlopen", return_value=listing):
+            problem = Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY").problem()
+        self.assertIn("can't use the judge model m", problem)
+
     def test_solved_needs_the_tests_and_the_judge(self):
         from unittest import mock
         cases = [(True, {"verdict": "pass"}, ("solved", None)), (True, {"verdict": "fail"}, ("failed", None)),
@@ -835,3 +997,68 @@ class JudgeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TraceTest(unittest.TestCase):
+    def write(self, trial: Path, events: list[dict], seconds: float | None = 100) -> None:
+        trial.mkdir(parents=True, exist_ok=True)
+        (trial / "agent.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events) + "not json\n")
+        if seconds:
+            (trial / "result.json").write_text(json.dumps({"agent": {"seconds": seconds}}))
+
+    @staticmethod
+    def said(*blocks, parent=None):
+        return {"type": "assistant", "parent_tool_use_id": parent, "message": {"content": list(blocks)}}
+
+    @staticmethod
+    def returned(tool_id, output, at, error=False):
+        return {"type": "user", "timestamp": at, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tool_id, "content": output, "is_error": error}]}}
+
+    def test_steps_pair_each_call_with_its_result_and_time(self):
+        with tempfile.TemporaryDirectory() as d:
+            trial = Path(d) / "t"
+            self.write(trial, [
+                {"type": "system", "subtype": "init"}, {"type": "stream_event"},
+                self.said({"type": "thinking", "thinking": "", "signature": "x"}),
+                self.said({"type": "thinking", "thinking": "Look at the parser."},
+                          {"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "grep -rn parse .\nls"}}),
+                self.returned("a", "p.go:1: parse", "2026-10-20T00:00:30Z"),
+                self.said({"type": "tool_use", "id": "b", "name": "Edit", "input": {
+                    "file_path": "/workspace/p.go", "old_string": "a - b", "new_string": "a + b"}}),
+                self.returned("b", [{"type": "text", "text": "no such file"}], "2026-10-20T00:01:40Z", error=True),
+                self.said({"type": "text", "text": "Done."}),
+                {"type": "result", "subtype": "success", "num_turns": 3, "duration_ms": 100000},
+            ])
+            got = trace.condense(trial)
+        kinds = [(s["kind"], s.get("tool")) for s in got["steps"]]
+        self.assertEqual(kinds, [("thinking", None), ("tool", "Bash"), ("tool", "Edit"), ("text", None)])
+        bash, edit = got["steps"][1], got["steps"][2]
+        self.assertEqual((bash["title"], bash["detail"], bash["output"], bash["at"]), ("grep -rn parse .", "grep -rn parse .\nls", "p.go:1: parse", 30))
+        self.assertEqual((edit["title"], edit["detail"], edit["error"], edit["at"]), ("p.go", "- a - b\n+ a + b", True, 100))
+        self.assertEqual((got["hidden_thinking"], got["tool_calls"], got["tool_errors"], got["finished"]["turns"]), (1, 2, 1, 3))
+
+    def test_credentials_never_leave_in_a_trace(self):
+        with tempfile.TemporaryDirectory() as d, mock_env(SOME_SERVICE_TOKEN="plain-words-but-secret"):
+            trial = Path(d) / "t"
+            self.write(trial, [
+                self.said({"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "env"}}),
+                self.returned("a", "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx\nX=plain-words-but-secret\n"
+                                   "Authorization: Bearer abcdefghijklmnop12345\ntoken = read_token()", "2026-10-20T00:00:30Z"),
+            ])
+            text = json.dumps(trace.condense(trial))
+        for secret in ("sk-proj-abc", "plain-words-but-secret", "abcdefghijklmnop12345"):
+            self.assertNotIn(secret, text)
+        self.assertIn("token = read_token()", text)  # code that only names a secret stays readable
+
+    def test_long_outputs_keep_their_start_and_end(self):
+        clipped = trace.clip("a" * 5000 + "END", 300)
+        self.assertTrue(clipped.startswith("a" * 100) and clipped.endswith("END"))
+        self.assertLess(len(clipped), 400)
+
+    def test_a_hosted_page_reads_the_condensed_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            trial = Path(d)
+            self.assertIsNone(trace.load(trial))
+            (trial / "trace.json").write_text(json.dumps({"steps": [{"kind": "text", "text": "hi"}]}))
+            self.assertEqual(trace.load(trial)["steps"][0]["text"], "hi")

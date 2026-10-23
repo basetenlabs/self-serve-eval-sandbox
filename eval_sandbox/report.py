@@ -42,20 +42,39 @@ def median(values):
     return statistics.median(values) if values else None
 
 
+def busy_seconds(spans: list[tuple[datetime, datetime]]) -> float:
+    """How long at least one span was going: overlaps count once, gaps between them not at all."""
+    total, reach = 0.0, None
+    for start, finish in sorted(spans):
+        if reach is None or start > reach:
+            total += (finish - start).total_seconds()
+            reach = finish
+        elif finish > reach:
+            total += (finish - reach).total_seconds()
+            reach = finish
+    return total
+
+
 def summarize_timing(trials: list[dict], started_at: str | None = None) -> dict:
-    """Elapsed span is wall clock; summed agent time can overlap across trials."""
-    starts = [datetime.fromisoformat(t["started_at"]) for t in trials if t.get("started_at")]
-    finishes = [datetime.fromisoformat(t["finished_at"]) for t in trials if t.get("finished_at")]
-    start = datetime.fromisoformat(started_at) if started_at else min(starts, default=None)
-    finish = max(finishes, default=None)
-    complete = len(starts) == len(finishes) == len(trials)
+    """Elapsed is wall clock while attempts ran, plus the setup before the first one.
+
+    Parallel attempts count once, and a stopped run's idle time before it was resumed
+    not at all. Summed agent time can overlap across trials.
+    """
+    spans = [(datetime.fromisoformat(t["started_at"]), datetime.fromisoformat(t["finished_at"]))
+             for t in trials if t.get("started_at") and t.get("finished_at")]
+    first = min((s for s, _ in spans), default=None)
+    start = datetime.fromisoformat(started_at) if started_at else first
+    finish = max((f for _, f in spans), default=None)
+    complete = len(spans) == len(trials)
+    lead = max(0.0, (first - start).total_seconds()) if first and start else 0.0
     working = [(t.get("agent") or {}).get("working_seconds", (t.get("agent") or {}).get("seconds"))
                for t in trials]
     known = [seconds for seconds in working if seconds is not None]
     return {
         "started_at": start.isoformat() if start else None,
         "finished_at": finish.isoformat() if finish else None,
-        "elapsed_seconds": max(0, (finish - start).total_seconds()) if complete and start and finish else None,
+        "elapsed_seconds": lead + busy_seconds(spans) if complete and spans else None,
         "total_working_seconds": sum(known) if known else None,
         "timed_attempts": len(known),
         "attempts": len(trials),
@@ -130,6 +149,8 @@ def build_data(job_dir: Path) -> dict:
     model_keys = [m["key"] for m in models]
 
     tasks_dir = Path(meta.get("tasks_dir") or DEFAULT_TASKS)
+    if not tasks_dir.is_dir():  # a run copied from another machine: use this checkout's tasks
+        tasks_dir = DEFAULT_TASKS
     task_meta = {}
     for task_id in sorted({t["task_id"] for t in trials} | set(meta.get("tasks", []))):
         path = tasks_dir / task_id
