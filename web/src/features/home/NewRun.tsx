@@ -1,4 +1,4 @@
-import { AlertCircleIcon, CheckIcon, ChevronRightIcon, GitPullRequestIcon, LoaderIcon } from "lucide-react";
+import { AlertCircleIcon, CheckIcon, ChevronRightIcon, GitPullRequestIcon, LoaderIcon, StarIcon } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import * as React from "react";
 import { Column } from "@/components/brand";
@@ -8,14 +8,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Kbd, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
-import { post, repoInfo } from "@/lib/api";
+import { post, repoInfo, samePull, useFavorites } from "@/lib/api";
 import { dur, plural, usd } from "@/lib/format";
 import { parsePasted, pullCount } from "@/lib/github";
 import { type Route, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
-import type { AppState, CatalogModel, PullList, RepoInfo } from "@/lib/types";
+import type { AppState, CatalogModel, Favorite, PullList, RepoInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { PastedPulls, PullChooser } from "./PullPicker";
+import { GitHubAccount } from "./GitHubAccount";
+import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPicker";
 
 type Source = "quick" | "repo";
 type Pick = "latest" | "choose";
@@ -44,6 +45,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const form = React.useRef<HTMLFormElement>(null);
+  const [favorites, save] = useFavorites(state.favorites);
+  const onFavorite: OnFavorite = (pull, saved) => {
+    void save(pull, saved).then((problem) => problem && toast("Couldn't save it", { body: problem, tone: "danger" }));
+  };
+  const github = state.github.login; // a GitHub sign-in can open private repositories, so look again
 
   // What was typed: one repository to take PRs from, or links to exact pull requests.
   const pasted = React.useMemo(() => parsePasted(text), [text]);
@@ -65,7 +71,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         .finally(() => !abort.signal.aborted && setLooking(false));
     }, 450);
     return () => { abort.abort(); window.clearTimeout(timer); setLooking(false); };
-  }, [repo]);
+  }, [repo, github]);
 
   // Pasted PRs that can't be tasks (not merged, no tests) stay out of the run.
   const pastedPulls = Object.fromEntries(pastedRepos
@@ -122,9 +128,16 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
 
   const removePull = (r: string, n: number) =>
     setText(text.split(/[\s,]+/).filter((t) => {
-      const one = parsePasted(t).pulls;
-      return !(one[r]?.length === 1 && one[r][0] === n);
+      const one = Object.entries(parsePasted(t).pulls);
+      return !(one.length === 1 && one[0][1].length === 1 && samePull({ repo: one[0][0], number: one[0][1][0] }, { repo: r, number: n }));
     }).join("\n"));
+  const inBox = (f: Favorite) => Object.entries(pasted.pulls).some(([r, list]) => list.some((n) => samePull({ repo: r, number: n }, f)));
+  const pickSaved = (f: Favorite, on: boolean) => {
+    if (!on) return removePull(f.repo, f.number);
+    const kept = mode === "pasted" ? text.trim() : ""; // a repository name gives way to exact pull requests
+    setText(`${kept ? `${kept}\n` : ""}https://github.com/${f.repo}/pull/${f.number}`);
+  };
+  const savedHere = repo ? favorites.filter((f) => f.repo.toLowerCase() === repo.toLowerCase()).length : 0;
 
   return (
     <form ref={form} onSubmit={start} onInput={() => setError(null)} className="grid gap-10" aria-label="New run">
@@ -138,6 +151,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
 
         {source === "repo" && (
           <div className="mt-4 grid animate-enter gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+            <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
+              <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
+            </div>
             <div className="grid gap-1.5">
               <Label htmlFor="pulls">Repository or pull request links</Label>
               <div className="relative">
@@ -153,8 +169,12 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                   )}
                 />
               </div>
-              <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} />
+              <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} />
             </div>
+
+            {(mode === "empty" || mode === "pasted") && (
+              <SavedPulls favorites={mode === "pasted" ? favorites.filter((f) => !inBox(f)) : favorites} picked={inBox} onPick={pickSaved} onFavorite={onFavorite} />
+            )}
 
             {mode === "repo" && (
               <div className="grid gap-4">
@@ -165,13 +185,22 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                     <Segmented label="How many" value={String(limit)} onChange={(v) => setLimit(Number(v))}
                       options={LIMITS.map((n) => ({ value: String(n), label: String(n) }))} />
                   )}
+                  {pick === "latest" && savedHere > 0 && (
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setPick("choose")}>
+                      <StarIcon className="fill-current" /> {savedHere} saved here: choose
+                    </Button>
+                  )}
                 </div>
-                {pick === "choose" && <PullChooser repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit} />}
+                {pick === "choose" && (
+                  <PullChooser key={`${repo}|${github ?? ""}`} repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit}
+                    favorites={favorites} onFavorite={onFavorite} />
+                )}
               </div>
             )}
 
             {mode === "pasted" && (
-              <PastedPulls pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull} />
+              <PastedPulls pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull}
+                favorites={favorites} onFavorite={onFavorite} />
             )}
 
             {(mode === "repo" || mode === "pasted") && (
@@ -262,11 +291,11 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
 }
 
 /** What the box understood: a repository and whether it's ready, or how many pull requests. */
-function SourceStatus({ id, mode, info, looking, pasted, pastedRepos }: {
-  id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[];
+function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn }: {
+  id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
 }) {
   const danger = "text-[#AC0EB2] dark:text-[#FFA9FD]";
-  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose. Public repositories work everywhere; private ones need your own GitHub login.</span>;
+  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you find and choose. {signIn ? "Private repositories need your GitHub sign-in above." : "Private ones work when your GitHub login can read them."}</span>;
   if (mode === "many") body = <span className={danger}>One repository at a time, or paste links to pull requests.</span>;
   else if (mode === "pasted") {
     const n = pullCount(pasted.pulls);

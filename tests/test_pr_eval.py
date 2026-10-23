@@ -429,7 +429,7 @@ class CollectTest(unittest.TestCase):
         files = {1: [{"filename": "p.go", "additions": 5, "deletions": 1}, {"filename": "p_test.go", "additions": 9, "deletions": 0}],
                  2: [{"filename": "go.mod", "additions": 1, "deletions": 1}]}
 
-        def gh(endpoint):
+        def gh(endpoint, token=None):
             if endpoint.endswith("per_page=100") and "/files" in endpoint:
                 return files[int(endpoint.split("/pulls/")[1].split("/")[0])]
             return listing
@@ -443,11 +443,11 @@ class CollectTest(unittest.TestCase):
         self.assertTrue(tasks.MAINTENANCE.search("Merge stable into main"))  # a branch sync, not a change to make
 
         unmerged = [{"number": 100 + n, "merged_at": None} for n in range(100)]  # a page of PRs closed unmerged
-        with mock.patch.object(tasks, "gh", side_effect=lambda e: files[1] if "/files" in e
+        with mock.patch.object(tasks, "gh", side_effect=lambda e, token=None: files[1] if "/files" in e
                                else unmerged if e.endswith("page=1") else listing[:1]):
             self.assertEqual([r["number"] for r in tasks.browse("o/r")], [1])  # found on the next page
 
-        def by_number(endpoint):
+        def by_number(endpoint, token=None):
             if "/files" in endpoint:
                 return gh(endpoint)
             number = int(endpoint.rsplit("/", 1)[1])
@@ -458,6 +458,16 @@ class CollectTest(unittest.TestCase):
             pasted = tasks.browse("o/r", [1, 3, 404])
         self.assertEqual([(r["number"], r["why"]) for r in pasted],
                          [(1, None), (3, "not merged"), (404, "GitHub has no such pull request")])
+
+    def test_searching_a_repositorys_merged_prs(self):
+        found = {"items": [{"number": 7}, {"number": 3}]}
+        with mock.patch.object(tasks, "gh", return_value=found) as gh:
+            self.assertEqual(tasks.search("o/r", "  context  binding! ", "tok"), [7, 3])
+            self.assertEqual(tasks.search("o/r", "#42"), [42])  # a number is that pull request, no search
+            self.assertEqual(tasks.search("o/r", "!!"), [])
+        endpoint, token = gh.call_args.args
+        self.assertIn("q=repo%3Ao/r%20is%3Apr%20is%3Amerged%20context%20binding&", endpoint)
+        self.assertEqual((gh.call_count, token), (1, "tok"))
 
     def test_a_pr_that_only_changes_tests_is_skipped(self):
         (self.repo / "tests" / "test_lib.py").write_text("another test\n")
@@ -763,6 +773,100 @@ class AppTest(unittest.TestCase):
                 mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
             self.assertNotIn("error", page.repo_info("o/r"))
 
+    def test_signing_in_with_github_reads_private_repositories_for_that_person(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}) as gh, \
+                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "a@x.co")["error"])
+            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+            self.assertNotIn("error", page.repo_info("o/r", "a@x.co"))
+            self.assertEqual(gh.call_args.args, ("repos/o/r", "tok-a"))
+            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "b@x.co")["error"])  # only for the one who signed in
+            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": "ana"})
+            page.github["a@x.co"]["until"] = 0  # GitHub's token expired
+            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": None})
+
+    def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
+        page = app.App(Path("/nonexistent"))
+        answers = [{"device_code": "dev", "user_code": "AB-12", "verification_uri": "https://github.com/login/device",
+                    "interval": 5, "expires_in": 900},
+                   {"error": "authorization_pending"}, {"error": "slow_down"},
+                   {"access_token": "tok", "expires_in": 28800}]
+        with mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+                mock.patch.object(app, "github_form", side_effect=answers) as form, \
+                mock.patch.object(app.tasks, "gh", return_value={"login": "ana"}):
+            self.assertEqual(page.github_device("a@x.co")["user_code"], "AB-12")
+            self.assertEqual(form.call_args.args[1], {"client_id": "client", "scope": "repo"})
+            self.assertEqual(page.github_state("a@x.co")["device"]["user_code"], "AB-12")  # a reloaded page shows it again
+            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 5})
+            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down
+            self.assertEqual(page.github_poll("a@x.co"), {"login": "ana"})
+        self.assertEqual(page.token("a@x.co"), "tok")
+        self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "login": "ana"})  # no code waiting; no client id here
+        self.assertIn("expired", page.github_poll("a@x.co")["error"])  # nothing is waiting any more
+        page.github_sign_out("a@x.co")
+        self.assertIsNone(page.token("a@x.co"))
+        self.assertIn("isn't set up", page.github_device("a@x.co")["error"])  # locally: no client id, gh's login reads
+
+    def test_a_private_run_is_seen_only_by_who_started_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d) / "jobs"
+            for run_id in ("open", "mine"):
+                (jobs / run_id).mkdir(parents=True)
+                (jobs / run_id / "run.json").write_text(json.dumps({"run_id": run_id, "tasks": [], "models": []}))
+            (jobs / "mine" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
+            (jobs / "mine" / "report.json").write_text("{}")
+            page = app.App(jobs)
+            with mock.patch.object(page, "checks", return_value={"blaxel": True}), \
+                    mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
+                seen = {u: sorted(r["id"] for r in page.state(user=u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
+            self.assertEqual(seen, {"a@x.co": ["mine", "open"], "b@x.co": ["open"], None: ["open"]})
+            self.assertIsNone(page.find("mine", "b@x.co"))
+            self.assertEqual(page.stop("mine", "b@x.co"), page.stop("nope", "b@x.co"))  # as if it weren't there
+            (jobs / "mine" / "trials" / "t__m__1").mkdir(parents=True)
+            self.assertNotIn("no trace", page.trace("mine", "t__m__1", "b@x.co")["error"])  # no such attempt, for them
+            self.assertIn("no trace", page.trace("mine", "t__m__1", "a@x.co")["error"])  # there, not yet traced
+
+    def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(app.pipeline, "preflight"), \
+                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
+                started = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
+            access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
+        self.assertEqual(access, {"owner": "a@x.co", "private": True})
+        self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
+
+    def test_favorite_prs_are_kept_per_person_newest_first(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d) / "jobs")
+            page.favorite({"repo": "o/r", "number": 1, "title": "One", "saved": True}, "a@x.co")
+            page.favorite({"repo": "https://github.com/o/r", "number": 2, "title": "Two", "saved": True}, "a@x.co")
+            page.favorite({"repo": "O/R", "number": 1, "title": "One", "saved": True}, "a@x.co")  # saved again: first
+            page.favorite({"repo": "x/y", "number": 9, "saved": True})  # locally, no one in particular
+            self.assertEqual([(f["repo"], f["number"]) for f in app.App(Path(d) / "jobs").favorites("a@x.co")],
+                             [("O/R", 1), ("o/r", 2)])  # kept on disk, once each
+            page.favorite({"repo": "o/r", "number": 1, "saved": False}, "a@x.co")
+            self.assertEqual([f["number"] for f in page.favorites("a@x.co")], [2])
+            self.assertEqual([f["number"] for f in page.favorites(None)], [9])
+            self.assertEqual(page.favorites("b@x.co"), [])
+            for bad in ({"repo": "nope", "number": 1}, {"repo": "o/r", "number": "1"}, {"repo": "o/r", "number": 0}):
+                self.assertIn("error", page.favorite({**bad, "saved": True}, "a@x.co"))
+
+    def test_finding_prs_by_words(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(page, "repo_info", return_value={"repo": "o/r"}), \
+                mock.patch.object(app.tasks, "search", return_value=[7, 3]) as search, \
+                mock.patch.object(app.tasks, "browse", return_value=[{"number": 7}, {"number": 3}]) as browse:
+            self.assertEqual(page.pulls("o/r", words="binding")["prs"], [{"number": 7}, {"number": 3}])
+            search.return_value = []
+            self.assertEqual(page.pulls("o/r", words="nothing like it")["prs"], [])
+        self.assertEqual(browse.call_args.args[:2], ("o/r", [7, 3]))
+        self.assertEqual(search.call_count, 2)
+
     def test_picked_prs_become_the_runs_arguments(self):
         self.assertEqual(app.App.chosen_pulls({"https://github.com/o/a": [2, 1, 2], "x/b": [9], "y/c": []}),
                          {"o/a": [1, 2], "x/b": [9]})
@@ -787,18 +891,24 @@ class AppTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "agent.jsonl").write_text("{}\n")
             (Path(d) / "r1" / "report.json").write_text("{}")
+            (Path(d) / "r2").mkdir()  # someone's run on a private repository
+            (Path(d) / "r2" / "report.json").write_text("{}")
+            (Path(d) / "r2" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
             handler = type("H", (app.Handler,), {"app": app.App(Path(d))})
             server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()
             port = server.server_address[1]
 
-            def get(path):
+            def get(path, headers=None):
                 conn = http.client.HTTPConnection("127.0.0.1", port)
-                conn.request("GET", path)
+                conn.request("GET", path, headers=headers or {})
                 response = conn.getresponse()
                 return response.status, response.read()
             try:
                 self.assertEqual(get("/r1/report.json")[0], 200)
+                self.assertEqual(get("/r2/report.json")[0], 404)
+                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "b@x.co"})[0], 404)
+                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "a@x.co"})[0], 200)
                 self.assertEqual(get("/r1/trials/t__m__1/agent.jsonl")[0], 404)
                 self.assertEqual(get("/r1/run.json")[0], 404)
                 status, body = get("/api/trace?run=r1&trial=t__m__1")

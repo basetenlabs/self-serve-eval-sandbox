@@ -19,6 +19,9 @@ Keys come from the environment when set, else from the Keychain:
     OPENAI_API_KEY          Keychain baseten-openai-api-key (the GPT-6.1 Sol judge)
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
+
+People sign in with GitHub through the OAuth App "Baseten Eval Sandbox" (device flow, owned by
+SystemSculpt). Its client id is public; it has no secret here. Their tokens stay in the page's memory.
 """
 from __future__ import annotations
 
@@ -50,6 +53,7 @@ PAGE_PORT = 8765
 PREFIX = "eval"
 APP = "/data/app"
 LABELS = {"app": "pr-eval-host", "owner": "mstolarz"}
+GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Ov23li1ZAcTSk0isJf5x")
 # The release: everything the page and its runs read from the repository.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
@@ -192,7 +196,8 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
             sandbox.process.kill(process.name)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
-                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
+                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
+                "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     # No `timeout`: on Blaxel it can end a long-lived process once it elapses.
     sandbox.process.exec({"name": f"pr-eval-page-{stamp}", "workingDir": APP, "env": page_env,
                           "command": f"mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs",

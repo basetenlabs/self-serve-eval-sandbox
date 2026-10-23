@@ -23,6 +23,8 @@ export interface Checks {
   blaxel_problem?: string | null;
   bl_cli: boolean;
   gh: boolean;
+  /** Whose GitHub login the `gh` CLI on this machine uses. */
+  gh_login?: string | null;
   image: boolean;
   judge: { label: string; chair?: string | null; effort?: string | null; ok: boolean; problem?: string | null };
 }
@@ -92,6 +94,8 @@ export interface Run {
   log?: string | null;
   lost: number;
   resumable: boolean;
+  /** On a private repository: only the person who started it sees it. */
+  private?: boolean;
   board?: Board;
 }
 
@@ -103,6 +107,24 @@ export interface AppState {
   default_limit: number;
   max_limit: number;
   busy: boolean;
+  github: GitHubAccount;
+  favorites: Favorite[];
+}
+
+/** Who reads GitHub for you. Hosted, `sign_in` offers your own GitHub sign-in; locally the `gh` CLI's login reads. */
+export interface GitHubAccount {
+  sign_in: boolean;
+  login: string | null;
+  /** A sign-in waiting for you to enter its code on GitHub. */
+  device?: { user_code: string; verification_uri: string; interval: number };
+}
+
+/** A pull request saved for later, newest first. */
+export interface Favorite {
+  repo: string;
+  number: number;
+  title: string;
+  saved_at: string;
 }
 
 export interface RepoInfo {

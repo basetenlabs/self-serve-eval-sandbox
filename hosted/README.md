@@ -11,8 +11,15 @@ sign in, start runs and read reports.
   itself, and the gateway logs who sent it.
 - **Keys:** the page's process gets the judges', models', GitHub and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
-- **Public repositories only:** everyone signed in shares one GitHub login, so the hosted page
-  refuses private repositories (`PR_EVAL_PUBLIC_REPOS_ONLY`).
+- **GitHub:** the page's own GitHub login, shared by everyone, reads public repositories only
+  (`PR_EVAL_PUBLIC_REPOS_ONLY`). For private ones, people **Sign in with GitHub** on the page:
+  GitHub's device flow through the OAuth App "Baseten Eval Sandbox" (owned by SystemSculpt; its
+  client id is in `deploy.py`, there is no secret). Their token lives in the page's memory only,
+  for 8 hours or until they sign out or the page restarts, and their runs clone with it. A run
+  on a private repository is seen only by the person who started it (`access.json` in its folder).
+  An organization that restricts OAuth Apps (basetenlabs does) has to approve the app before its
+  private repositories show up: the person asks for it on GitHub's authorize screen.
+- **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
 - **Runs:** trials run in the same dedicated workspace as local runs (`pr-eval-01db4d88`). While a
   run is going, the gateway keeps the sandbox awake.
 

@@ -59,7 +59,9 @@ export function ago(iso: string | null | undefined, now = Date.now()): string {
   if (s < 45) return "just now";
   if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return `${Math.round(s / 86400)} d ago`;
+  if (s < 60 * 86400) return `${Math.round(s / 86400)} d ago`;
+  if (s < 365 * 86400) return `${Math.round(s / (30.4 * 86400))} mo ago`;
+  return `${Math.round(s / (365 * 86400))} yr ago`;
 }
 
 export const secondsSince = (iso: string | null | undefined, now = Date.now()) =>

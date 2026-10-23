@@ -1,4 +1,4 @@
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, LockIcon } from "lucide-react";
 import { isActive, PhaseBadge, Swatch } from "@/components/brand";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { pct, usd, when } from "@/lib/format";
@@ -34,7 +34,10 @@ export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) 
                 className="group cursor-pointer hover:bg-muted focus-visible:bg-muted focus-visible:outline-offset-[-2px]"
               >
                 <TD className="pl-4">
-                  <a href={href({ page: "run", id: r.id })} onClick={(e) => e.preventDefault()} className="block text-[15px] font-medium">{r.title}</a>
+                  <a href={href({ page: "run", id: r.id })} onClick={(e) => e.preventDefault()} className="flex items-center gap-1.5 text-[15px] font-medium">
+                    {r.title}
+                    {r.private && <LockIcon className="size-3.5 text-muted-foreground" aria-label="Private: only you see this run" />}
+                  </a>
                   <div className="label-mono mt-0.5 text-[10.5px] text-muted-foreground">
                     {[r.tasks ? `${r.tasks} PRs` : null, r.models.length > 2 ? `${r.models.length} models` : r.models.map((m) => m.label).join(" vs "),
                       r.judged === false ? "Tests only" : null].filter(Boolean).join(" · ")}
