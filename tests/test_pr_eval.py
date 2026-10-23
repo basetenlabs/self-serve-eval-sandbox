@@ -435,11 +435,17 @@ class CollectTest(unittest.TestCase):
             return listing
         with mock.patch.object(tasks, "gh", side_effect=gh):
             rows = tasks.browse("o/r")
+            self.assertEqual([r["number"] for r in tasks.browse("o/r", count=1)], [2])  # "Show older merges" asks for more
         self.assertEqual([r["number"] for r in rows], [2, 1])  # merged only, newest first
         self.assertEqual((rows[1]["why"], rows[1]["lines"], rows[1]["tests"]), (None, 15, 1))
         self.assertIn("both code and tests", rows[0]["why"])
         self.assertTrue(rows[0]["maintenance"])
         self.assertTrue(tasks.MAINTENANCE.search("Merge stable into main"))  # a branch sync, not a change to make
+
+        unmerged = [{"number": 100 + n, "merged_at": None} for n in range(100)]  # a page of PRs closed unmerged
+        with mock.patch.object(tasks, "gh", side_effect=lambda e: files[1] if "/files" in e
+                               else unmerged if e.endswith("page=1") else listing[:1]):
+            self.assertEqual([r["number"] for r in tasks.browse("o/r")], [1])  # found on the next page
 
         def by_number(endpoint):
             if "/files" in endpoint:

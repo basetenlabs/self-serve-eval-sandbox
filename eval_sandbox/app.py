@@ -31,6 +31,7 @@ RUN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")  # never "." or ".."
 # diffs stay on disk; an attempt's trace goes out condensed and redacted, by /api/trace.
 REPORT_FILE = re.compile(r"/([A-Za-z0-9_-][A-Za-z0-9_.-]*)/report\.(html|json)")
 MAX_LIMIT = 50
+PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
 # beside it, then the verifier alone once the agent's sandbox is deleted.
@@ -257,18 +258,19 @@ class App:
             defaults = False
         return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults}
 
-    def pulls(self, text: str, numbers: str = "") -> dict:
-        """Pull requests in a repository and which can be tasks: these numbers, or the latest merged."""
+    def pulls(self, text: str, numbers: str = "", count: str = "") -> dict:
+        """Pull requests in a repository and which can be tasks: these numbers, or the latest `count` merged."""
         info = self.repo_info(text)
         if info.get("error"):
             return info
         repo, wanted = info["repo"], [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
-        key = f"{repo}#{','.join(map(str, wanted))}"
+        latest = min(max(int(count) if count.isdigit() else PICK_COUNT, 1), MAX_PICK_COUNT)
+        key = f"{repo}#{','.join(map(str, wanted))}@{latest}"
         when, found = self.browsed.get(key, (0.0, None))
         if found and time.monotonic() - when < 300:
             return found
         try:
-            found = {**info, "prs": tasks.browse(repo, wanted)}
+            found = {**info, "prs": tasks.browse(repo, wanted, latest)}
         except (RuntimeError, SystemExit) as exc:
             return {"repo": repo, "error": f"Can't list {repo}'s pull requests ({str(exc)[-80:]})."}
         self.browsed[key] = (time.monotonic(), found)
@@ -441,7 +443,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if url.path == "/api/repo":
             return self.send_json(self.app.repo_info(query.get("name", "")))
         if url.path == "/api/prs":
-            return self.send_json(self.app.pulls(query.get("repo", ""), query.get("numbers", "")))
+            return self.send_json(self.app.pulls(query.get("repo", ""), query.get("numbers", ""), query.get("count", "")))
         if url.path == "/api/trace":
             return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", "")))
         if REPORT_FILE.fullmatch(url.path):

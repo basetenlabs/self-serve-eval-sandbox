@@ -29,9 +29,9 @@ export const repoInfo = (name: string, signal?: AbortSignal) =>
   getJSON<RepoInfo>(`/api/repo?name=${encodeURIComponent(name)}`, signal);
 
 /** A repository's latest merged pull requests, or the given ones, with whether each can be a task. */
-export function usePulls(repo: string | null, numbers?: number[]) {
-  const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}` : null;
-  const [got, setGot] = useState<{ url: string; list: PullList } | null>(null);
+export function usePulls(repo: string | null, numbers?: number[], count?: number) {
+  const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}${count ? `&count=${count}` : ""}` : null;
+  const [got, setGot] = useState<{ url: string; repo: string; list: PullList } | null>(null);
   useEffect(() => {
     if (!url) return;
     const abort = new AbortController();
@@ -39,11 +39,13 @@ export function usePulls(repo: string | null, numbers?: number[]) {
     fetch(url, { cache: "no-store", signal: abort.signal, headers: { accept: "application/json" } })
       .then((res) => res.json() as Promise<PullList>)
       .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }) as PullList)
-      .then((list) => { if (!abort.signal.aborted) setGot({ url, list }); });
+      .then((list) => { if (!abort.signal.aborted) setGot({ url, repo: repo!, list }); });
     return () => abort.abort();
-  }, [url]);
+  }, [url, repo]);
   const list = got && got.url === url ? got.list : null;
-  return { list, loading: !!url && !list };
+  // While a longer list of the same repository loads, the shorter one stays on screen.
+  const shown = list ?? (got && got.repo === repo && !got.list.error ? got.list : null);
+  return { list, shown, loading: !!url && !list };
 }
 
 /** One attempt's condensed trace, fetched when `enabled` first turns true. */

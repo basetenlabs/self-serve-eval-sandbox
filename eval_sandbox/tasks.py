@@ -472,8 +472,13 @@ def browse(repo: str, numbers: list[int] | None = None, count: int = 30) -> list
         if numbers:
             prs = list(pool.map(fetch, numbers))
         else:
-            listing = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100")
-            prs = sorted((pr for pr in listing if pr.get("merged_at")), key=lambda pr: pr["merged_at"], reverse=True)[:count]
+            merged = []
+            for page in range(1, 6):  # many closed PRs were never merged, so one page can hold too few
+                listing = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={page}")
+                merged += [pr for pr in listing if pr.get("merged_at")]
+                if len(listing) < 100 or len(merged) >= count:
+                    break
+            prs = sorted(merged, key=lambda pr: pr["merged_at"], reverse=True)[:count]
         return list(pool.map(row, prs))
 
 

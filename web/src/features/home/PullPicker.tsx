@@ -9,11 +9,15 @@ import type { PullList, PullRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const NEWEST = 10; // "Select newest" takes this many that can be tasks
+const PAGE = 30, MOST = 90; // latest merges listed at first and per "Show more", and at most
 
 /** A repository's latest merged pull requests to tick, newest first; ones that can't be tasks say why. */
 export function PullChooser({ repo, chosen, onChange, max }: { repo: string; chosen: number[]; onChange: (n: number[]) => void; max: number }) {
-  const { list, loading } = usePulls(repo);
+  const [listed, setListed] = React.useState({ repo, count: PAGE });
+  const count = listed.repo === repo ? listed.count : PAGE; // another repository starts from one page
+  const { list: latest, shown: list, loading } = usePulls(repo, undefined, count);
   const rows = list?.prs ?? [];
+  const more = !!latest && rows.length >= count && count < MOST; // a full page: there may be older ones
   const fit = rows.filter((r) => !r.why);
   const toggle = (n: number, on: boolean) =>
     onChange(on ? [...chosen, n].slice(0, max) : chosen.filter((c) => c !== n));
@@ -21,7 +25,7 @@ export function PullChooser({ repo, chosen, onChange, max }: { repo: string; cho
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="label-mono text-muted-foreground" aria-live="polite">
-          {loading ? "Reading the latest merges" : list?.error ? "Couldn't list them" : `${chosen.length} of ${plural(fit.length, "usable PR")} chosen`}
+          {loading && !rows.length ? "Reading the latest merges" : list?.error ? "Couldn't list them" : `${chosen.length} of ${plural(fit.length, "usable PR")} chosen`}
         </span>
         <span className="flex gap-1">
           <Button type="button" size="sm" variant="ghost" disabled={!fit.length}
@@ -33,13 +37,21 @@ export function PullChooser({ repo, chosen, onChange, max }: { repo: string; cho
       </div>
       {list?.error ? <Problem>{list.error}</Problem> : (
         <ul className="max-h-[380px] overflow-y-auto bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-label={`${repo} pull requests`} aria-busy={loading}>
-          {loading ? Array.from({ length: 5 }, (_, i) => <SkeletonRow key={i} />)
+          {!list ? Array.from({ length: 5 }, (_, i) => <SkeletonRow key={i} />)
             : rows.length ? rows.map((r) => (
               <PullItem key={r.number} row={r} control={
                 <Checkbox checked={chosen.includes(r.number)} disabled={!!r.why || (!chosen.includes(r.number) && chosen.length >= max)}
                   onCheckedChange={(v) => toggle(r.number, v === true)} aria-label={`#${r.number} ${r.title}`} />
               } />
             )) : <li className="px-3 py-6 text-center text-[13px] text-muted-foreground">No merged pull requests yet.</li>}
+          {list && loading && Array.from({ length: 3 }, (_, i) => <SkeletonRow key={`more-${i}`} />)}
+          {more && (
+            <li className="px-3 py-2">
+              <Button type="button" size="sm" variant="ghost" className="w-full" onClick={() => setListed({ repo, count: count + PAGE })}>
+                Show {PAGE} older merges
+              </Button>
+            </li>
+          )}
         </ul>
       )}
     </div>
