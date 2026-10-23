@@ -52,13 +52,14 @@ class Request:
     language: str | None = None
     max_lines: int = tasks.DEFAULT_MAX_LINES
     task_ids: list[str] | None = None  # exactly these task folders instead
+    quick: bool = False  # the quick sample: every PR in configs/quick_tasks.toml
 
     def describe(self) -> str:
         if self.task_ids:
             return f"{len(self.task_ids)} chosen tasks"
         if self.repos:
             return ", ".join(self.repos)
-        return "the sample tasks"
+        return "the quick sample" if self.quick else "the sample tasks"
 
 
 def now() -> str:
@@ -119,14 +120,14 @@ def new_job(request: Request, models: list[config.Model], judge: config.Judge | 
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
         "harness_version": None, "backend": "blaxel", "workspace": workspace, "image": image, "region": region,
         "attempts": attempts, "models": [m.as_dict() for m in models],
-        "judge": {"model": judge.model, "base_url": judge.base_url} if judge else None,
+        "judge": {"model": judge.model, "base_url": judge.base_url, "effort": judge.effort} if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
 
 
 def default_name(request: Request) -> str:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{request.repos[0].split('/')[-1] if request.repos else 'sample'}-{stamp}"
+    return f"{request.repos[0].split('/')[-1] if request.repos else 'quick' if request.quick else 'sample'}-{stamp}"
 
 
 def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
@@ -138,9 +139,11 @@ def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
             repo, tasks_dir, prs=request.prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
             setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines)]
         return [tasks.load(p) for p in paths]
-    paths = [path for repo, prs in tasks.sample().items() for path in tasks.collect(repo, tasks_dir, prs=prs)]
+    paths = [path for repo, prs in tasks.sample(request.quick).items() for path in tasks.collect(repo, tasks_dir, prs=prs)]
     found = sorted((tasks.load(p) for p in paths), key=lambda t: t.meta["task"]["merged_at"])
-    return tasks.spread(found, request.limit, repo=lambda t: t.meta["task"]["repo"]) if request.limit else found
+    if request.quick or not request.limit:
+        return found
+    return tasks.spread(found, request.limit, repo=lambda t: t.meta["task"]["repo"])
 
 
 def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, skip_check: bool = False) -> int:

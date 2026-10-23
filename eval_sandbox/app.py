@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,11 @@ PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 RUN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")  # never "." or ".."
 MAX_LIMIT = 50
+QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
+# Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
+# beside it, then the verifier alone once the agent's sandbox is deleted.
+SANDBOXES = {"sandboxes": 2, "setup": 2, "agent": 2, "tests": 1}
+CHECK_STAGES = ("sandboxes", "setup", "base", "reference")
 
 
 def parse_repo(text: str) -> str | None:
@@ -61,6 +67,7 @@ class App:
         self.children: dict[str, subprocess.Popen] = {}  # runs started here, so finished ones are reaped
         self.lock = threading.RLock()  # one start or resume at a time, so two tabs can't start two runs
         self.checked: tuple[float, dict] = (0.0, {})
+        self.task_info: dict[Path, dict] = {}
 
     # ---------- what the page shows ----------
 
@@ -71,12 +78,16 @@ class App:
         runs = [r for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
             if self.jobs_dir.is_dir() else []
         runs.sort(key=lambda r: r["active_at"], reverse=True)
+        for i, run in enumerate(runs):  # the live board: every run going, and the latest one
+            if i == 0 or run["phase"] in pipeline.ACTIVE:
+                run["board"] = self.board(run)
         estimates = self.estimates(runs)
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
                 "sample": {"tasks": sum(map(len, tasks.sample().values())), "repos": len(tasks.sample())},
+                "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True))},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for r in runs)}
 
@@ -96,7 +107,7 @@ class App:
             cached = {"blaxel": problem is None, "blaxel_problem": problem,
                       "bl_cli": bl_cli, "gh": gh, "image": image, "judge": judge.problem()}
             self.checked = (time.monotonic(), cached)
-        return {**cached, "judge": {"model": judge.model, "env": judge.api_key_env, "ok": not cached["judge"],
+        return {**cached, "judge": {"model": judge.model, "effort": judge.effort, "env": judge.api_key_env, "ok": not cached["judge"],
                                     "problem": cached["judge"]}}
 
     def describe(self, job_dir: Path) -> dict | None:
@@ -135,6 +146,8 @@ class App:
         sample = {f"{r.replace('/', '__')}-{n}" for r, prs in tasks.sample().items() for n in prs}
         if request.get("repos"):
             title = ", ".join(request["repos"])
+        elif request.get("quick"):
+            title = "Quick sample"
         elif (run_tasks and set(run_tasks) <= sample) or (request and not request.get("task_ids")):
             title = "Sample tasks"
         else:
@@ -165,6 +178,54 @@ class App:
                          and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
         }
 
+    def board(self, run: dict) -> dict:
+        """Every PR in the run and what each model's attempt on it is doing now, for the live view."""
+        job_dir = self.jobs_dir / run["id"]
+        meta = read_json(job_dir / "run.json")
+        tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
+        active = run["phase"] in pipeline.ACTIVE
+        kept, left = set(meta.get("tasks") or []), meta.get("left_out") or {}
+        models, attempts = [m["key"] for m in meta.get("models") or []], meta.get("attempts", 1)
+        rows, sandboxes = [], 0
+        for task_id in meta.get("candidates") or meta.get("tasks") or []:
+            info = self.task(tasks_dir / task_id)
+            if task_id in kept:
+                check = {"stage": "passed"}
+            elif task_id in left:
+                check = {"stage": "left-out", "why": pipeline.LEFT_OUT.get(left[task_id], left[task_id])}
+            else:
+                live = read_json(tasks_dir / task_id / "validation" / "stage.json")
+                check = live if active and live.get("run_id") == run["id"] else {"stage": "queued" if active else "stopped"}
+                sandboxes += check["stage"] in CHECK_STAGES
+            cells = []
+            for key in models:
+                for attempt in range(1, attempts + 1):
+                    trial = job_dir / "trials" / f"{task_id}__{key}__{attempt}"
+                    if done := read_json(trial / "result.json"):
+                        cells.append(cell(key, attempt, done))
+                    elif task_id in left:
+                        cells.append({"model": key, "attempt": attempt, "stage": "left-out"})
+                    elif (live := read_json(trial / "stage.json")) and active:
+                        sandboxes += SANDBOXES.get(live["stage"], 0)
+                        cells.append({"model": key, "attempt": attempt, **live})
+                    else:
+                        cells.append({"model": key, "attempt": attempt,
+                                      "stage": ("queued" if task_id in kept else "waiting") if active else "not-run"})
+            rows.append({"id": task_id, **info, "check": check, "cells": cells})
+        return {"rows": rows, "sandboxes": sandboxes, "concurrency": meta.get("concurrency")}
+
+    def task(self, path: Path) -> dict:
+        """A task's repository, PR and title; cached, since a task folder doesn't change."""
+        if path not in self.task_info:
+            try:
+                meta = tomllib.loads((path / "task.toml").read_text())["task"]
+            except (OSError, tomllib.TOMLDecodeError, KeyError):
+                return {"repo": repo_of(path.name), "pr": path.name.rsplit("-", 1)[-1], "title": "", "language": ""}
+            self.task_info[path] = {"repo": meta["repo"], "pr": meta["pr_number"], "title": meta.get("title", ""),
+                                    "language": meta.get("language", ""), "url": meta.get("url"),
+                                    "lines": meta.get("lines_changed")}
+        return self.task_info[path]
+
     def estimates(self, runs: list[dict]) -> dict[str, dict]:
         """Cost and time per attempt for each model, from the most recent run that has them."""
         found: dict[str, dict] = {}
@@ -182,6 +243,9 @@ class App:
             data = tasks.gh(f"repos/{repo}")
         except (RuntimeError, SystemExit) as exc:
             return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
+        # The hosted page shares one GitHub login among everyone signed in; it never reads private code.
+        if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"):
+            return {"repo": repo, "error": "This hosted page runs public repositories only."}
         language = data.get("language") or "unknown"
         try:
             tasks.recipe(repo, language, [])
@@ -205,7 +269,8 @@ class App:
             return {"error": checks["blaxel_problem"]}
         if not checks["bl_cli"]:
             return {"error": "Install the Blaxel CLI (bl): runs use it to build and find the trial image."}
-        sample = bool(form.get("sample"))
+        quick = bool(form.get("quick"))
+        sample = bool(form.get("sample")) or quick
         repo = None if sample else parse_repo(str(form.get("repo") or ""))
         if not sample and not repo:
             return {"error": "Enter a GitHub repository as owner/repo, or choose the sample tasks."}
@@ -225,16 +290,17 @@ class App:
         if not 1 <= limit <= MAX_LIMIT:
             return {"error": f"Choose between 1 and {MAX_LIMIT} pull requests."}
         setup, test = (str(form.get(k) or "").strip()[:500] or None for k in ("setup", "test"))
-        if repo and not (setup and test):
+        if repo and (os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not (setup and test)):
             info = self.repo_info(repo)
             if info.get("error"):
                 return info
-            if not info["defaults"]:
+            if not info["defaults"] and not (setup and test):
                 return {"error": f"{repo} is {info['language']}: give the install and test commands "
                                  "(Go and Python repositories have defaults)."}
-        run_id = f"{repo.split('/')[-1] if repo else 'sample'}-{datetime.now():%Y%m%d-%H%M%S}"
+        run_id = f"{repo.split('/')[-1] if repo else 'quick' if quick else 'sample'}-{datetime.now():%Y%m%d-%H%M%S}"
         argv = [repo] if repo else []
-        argv += ["--limit", str(limit), "--models", ",".join(keys), "--name", run_id]
+        argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else ["--limit", str(limit)]
+        argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         self.spawn(run_id, argv)
@@ -281,6 +347,19 @@ class App:
                     [sys.executable, "-m", "eval_sandbox", "run", *argv], cwd=pipeline.ROOT,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
+
+
+def cell(model: str, attempt: int, result: dict) -> dict:
+    """A finished attempt on the board: its outcome, time, cost, and what the tests and judge said."""
+    seconds = None
+    if result.get("started_at") and result.get("finished_at"):
+        seconds = round((datetime.fromisoformat(result["finished_at"])
+                         - datetime.fromisoformat(result["started_at"])).total_seconds())
+    return {"model": model, "attempt": attempt, "stage": result.get("outcome") or "invalid",
+            "reason": result.get("invalid_reason"), "seconds": seconds,
+            "cost": (result.get("agent") or {}).get("cost_usd"), "diff": result.get("diff"),
+            "tests_passed": (result.get("tests") or {}).get("passed"),
+            "judge": (result.get("judge") or {}).get("verdict")}
 
 
 def read_json(path: Path) -> dict:

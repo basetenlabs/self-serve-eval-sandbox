@@ -4,11 +4,13 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -243,6 +245,15 @@ class RecipeTest(unittest.TestCase):
         sample = tasks.sample()
         self.assertEqual(sum(map(len, sample.values())), 42)
         self.assertIn(1159, sample["go-chi/chi"])
+
+    def test_the_quick_sample_is_ten_sample_tasks(self):
+        sample, quick = tasks.sample(), tasks.sample(quick=True)
+        self.assertEqual(sum(map(len, quick.values())), 10)
+        self.assertGreaterEqual(len(quick), 6)
+        for repo, prs in quick.items():
+            self.assertLessEqual(set(prs), set(sample[repo]), repo)
+        self.assertEqual(pipeline.Request(quick=True).describe(), "the quick sample")
+        self.assertTrue(pipeline.default_name(pipeline.Request(quick=True)).startswith("quick-"))
 
     def test_spread_mixes_repositories(self):
         rows = [{"repo": "a", "n": i} for i in range(5)] + [{"repo": "b", "n": i} for i in range(5)]
@@ -590,6 +601,47 @@ class AppTest(unittest.TestCase):
         self.assertTrue(dead_run["resumable"])
         self.assertIn("boom", dead_run["log"])
 
+    def test_the_board_shows_each_attempt_live(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs, tasks_dir = Path(d) / "jobs", Path(d) / "tasks"
+            for task_id, pr in (("o__r-1", 1), ("o__r-2", 2), ("o__r-3", 3)):
+                (tasks_dir / task_id / "validation").mkdir(parents=True)
+                (tasks_dir / task_id / "task.toml").write_text(
+                    f'[task]\nid = "{task_id}"\nrepo = "o/r"\npr_number = {pr}\ntitle = "Fix {pr}"\nlanguage = "Go"\n')
+            job = jobs / "quick-1"
+            (job / "trials" / "o__r-1__m__1").mkdir(parents=True)
+            (job / "trials" / "o__r-1__m__1" / "stage.json").write_text(json.dumps({"stage": "agent", "at": "x"}))
+            (job / "trials" / "o__r-2__m__1").mkdir(parents=True)
+            (job / "trials" / "o__r-2__m__1" / "result.json").write_text(json.dumps(
+                {"outcome": "solved", "started_at": "2026-10-23T18:00:00+00:00", "finished_at": "2026-10-23T18:02:05+00:00",
+                 "agent": {"cost_usd": 0.5}, "tests": {"passed": True}, "judge": {"verdict": "pass"}}))
+            (tasks_dir / "o__r-3" / "validation" / "stage.json").write_text(json.dumps({"stage": "base", "run_id": "quick-1"}))
+            (job / "run.json").write_text(json.dumps({
+                "run_id": "quick-1", "request": {"quick": True}, "candidates": ["o__r-1", "o__r-2", "o__r-3"],
+                "tasks": ["o__r-1", "o__r-2"], "tasks_dir": str(tasks_dir), "models": [{"key": "m", "label": "M"}],
+                "status": {"phase": "checking", "pid": os.getpid()}}))
+            page = app.App(jobs)
+            with mock.patch.object(app, "alive", return_value=True):
+                run = page.describe(job)
+                board = page.board(run)
+        self.assertEqual(run["title"], "Quick sample")
+        rows = {r["id"]: r for r in board["rows"]}
+        self.assertEqual(rows["o__r-1"]["title"], "Fix 1")
+        self.assertEqual(rows["o__r-1"]["cells"][0]["stage"], "agent")
+        self.assertEqual((rows["o__r-2"]["cells"][0]["stage"], rows["o__r-2"]["cells"][0]["seconds"]), ("solved", 125))
+        self.assertEqual((rows["o__r-3"]["check"]["stage"], rows["o__r-3"]["cells"][0]["stage"]), ("base", "waiting"))
+        self.assertEqual(board["sandboxes"], app.SANDBOXES["agent"] + 1)  # the agent's two, and the check's one
+
+    def test_the_hosted_page_refuses_private_repositories(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}):
+            self.assertNotIn("error", page.repo_info("o/r"))
+            with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                self.assertIn("public repositories only", page.repo_info("o/r")["error"])
+        with mock.patch.object(app.tasks, "gh", return_value={"private": False, "language": "Go"}), \
+                mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+            self.assertNotIn("error", page.repo_info("o/r"))
+
     def test_only_this_page_can_start_runs(self):
         import http.client
         import threading
@@ -641,7 +693,7 @@ class ReportTest(unittest.TestCase):
     def test_pages_hide_docker_wording(self):
         page = app.PAGE.read_text()
         self.assertNotIn("Docker", page)
-        self.assertIn('c.blaxel, "Dedicated Blaxel workspace is connected"', page)
+        self.assertIn('c.blaxel, "Dedicated Blaxel workspace"', page)
         self.assertNotIn('${run.image}', report.TEMPLATE.read_text())
 
     def test_report_header_omits_judge_metadata(self):
@@ -728,6 +780,25 @@ class JudgeTest(unittest.TestCase):
     def test_missing_key_is_an_error_not_a_verdict(self):
         from eval_sandbox import judge
         self.assertIn("error", judge.grade(self.judge, self.task, "diff", {"passed": True}, ""))
+
+    def test_the_judge_asks_for_its_configured_reasoning_effort(self):
+        from unittest import mock
+        from eval_sandbox import judge
+        self.assertEqual(config.load()[1].effort, "high")
+        sent = {}
+
+        def respond(request, timeout):
+            sent.update(json.loads(request.data))
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
+        with tempfile.TemporaryDirectory() as d, mock_env(PR_EVAL_TEST_KEY="k"), \
+                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
+            (Path(d) / "solution").mkdir()
+            (Path(d) / "solution" / "reference.patch").write_text("diff")
+            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
+            graded = judge.grade(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY", effort="high"),
+                                 task, "diff", {"passed": True}, "")
+        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual((graded["verdict"], graded["effort"]), ("pass", "high"))
 
     def test_solved_needs_the_tests_and_the_judge(self):
         from unittest import mock

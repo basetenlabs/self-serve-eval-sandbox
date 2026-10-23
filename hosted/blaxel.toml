@@ -1,0 +1,5 @@
+name = "pr-eval-host"
+type = "sandbox"
+
+[runtime]
+memory = 4096

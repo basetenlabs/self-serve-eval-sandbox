@@ -76,6 +76,7 @@ prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_
 # Completions endpoint works; `api_key_env` names the variable holding its key.
 [judge]
 model = "gpt-6.1-sol"
+effort = "high"  # sent as reasoning_effort
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 # Judge tokens are reported separately: they are the cost of grading, not of the work.
