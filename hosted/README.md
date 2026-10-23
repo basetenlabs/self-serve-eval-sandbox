@@ -9,7 +9,7 @@ sign in, start runs and read reports.
   page uses the eval page's Baseten style and fonts) and passes signed-in requests to
   `pr-eval serve` on 127.0.0.1. A request that starts or stops a run must come from the site
   itself, and the gateway logs who sent it.
-- **Keys:** the page's process gets the judge, model, GitHub and Blaxel keys in its environment
+- **Keys:** the page's process gets the judges', models', GitHub and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
 - **Public repositories only:** everyone signed in shares one GitHub login, so the hosted page
   refuses private repositories (`PR_EVAL_PUBLIC_REPOS_ONLY`).
@@ -19,7 +19,7 @@ sign in, start runs and read reports.
 ## Deploy
 
 ```sh
-bl push -d hosted --name pr-eval-host --type sandbox -w pr-eval-01db4d88   # the image, once
+bl push -d hosted --name pr-eval-host --type sandbox -w pr-eval-01db4d88   # the image, once and after changing hosted/Dockerfile
 .venv/bin/python hosted/deploy.py --seed jobs/grafana-1021                   # create or update
 ```
 
@@ -28,7 +28,8 @@ the file), creates the volume, sandbox and public preview when they don't exist 
 app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
 401). `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
 trial's result.json and condensed, redacted trace, all scanned for credentials first); full
-transcripts stay on your Mac.
+transcripts stay on your Mac. A sandbox keeps the image it was created from: after a new
+image, `deploy.py --delete` and deploy again (runs and sign-in state stay on the volume).
 
 Logs: `bl logs sandbox pr-eval-host -w pr-eval-01db4d88`.
 

@@ -14,8 +14,9 @@ Where it runs (the dedicated trial workspace, so the page can start trials there
              environment only; never written to the volume, the image or this repository
 
 Keys come from the environment when set, else from the Keychain:
-    BASETEN_API_KEY         Keychain baseten-api-key (open models and the judge)
-    CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models)
+    BASETEN_API_KEY         Keychain baseten-api-key (open models and the Kimi K3 judge)
+    CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models and the Opus judge)
+    OPENAI_API_KEY          Keychain baseten-openai-api-key (the GPT-6.1 Sol judge)
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
 """
@@ -57,6 +58,7 @@ SEED_FILES = ["run.json", "report.json", "report.html"]
 SECRETS = {
     "BASETEN_API_KEY": "baseten-api-key",
     "CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-claude-code-oauth-token",
+    "OPENAI_API_KEY": "baseten-openai-api-key",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
 LEAK = trace.SECRET
