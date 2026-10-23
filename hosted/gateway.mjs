@@ -24,7 +24,8 @@ export async function gateway({ origin, upstream, environment, stateDirectory, f
     ['/auth/login.js', await asset('login.js', 'text/javascript; charset=utf-8')],
     ['/auth/session.js', await asset('session.js', 'text/javascript; charset=utf-8')],
     ['/auth/style.css', await asset('auth.css', 'text/css; charset=utf-8')],
-    ['/auth/logo.svg', await asset('blaxel-lockup.svg', 'image/svg+xml')],
+    ['/auth/geist.woff2', await asset('fonts/geist.woff2', 'font/woff2')],
+    ['/auth/geist-mono.woff2', await asset('fonts/geist-mono.woff2', 'font/woff2')],
   ])
   const auth = await blaxelAuth({ origin, environment, stateDirectory, clientName: 'Baseten Eval Sandbox', fetcher, now })
   const pageHost = `127.0.0.1:${upstream}`

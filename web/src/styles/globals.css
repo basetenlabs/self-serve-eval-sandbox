@@ -1,0 +1,280 @@
+@import "tailwindcss";
+
+/* Fonts ship inside the page (latin only), so a report opened from disk looks the same offline.
+   Beausite Classic is Baseten's brand face; it is used when installed, with Geist in its place. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- Baseten brand palette (exact values from the brand guide; no others) ---------- */
+:root {
+  --bt-black: #000000;
+  --bt-dark-grey-1: #323432;
+  --bt-dark-grey-2: #575d56;
+  --bt-dark-grey-3: #a2ae9d;
+  --bt-light-grey-3: #c7d4c4;
+  --bt-light-grey-2: #e3eae1;
+  --bt-light-grey-1: #f1f5f0;
+  --bt-white: #ffffff;
+  --bt-canvas: #f8f9f8;
+
+  --bt-green-white: #ecf6ea;
+  --bt-green-light: #d7face;
+  --bt-green: #19e76e;
+  --bt-green-dark: #009735;
+  --bt-green-black: #213026;
+  --bt-pink-white: #f8f2f8;
+  --bt-pink-light: #f4e7f2;
+  --bt-pink: #ffa9fd;
+  --bt-pink-dark: #ac0eb2;
+  --bt-pink-black: #302130;
+  --bt-blue-white: #f4f7f9;
+  --bt-blue-light: #d4ebff;
+  --bt-blue: #3da6ff;
+  --bt-blue-dark: #0065ad;
+  --bt-blue-black: #212a30;
+  --bt-gold-white: #f9f8f4;
+  --bt-gold-light: #ffedc4;
+  --bt-gold: #ffbe4d;
+  --bt-gold-dark: #d5700b;
+  --bt-gold-black: #2e261e;
+}
+
+/* ---------- Roles. Light is the brand default; dark uses the Black steps. ---------- */
+:root {
+  color-scheme: light;
+  --background: var(--bt-canvas);
+  --foreground: var(--bt-black);
+  --surface: var(--bt-white); /* plot areas, tables, cards */
+  --node: var(--bt-light-grey-2); /* nodes, chips, check rows, code blocks */
+  --node-2: var(--bt-light-grey-3); /* secondary nodes, hover on nodes */
+  --muted: var(--bt-light-grey-1);
+  --muted-foreground: var(--bt-dark-grey-2);
+  --frame: var(--bt-light-grey-2); /* hairlines around surfaces */
+  --rule: var(--bt-light-grey-3); /* section rules, gridlines, layout guides */
+  --line: var(--bt-dark-grey-3); /* connectors, axes, icons that are shapes */
+  --column-rule: var(--bt-black);
+  --primary: var(--bt-black);
+  --primary-foreground: var(--bt-white);
+  --ring: var(--bt-black);
+  --danger: var(--bt-pink-dark);
+  --danger-surface: var(--bt-pink-light);
+  --warn-surface: var(--bt-gold-light);
+  --info-surface: var(--bt-blue-light);
+  --code: var(--bt-light-grey-1);
+  --diff-add: var(--bt-green-light);
+  --diff-del: var(--bt-pink-light);
+  --scrim: rgb(0 0 0 / 0.32);
+  --shadow-pop: 0 1px 0 rgb(0 0 0 / 0.04), 0 12px 32px -8px rgb(33 48 38 / 0.18);
+
+  /* Data colours keep one meaning everywhere: green is Baseten (open models served on Baseten),
+     blue is the comparison (closed models), pink is the delta, gold is the outside world. */
+  --baseten: var(--bt-green);
+  --baseten-2: var(--bt-green-dark);
+  --rival: var(--bt-blue);
+  --rival-2: var(--bt-blue-dark);
+  --delta: var(--bt-pink);
+  --external: var(--bt-gold);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: var(--bt-black);
+  --foreground: var(--bt-white);
+  --surface: rgb(255 255 255 / 0.035);
+  --node: rgb(255 255 255 / 0.07);
+  --node-2: rgb(255 255 255 / 0.12);
+  --muted: rgb(255 255 255 / 0.05);
+  --muted-foreground: var(--bt-dark-grey-3);
+  --frame: rgb(255 255 255 / 0.1);
+  --rule: var(--bt-dark-grey-1);
+  --line: var(--bt-dark-grey-2);
+  --column-rule: var(--bt-white);
+  --primary: var(--bt-white);
+  --primary-foreground: var(--bt-black);
+  --ring: var(--bt-green);
+  --danger: var(--bt-pink);
+  --danger-surface: var(--bt-pink-black);
+  --warn-surface: var(--bt-gold-black);
+  --info-surface: var(--bt-blue-black);
+  --code: rgb(255 255 255 / 0.04);
+  --diff-add: var(--bt-green-black);
+  --diff-del: var(--bt-pink-black);
+  --scrim: rgb(0 0 0 / 0.6);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.08), 0 16px 40px -12px rgb(0 0 0 / 0.8);
+}
+
+@theme inline {
+  --font-sans: "Beausite Classic", "Beausite", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-node: var(--node);
+  --color-node-2: var(--node-2);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-frame: var(--frame);
+  --color-rule: var(--rule);
+  --color-line: var(--line);
+  --color-column-rule: var(--column-rule);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
+  --color-danger: var(--danger);
+  --color-danger-surface: var(--danger-surface);
+  --color-warn-surface: var(--warn-surface);
+  --color-info-surface: var(--info-surface);
+  --color-code: var(--code);
+  --color-diff-add: var(--diff-add);
+  --color-diff-del: var(--diff-del);
+  --color-baseten: var(--baseten);
+  --color-baseten-2: var(--baseten-2);
+  --color-rival: var(--rival);
+  --color-rival-2: var(--rival-2);
+  --color-delta: var(--delta);
+  --color-external: var(--external);
+  --color-green: var(--bt-green);
+  --color-green-dark: var(--bt-green-dark);
+  --color-green-light: var(--bt-green-light);
+  --color-green-white: var(--bt-green-white);
+  --color-pink: var(--bt-pink);
+  --color-pink-dark: var(--bt-pink-dark);
+  --color-pink-light: var(--bt-pink-light);
+  --color-blue: var(--bt-blue);
+  --color-blue-dark: var(--bt-blue-dark);
+  --color-blue-light: var(--bt-blue-light);
+  --color-gold: var(--bt-gold);
+  --color-gold-dark: var(--bt-gold-dark);
+  --color-gold-light: var(--bt-gold-light);
+
+  /* Radius is 0 everywhere; value chips get 2px. */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-chip: 2px;
+
+  --shadow-pop: var(--shadow-pop);
+
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+  --animate-stripe: stripe 1.2s linear infinite;
+  --animate-enter: enter 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pop: pop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade: fade 0.2s ease-out both;
+  --animate-slide-in: slide-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-grow: grow 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+@keyframes stripe {
+  from { background-position: 0 0; }
+  to { background-position: 16px 0; }
+}
+@keyframes enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+/* Bars grow from zero to their own width. */
+@keyframes grow {
+  from { width: 0; }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+@layer base {
+  *, ::before, ::after { border-color: var(--frame); }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "tnum" 0;
+  }
+  ::selection { background: var(--bt-green); color: var(--bt-black); }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+}
+
+/* Utilities (not plain classes) so they take variants such as md: and hover:. */
+/* Mono labels name or measure things: uppercase, tracked. */
+@utility label-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+/* A column: a 1px rule across the top and a mono heading under it. */
+@utility column-rule {
+  border-top: 1px solid var(--column-rule);
+}
+/* The website's blueprint guides: dashed layout lines. */
+@utility guide-x {
+  border-left: 1px dashed var(--rule);
+  border-right: 1px dashed var(--rule);
+}
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+@utility stripes {
+  background-image: repeating-linear-gradient(-45deg, transparent 0 4px, rgb(0 0 0 / 0.08) 4px 8px);
+  background-size: 16px 16px;
+  &:where(.dark *) {
+    background-image: repeating-linear-gradient(-45deg, transparent 0 4px, rgb(255 255 255 / 0.1) 4px 8px);
+  }
+}
+/* Dashed means not here yet: placeholders, queued work, empty slots. */
+@utility placeholder-cell {
+  outline: 1px dashed var(--rule);
+  outline-offset: -1px;
+}
+
+/* The hosted page's Sign out form, moved into the top bar. */
+.session-slot .auth-session { position: static; display: flex; align-items: center; gap: 8px; }
+.session-slot .auth-session [role="status"] { position: absolute; top: 52px; right: 16px; margin: 0; font: 12px var(--font-sans); color: var(--primary-foreground); background: var(--primary); border: 0; border-radius: 0; }
+.session-slot .auth-session button {
+  height: 32px; padding: 0 12px; border: 0; border-radius: 0; cursor: pointer;
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--foreground); background: var(--surface); box-shadow: inset 0 0 0 1px var(--rule);
+}
+.session-slot .auth-session button:hover { box-shadow: inset 0 0 0 1px var(--foreground); }

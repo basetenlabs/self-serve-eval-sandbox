@@ -106,4 +106,18 @@ It prints one line per attempt and keeps the report current. Stop it with Ctrl-C
 
 ```bash
 python3 -m unittest discover -s tests     # no cloud, network or keys needed
+cd web && npm run check                   # the page's type check and unit tests
 ```
+
+## Changing the page
+
+The page and the run report are a small React app in `web/`, built into two self-contained HTML files in `eval_sandbox/` that `pr-eval serve` and `pr-eval report` use as they are. Installing and running `pr-eval` needs no Node; changing the page does (Node 20.19 or 22.12 and later):
+
+```bash
+cd web
+npm ci
+npm run dev        # live reload at http://localhost:5173, against `pr-eval serve` on port 8765
+npm run build      # writes eval_sandbox/app.html and eval_sandbox/report_template.html
+```
+
+Commit the built files with the source change. Each carries a hash of the sources it came from, and the unit tests fail when it doesn't match.

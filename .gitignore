@@ -4,6 +4,7 @@
 .venv/
 __pycache__/
 node_modules/
+web/dist/
 jobs/
 results/
 # Repository clones `pr-eval collect` makes; they hold the answers, so they stay local.

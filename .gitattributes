@@ -1,0 +1,3 @@
+# Built from web/ (`cd web && npm ci && npm run build`); edit the sources there, not these.
+eval_sandbox/app.html linguist-generated=true -diff
+eval_sandbox/report_template.html linguist-generated=true -diff
