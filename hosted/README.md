@@ -5,9 +5,10 @@ anything. Anyone whose Blaxel account has a verified `@baseten.co` or `@blaxel.a
 sign in, start runs and read reports.
 
 - **Sign-in:** `gateway.mjs` is the only public door. It serves "Sign in with Blaxel" (OAuth code
-  flow with PKCE; `auth.mjs`, `oidc.mjs` and the page assets are vendored from Benchmark Studio)
-  and passes signed-in requests to `pr-eval serve` on 127.0.0.1. A request that starts or stops a
-  run must come from the site itself, and the gateway logs who sent it.
+  flow with PKCE; `auth.mjs` and `oidc.mjs` are vendored from Benchmark Studio, and the sign-in
+  page uses the eval page's Baseten style and fonts) and passes signed-in requests to
+  `pr-eval serve` on 127.0.0.1. A request that starts or stops a run must come from the site
+  itself, and the gateway logs who sent it.
 - **Keys:** the page's process gets the judge, model, GitHub and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
 - **Public repositories only:** everyone signed in shares one GitHub login, so the hosted page
