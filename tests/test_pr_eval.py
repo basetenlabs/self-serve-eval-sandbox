@@ -693,7 +693,7 @@ class ReportTest(unittest.TestCase):
     def test_pages_hide_docker_wording(self):
         page = app.PAGE.read_text()
         self.assertNotIn("Docker", page)
-        self.assertIn('c.blaxel, "Dedicated Blaxel workspace is connected"', page)
+        self.assertIn('c.blaxel, "Dedicated Blaxel workspace"', page)
         self.assertNotIn('${run.image}', report.TEMPLATE.read_text())
 
     def test_report_header_omits_judge_metadata(self):
