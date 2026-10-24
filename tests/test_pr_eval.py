@@ -530,11 +530,13 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertIn("+new", patch)
         self.assertEqual(runner.diff_stats(numstat)["files"], 1)
 
-    def test_a_setup_that_fails_is_tried_once_more(self):
+    def test_a_setup_whose_download_dropped_is_tried_again(self):
         task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"environment": {"setup": "SETUP"}})
-        for setups, expected in (([(1, "unexpected EOF", False), (0, "ok", False)], None),
-                                 ([(1, "no such module", False), (1, "no such module", False)], "setup-error"),
-                                 ([(1, "", True)], "setup-timeout")):  # not again after a timeout
+        eof = (1, 'go: read "https://proxy.golang.org/x.zip": unexpected EOF', False)
+        for setups, expected in (([eof, eof, (0, "ok", False)], None),
+                                 ([eof, eof, eof], "setup-error"),
+                                 ([(1, "no such module", False)], "setup-error"),  # not a download: not again
+                                 ([(1, "", True)], "setup-timeout")):  # nor after a timeout
             answers = list(setups)
             def fake_sh(container, script, *, timeout):
                 if script == "SETUP":
@@ -542,7 +544,7 @@ class PatchCaptureTest(unittest.TestCase):
                 return 0, "a" * 40 if "rev-parse" in script else "", False
             with tempfile.TemporaryDirectory() as d, mock.patch.object(runner, "sh", fake_sh), \
                     mock.patch.object(runner, "snapshot"), mock.patch.object(runner.runtime, "upload"), \
-                    mock.patch.object(runner, "block_lookups"):
+                    mock.patch.object(runner, "block_lookups"), mock.patch.object(runner.time, "sleep"):
                 reason, _ = runner.prepare_workspace("unused", task, Path(d))
                 log = (Path(d) / "setup.log").read_text()
             self.assertEqual((reason, answers), (expected, []))

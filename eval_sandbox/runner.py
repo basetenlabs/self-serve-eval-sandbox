@@ -334,6 +334,14 @@ def start_container(name: str, run_id: str, settings: Settings, memory: int | No
         raise runtime.RuntimeError("Run is stopping; the caller deletes this sandbox.")
 
 
+# How a dependency download that the network dropped reads in Go, pip, uv and npm's output.
+# Seen under a full run's load: about 1 setup in 30 cut off mid-file, and an instant retry
+# cut off again.
+DROPPED_DOWNLOAD = re.compile(r"unexpected EOF|connection reset|ECONNRESET|ETIMEDOUT|EAI_AGAIN|i/o timeout|"
+                              r"TLS handshake timeout|IncompleteRead|Read timed out|50[234] (Bad Gateway|Service "
+                              r"Unavailable|Gateway Time-?out)", re.I)
+
+
 def sandbox_memory(task: Task, settings: Settings) -> int:
     """MB for this task's sandboxes: the run's size, or more where the repository needs it."""
     return max(settings.memory, int(task.meta["environment"].get("memory_mb", 0)))
@@ -356,11 +364,12 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
     started = time.monotonic()
     timeout = int(task.meta["environment"].get("setup_timeout_sec", 900))
     logs = []
-    for _ in range(2):  # a download can drop mid-file, and installing dependencies twice is harmless
+    for wait in (10, 30, None):  # a download can drop mid-file, and installing dependencies again is harmless
         code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
         logs.append(out)
-        if code == 0 or timed_out:
+        if code == 0 or timed_out or wait is None or not DROPPED_DOWNLOAD.search(out):
             break
+        time.sleep(wait)
     (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
     stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
     if code != 0:
