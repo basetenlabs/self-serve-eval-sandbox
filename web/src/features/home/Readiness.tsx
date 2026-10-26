@@ -48,7 +48,7 @@ export function Readiness({ state }: { state: AppState }) {
         ))}
       </ul>
       <p className="mt-5 text-[12.5px] leading-snug text-muted-foreground">
-        Runs use their own Blaxel workspace, never a shared one. Keys stay on this machine.
+        Runs use their own Blaxel workspace, never a shared one. Keys are read from the environment, never saved to a file.
       </p>
     </Column>
   );

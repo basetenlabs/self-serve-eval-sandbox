@@ -22,7 +22,7 @@ type Source = "quick" | "repo" | "suite";
 type Pick = "latest" | "choose";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 const LIMITS = [5, 10, 20, 40];
-const QUICK_MINUTES = 5; // every quick-sample attempt starts at once; a few minutes end to end
+const QUICK_MINUTES = 8; // every quick-sample attempt starts at once; the slowest attempt sets the end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
