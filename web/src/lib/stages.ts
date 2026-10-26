@@ -17,7 +17,7 @@ export const STAGE: Record<string, { label: string; tone: Tone; verb?: string }>
   setup: { label: "Installing deps", tone: "setup", verb: "installing dependencies" },
   agent: { label: "Agent coding", tone: "agent", verb: "agent started coding" },
   tests: { label: "Hidden tests", tone: "tests", verb: "agent sandbox deleted, hidden tests running" },
-  judge: { label: "Judge reviewing", tone: "judge", verb: "judge reviewing the change" },
+  judge: { label: "Judges reviewing", tone: "judge", verb: "judges reviewing the change" },
   solved: { label: "Solved", tone: "solved" },
   failed: { label: "Not solved", tone: "failed" },
   invalid: { label: "Not scored", tone: "invalid" },
@@ -43,7 +43,7 @@ export const stepIndex = (stage: string) => (STEPS as readonly string[]).indexOf
 export function failReason(c: Pick<Cell, "stage" | "tests_passed" | "judge">): string | null {
   if (c.stage !== "failed") return null;
   if (c.tests_passed === false) return "tests failed";
-  if (c.judge === "fail") return "judge said no";
+  if (c.judge === "fail") return "judges said no";
   return null;
 }
 
@@ -76,7 +76,7 @@ export function pipeline(r: Run) {
       count: checked && passed ? `${passed} passed${leftOut ? ` · ${leftOut} left out` : ""}` : null },
     { key: "code", title: "Models code", what: "One sandbox per attempt", state: st(done || (checked && !doing(["queued", "sandboxes", "setup", "agent"]) && scored > 0), doing(["sandboxes", "setup", "agent"])),
       count: scored ? (coding ? `${coding} coding now` : `${scored} attempts`) : null },
-    { key: "grade", title: "Grade", what: r.judged === false ? "Hidden tests" : "Hidden tests, then a judge", state: st(done, doing(["tests", "judge"])),
+    { key: "grade", title: "Grade", what: r.judged === false ? "Hidden tests" : "Hidden tests, then judges", state: st(done, doing(["tests", "judge"])),
       count: scored ? (grading ? `${grading} grading now` : `${graded} graded`) : null },
     { key: "report", title: "Report", what: "Solve rate, cost, time", state: st(done && !!r.report, false),
       count: scored ? `${finished} of ${scored} in` : null },

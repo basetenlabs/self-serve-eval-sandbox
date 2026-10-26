@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -71,16 +72,26 @@ class Model:
 
 @dataclass
 class Judge:
+    """One judge model: a Claude model through Claude Code, or any Chat Completions endpoint."""
     model: str
-    base_url: str
-    api_key_env: str
-    effort: str | None = None  # reasoning_effort sent with every grading request
+    base_url: str = ""  # an OpenAI-compatible endpoint; a Claude judge has none
+    api_key_env: str = ""
+    provider: str = "openai"  # "anthropic": Claude Code with the Claude models' credential
+    effort: str | None = None  # reasoning_effort, or Claude Code's --effort
     label: str | None = None  # how the page names it
     json_mode: bool = True  # ask for a JSON reply with response_format; the prompt asks for JSON either way
+    max_concurrent: int | None = None  # requests at once, for a provider that rate-limits the key
+
+    @property
+    def name(self) -> str:
+        return self.label or self.model
 
     @property
     def api_key(self) -> str | None:
-        return os.environ.get(self.api_key_env)
+        return os.environ.get(self.api_key_env) if self.api_key_env else None
+
+    def summary(self) -> dict:
+        return {"model": self.model, "label": self.name, "provider": self.provider, "effort": self.effort}
 
     def problem(self) -> str | None:
         """Why the judge can't run with this key (no key, or no access to the model), else None.
@@ -89,10 +100,17 @@ class Judge:
         problem worth stopping for; a missing model is, since every attempt would then
         come back invalid.
         """
+        if self.provider == "anthropic":
+            if not shutil.which("claude"):
+                return (f"the {self.name} judge runs through Claude Code: install it "
+                        "(npm install -g @anthropic-ai/claude-code), or pass --judge none to score on tests only")
+            if not claude_credential():
+                return f"the {self.name} judge needs a Claude credential: {CLAUDE_CREDENTIAL_HELP}"
+            return None
         if not self.api_key:
-            return f"the judge needs {self.api_key_env}; set it, or pass --judge none to score on tests only"
+            return f"the {self.name} judge needs {self.api_key_env}; set it, or pass --judge none to score on tests only"
         cannot = (f"the key in {self.api_key_env} can't use the judge model {self.model}"
-                  "{}; use a key that can, or set [judge] model in configs/models.toml")
+                  "{}; use a key that can, or change its [[judge.panel]] entry in configs/models.toml")
         request = urllib.request.Request(f"{self.base_url}/models", headers={"authorization": f"Bearer {self.api_key}"})
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -104,7 +122,44 @@ class Judge:
         return cannot.format(f" (not in {self.base_url}/models)") if listed and self.model not in listed else None
 
 
-def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Judge]:
+@dataclass
+class Panel:
+    """The judges, each grading every attempt on its own, and the chair that turns their verdicts into one."""
+    judges: list[Judge]
+    chair: Judge | None = None  # None when one judge's verdict is final
+
+    @property
+    def name(self) -> str:
+        """Who grades, as each verdict records it, so a rejudge can tell a new panel from the same one."""
+        judges = "+".join(j.model for j in self.judges)
+        return f"{judges}>{self.chair.model}" if self.chair else judges
+
+    @property
+    def label(self) -> str:
+        names = [j.name for j in self.judges]
+        return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+    def problem(self) -> str | None:
+        seen = set()
+        for judge in [*self.judges, *([self.chair] if self.chair else [])]:
+            if judge.model not in seen and (problem := judge.problem()):
+                return problem
+            seen.add(judge.model)
+        return None
+
+    def only(self, model: str) -> Panel:
+        """A panel of just one of these judges, named by model id or label."""
+        for judge in [*self.judges, *([self.chair] if self.chair else [])]:
+            if model in (judge.model, judge.label):
+                return Panel([judge])
+        raise SystemExit(f"no judge {model!r}; the panel has {', '.join(j.model for j in self.judges)}")
+
+    def as_dict(self) -> dict:
+        return {"model": self.name, "label": self.label, "panel": [j.summary() for j in self.judges],
+                "chair": self.chair.summary() if self.chair else None}
+
+
+def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Panel]:
     data = tomllib.loads(path.read_text())
     default_effort = data.get("defaults", {}).get("effort", "high")
     known = {f.name for f in fields(Model)}
@@ -113,9 +168,23 @@ def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Judge]:
         if unknown := set(spec) - known:
             raise SystemExit(f"{path}: models.{key} has unknown setting(s) {', '.join(sorted(unknown))}")
         models[key] = Model.from_dict({"label": key, "effort": default_effort, **spec, "key": key})
-    j = data["judge"]
-    return models, Judge(model=j["model"], base_url=j["base_url"].rstrip("/"), api_key_env=j["api_key_env"],
-                         effort=j.get("effort"), label=j.get("label"), json_mode=j.get("json_mode", True))
+    return models, load_panel(data["judge"], data.get("defaults", {}).get("effort"), path)
+
+
+def load_panel(spec: dict, default_effort: str | None, path: Path) -> Panel:
+    """[judge] with its [[judge.panel]] entries, or, written before panels, one judge's own settings."""
+    known = {f.name for f in fields(Judge)}
+    entries = spec.get("panel") or [{k: v for k, v in spec.items() if k != "chair"}]
+    judges = []
+    for i, judge in enumerate(entries):
+        if unknown := set(judge) - known:
+            raise SystemExit(f"{path}: judge.panel[{i}] has unknown setting(s) {', '.join(sorted(unknown))}")
+        judge = {"effort": spec.get("effort", default_effort), **judge}
+        judges.append(Judge(**{**judge, "base_url": judge.get("base_url", "").rstrip("/")}))
+    chair = next((j for j in judges if spec.get("chair") in (j.model, j.label)), None)
+    if spec.get("chair") and not chair:
+        raise SystemExit(f"{path}: judge.chair {spec['chair']!r} isn't one of the judge.panel models")
+    return Panel(judges, chair)
 
 
 def keychain(service: str) -> str | None:
@@ -126,16 +195,27 @@ def keychain(service: str) -> str | None:
     return (p.stdout.strip() or None) if p.returncode == 0 else None
 
 
+CLAUDE_CREDENTIAL_HELP = ("set ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token` (on a Mac you "
+                          "can keep it in the Keychain instead: security add-generic-password -a $USER -s "
+                          f"{KEYCHAIN_SERVICE} -w).")
+
+
+def claude_credential() -> dict[str, str]:
+    """What Claude Code signs in with, for the Claude models and the Claude judge: {variable: value}, or {}."""
+    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        if os.environ.get(name):
+            return {name: os.environ[name]}
+    if token := keychain(KEYCHAIN_SERVICE):
+        return {"CLAUDE_CODE_OAUTH_TOKEN": token}
+    return {}
+
+
 def credential_env(model: Model) -> dict[str, str]:
     """The provider credential a trial needs, from the environment. Raises SystemExit if unset."""
     if model.provider == "baseten" and os.environ.get("BASETEN_API_KEY"):
         return {"BASETEN_API_KEY": os.environ["BASETEN_API_KEY"]}
-    if model.provider == "anthropic":
-        for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
-            if os.environ.get(name):
-                return {name: os.environ[name]}
-        if token := keychain(KEYCHAIN_SERVICE):
-            return {"CLAUDE_CODE_OAUTH_TOKEN": token}
+    if model.provider == "anthropic" and (credential := claude_credential()):
+        return credential
     raise SystemExit(missing_credential(model))
 
 
@@ -144,9 +224,5 @@ def missing_credential(model: Model) -> str | None:
     if model.provider == "baseten":
         return None if os.environ.get("BASETEN_API_KEY") else f"{model.label} runs on Baseten Model APIs: set BASETEN_API_KEY."
     if model.provider == "anthropic":
-        if any(os.environ.get(n) for n in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")) or keychain(KEYCHAIN_SERVICE):
-            return None
-        return (f"{model.label} runs on the Anthropic API: set ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN from "
-                "`claude setup-token` (on a Mac you can keep it in the Keychain instead: "
-                f"security add-generic-password -a $USER -s {KEYCHAIN_SERVICE} -w).")
+        return None if claude_credential() else f"{model.label} runs on the Anthropic API: {CLAUDE_CREDENTIAL_HELP}"
     return f"{model.key}: unknown provider {model.provider!r}"

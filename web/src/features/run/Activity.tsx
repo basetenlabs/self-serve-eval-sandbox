@@ -78,7 +78,7 @@ export function Activity({ feed, colors }: { feed: Event[]; colors: Record<strin
         </ol>
       ) : (
         <div className="placeholder-cell grid h-40 place-items-center px-6 text-center text-[13px] text-muted-foreground">
-          Events stream in here as sandboxes boot, agents code and the judge grades.
+          Events stream in here as sandboxes boot, agents code and the judges grade.
         </div>
       )}
     </Column>

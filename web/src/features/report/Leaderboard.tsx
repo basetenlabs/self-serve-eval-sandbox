@@ -91,7 +91,7 @@ function Row({ m, rank, s, swatch, leads }: {
             ["Total cost", usd(s.cost_usd)],
             ["Median turns", s.median_turns == null ? "–" : String(Math.round(s.median_turns))],
             ["Tokens per attempt, in / out", `${compact(s.mean_input_tokens)} / ${compact(s.mean_output_tokens)}`],
-            ["Passed tests, judge said no", String(s.judge_disagreements || 0)],
+            ["Passed tests, judges said no", String(s.judge_disagreements || 0)],
             ["Hit the time limit", String(s.agent_timeouts || 0)],
             ["Not scored (infrastructure)", String(s.invalid || 0)],
           ] as const).map(([k, v]) => (

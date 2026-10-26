@@ -46,6 +46,7 @@ export async function gateway({ origin, upstream, environment, stateDirectory, f
   function forward(req, res, path, viewer, payload) {
     const headers = { host: pageHost }
     for (const name of FORWARD) if (req.headers[name]) headers[name] = req.headers[name]
+    headers['x-pr-eval-user'] = viewer.email // who is asking: their GitHub sign-in, favorites and private runs
     if (payload) { headers.origin = `http://${pageHost}`; headers['content-length'] = String(payload.length) }
     const page = path === '/' || path === '/index.html'
     if (page) delete headers['accept-encoding']

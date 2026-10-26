@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppState, PullList, RepoInfo, Report, Trace } from "./types";
+import type { AppState, Favorite, PullList, RepoInfo, Report, Trace } from "./types";
 
 // The page polls quickly while a run is going and slowly otherwise. Every action goes through
 // `pr-eval serve`, which runs it as an ordinary `pr-eval run` process.
@@ -28,10 +28,11 @@ export async function post<T = { ok?: boolean; id?: string; error?: string }>(ur
 export const repoInfo = (name: string, signal?: AbortSignal) =>
   getJSON<RepoInfo>(`/api/repo?name=${encodeURIComponent(name)}`, signal);
 
-/** A repository's latest merged pull requests, or the given ones, with whether each can be a task. */
-export function usePulls(repo: string | null, numbers?: number[]) {
-  const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}` : null;
-  const [got, setGot] = useState<{ url: string; list: PullList } | null>(null);
+/** A repository's latest merged pull requests, the given ones, or the ones GitHub finds for `words`,
+ * with whether each can be a task. */
+export function usePulls(repo: string | null, numbers?: number[], count?: number, words?: string) {
+  const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}${count ? `&count=${count}` : ""}${words ? `&q=${encodeURIComponent(words)}` : ""}` : null;
+  const [got, setGot] = useState<{ url: string; repo: string; list: PullList } | null>(null);
   useEffect(() => {
     if (!url) return;
     const abort = new AbortController();
@@ -39,11 +40,32 @@ export function usePulls(repo: string | null, numbers?: number[]) {
     fetch(url, { cache: "no-store", signal: abort.signal, headers: { accept: "application/json" } })
       .then((res) => res.json() as Promise<PullList>)
       .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }) as PullList)
-      .then((list) => { if (!abort.signal.aborted) setGot({ url, list }); });
+      .then((list) => { if (!abort.signal.aborted) setGot({ url, repo: repo!, list }); });
     return () => abort.abort();
-  }, [url]);
+  }, [url, repo]);
   const list = got && got.url === url ? got.list : null;
-  return { list, loading: !!url && !list };
+  // While a longer list of the same repository loads, the shorter one stays on screen.
+  const shown = list ?? (got && got.repo === repo && !got.list.error ? got.list : null);
+  return { list, shown, loading: !!url && !list };
+}
+
+export const samePull = (a: { repo: string; number: number }, b: { repo: string; number: number }) =>
+  a.number === b.number && a.repo.toLowerCase() === b.repo.toLowerCase();
+
+/** Your saved pull requests, and a way to save or forget one. Shows the change at once, then the server's answer. */
+export function useFavorites(server: Favorite[]) {
+  const [mine, setMine] = useState<Favorite[] | null>(null);
+  const known = JSON.stringify(server);
+  useEffect(() => setMine(null), [known]); // the server caught up
+  const favorites = mine ?? server;
+  const save = useCallback(async (pull: { repo: string; number: number; title?: string }, saved: boolean) => {
+    const rest = favorites.filter((f) => !samePull(f, pull));
+    setMine(saved ? [{ repo: pull.repo, number: pull.number, title: pull.title ?? "", saved_at: new Date().toISOString() }, ...rest] : rest);
+    const res = await post<{ favorites?: Favorite[]; error?: string }>("/api/favorites", { ...pull, saved });
+    setMine(res.favorites ?? null);
+    return res.error;
+  }, [favorites]);
+  return [favorites, save] as const;
 }
 
 /** One attempt's condensed trace, fetched when `enabled` first turns true. */

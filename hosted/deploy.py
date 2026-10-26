@@ -14,10 +14,14 @@ Where it runs (the dedicated trial workspace, so the page can start trials there
              environment only; never written to the volume, the image or this repository
 
 Keys come from the environment when set, else from the Keychain:
-    BASETEN_API_KEY         Keychain baseten-api-key (open models and the judge)
-    CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models)
+    BASETEN_API_KEY         Keychain baseten-api-key (open models and the Kimi K3 judge)
+    CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models and the Opus judge)
+    OPENAI_API_KEY          Keychain baseten-openai-api-key (the GPT-6.1 Sol judge)
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
+
+People sign in with GitHub through the OAuth App "Baseten Eval Sandbox" (device flow, owned by
+SystemSculpt). Its client id is public; it has no secret here. Their tokens stay in the page's memory.
 """
 from __future__ import annotations
 
@@ -49,6 +53,7 @@ PAGE_PORT = 8765
 PREFIX = "eval"
 APP = "/data/app"
 LABELS = {"app": "pr-eval-host", "owner": "mstolarz"}
+GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Ov23li1ZAcTSk0isJf5x")
 # The release: everything the page and its runs read from the repository.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
@@ -57,6 +62,7 @@ SEED_FILES = ["run.json", "report.json", "report.html"]
 SECRETS = {
     "BASETEN_API_KEY": "baseten-api-key",
     "CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-claude-code-oauth-token",
+    "OPENAI_API_KEY": "baseten-openai-api-key",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
 LEAK = trace.SECRET
@@ -118,11 +124,23 @@ def host():
             "volumes": [{"name": VOLUME, "mount_path": "/data", "read_only": False}],
             "labels": LABELS,
         })
+        ready(sandbox)
     # The gateway owns sign-in, so the preview itself is public.
     preview = sandbox.previews.create_if_not_exists({"metadata": {"name": "web"},
                                                      "spec": {"port": PORT, "public": True, "prefixUrl": PREFIX}})
     url = preview.spec.url
     return sandbox, url.rstrip("/")
+
+
+def ready(sandbox) -> None:
+    """A new sandbox can refuse commands for a while after it is created (WORKLOAD_UNAVAILABLE)."""
+    for wait in (1, 2, 4, 8, 15, 30, 30):
+        try:
+            sandbox.process.exec({"command": "true", "waitForCompletion": True, "timeout": 30})
+            return
+        except Exception:  # noqa: BLE001 - the platform says to retry until the workload is up
+            time.sleep(wait)
+    raise SystemExit(f"sandbox {SANDBOX} didn't start; see: bl logs sandbox {SANDBOX} -w {WORKSPACE}")
 
 
 def upload(sandbox, files: dict[str, bytes], remote: str) -> None:
@@ -178,7 +196,8 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
             sandbox.process.kill(process.name)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
-                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
+                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
+                "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     # No `timeout`: on Blaxel it can end a long-lived process once it elapses.
     sandbox.process.exec({"name": f"pr-eval-page-{stamp}", "workingDir": APP, "env": page_env,
                           "command": f"mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs",
@@ -214,6 +233,16 @@ def verify(origin: str) -> None:
 def delete(volume: bool) -> None:
     Sandbox, Volume = sdk()
     Sandbox.delete(SANDBOX)
+    for _ in range(60):  # gone before a deploy can create it afresh
+        try:
+            left = Sandbox.get(SANDBOX)
+        except Exception:  # noqa: BLE001 - not found: deleted
+            break
+        if left.status == "TERMINATED":  # one can stay listed like this until deleted again (2026-10-23)
+            Sandbox.delete(SANDBOX)
+        time.sleep(3)
+    else:
+        raise SystemExit(f"sandbox {SANDBOX} is still there; try again in a minute")
     print(f"deleted sandbox {SANDBOX}")
     if volume:
         for _ in range(60):

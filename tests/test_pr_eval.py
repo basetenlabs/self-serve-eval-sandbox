@@ -17,7 +17,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval_sandbox import app, cli, config, judge, pipeline, report, runner, tasks, trace  # noqa: E402
-from eval_sandbox.config import Judge, Model  # noqa: E402
+from eval_sandbox.config import Judge, Model, Panel  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
 
@@ -55,7 +55,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(models["claude-opus"].kind, "closed")
         for model in models.values():
             self.assertIn(model.model, model.prices, f"{model.key} has no price for its own id")
-        self.assertTrue(judge.api_key_env)
+        self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3"])
+        self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3")
 
     def test_price_from_table(self):
         usage = {"zai-org/GLM-5.3": {"inputTokens": 1_000_000, "cacheReadInputTokens": 1_000_000, "outputTokens": 100_000}}
@@ -81,10 +82,19 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "models.toml"
             path.write_text('[models.m]\nkind = "open"\nprovider = "baseten"\nmodel = "m"\nmax_concurent = 2\n'
-                            '[judge]\nmodel = "j"\nbase_url = "http://x"\napi_key_env = "K"\n')
+                            '[judge]\n[[judge.panel]]\nmodel = "j"\nbase_url = "http://x"\napi_key_env = "K"\n')
             with self.assertRaises(SystemExit) as caught:
                 config.load(path)
         self.assertIn("max_concurent", str(caught.exception))
+
+    def test_a_config_from_before_panels_has_its_one_judge(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "models.toml"
+            path.write_text('[models.m]\nkind = "open"\nprovider = "baseten"\nmodel = "m"\n'
+                            '[judge]\nmodel = "j"\nlabel = "J"\neffort = "high"\nbase_url = "http://x/"\napi_key_env = "K"\n')
+            _, panel = config.load(path)
+        self.assertEqual([(j.model, j.base_url, j.effort) for j in panel.judges], [("j", "http://x", "high")])
+        self.assertIsNone(panel.chair)
 
 
 class CostTest(unittest.TestCase):
@@ -419,19 +429,25 @@ class CollectTest(unittest.TestCase):
         files = {1: [{"filename": "p.go", "additions": 5, "deletions": 1}, {"filename": "p_test.go", "additions": 9, "deletions": 0}],
                  2: [{"filename": "go.mod", "additions": 1, "deletions": 1}]}
 
-        def gh(endpoint):
+        def gh(endpoint, token=None):
             if endpoint.endswith("per_page=100") and "/files" in endpoint:
                 return files[int(endpoint.split("/pulls/")[1].split("/")[0])]
             return listing
         with mock.patch.object(tasks, "gh", side_effect=gh):
             rows = tasks.browse("o/r")
+            self.assertEqual([r["number"] for r in tasks.browse("o/r", count=1)], [2])  # "Show older merges" asks for more
         self.assertEqual([r["number"] for r in rows], [2, 1])  # merged only, newest first
         self.assertEqual((rows[1]["why"], rows[1]["lines"], rows[1]["tests"]), (None, 15, 1))
         self.assertIn("both code and tests", rows[0]["why"])
         self.assertTrue(rows[0]["maintenance"])
         self.assertTrue(tasks.MAINTENANCE.search("Merge stable into main"))  # a branch sync, not a change to make
 
-        def by_number(endpoint):
+        unmerged = [{"number": 100 + n, "merged_at": None} for n in range(100)]  # a page of PRs closed unmerged
+        with mock.patch.object(tasks, "gh", side_effect=lambda e, token=None: files[1] if "/files" in e
+                               else unmerged if e.endswith("page=1") else listing[:1]):
+            self.assertEqual([r["number"] for r in tasks.browse("o/r")], [1])  # found on the next page
+
+        def by_number(endpoint, token=None):
             if "/files" in endpoint:
                 return gh(endpoint)
             number = int(endpoint.rsplit("/", 1)[1])
@@ -442,6 +458,16 @@ class CollectTest(unittest.TestCase):
             pasted = tasks.browse("o/r", [1, 3, 404])
         self.assertEqual([(r["number"], r["why"]) for r in pasted],
                          [(1, None), (3, "not merged"), (404, "GitHub has no such pull request")])
+
+    def test_searching_a_repositorys_merged_prs(self):
+        found = {"items": [{"number": 7}, {"number": 3}]}
+        with mock.patch.object(tasks, "gh", return_value=found) as gh:
+            self.assertEqual(tasks.search("o/r", "  context  binding! ", "tok"), [7, 3])
+            self.assertEqual(tasks.search("o/r", "#42"), [42])  # a number is that pull request, no search
+            self.assertEqual(tasks.search("o/r", "!!"), [])
+        endpoint, token = gh.call_args.args
+        self.assertIn("q=repo%3Ao/r%20is%3Apr%20is%3Amerged%20context%20binding&", endpoint)
+        self.assertEqual((gh.call_count, token), (1, "tok"))
 
     def test_a_pr_that_only_changes_tests_is_skipped(self):
         (self.repo / "tests" / "test_lib.py").write_text("another test\n")
@@ -474,6 +500,56 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertEqual(runner.diff_stats(numstat)["files"], 2)
 
 
+    def test_caches_from_running_code_are_not_part_of_the_diff(self):
+        import subprocess
+        import tarfile
+        with tempfile.TemporaryDirectory() as d:
+            work, source = Path(d) / "workspace", Path(d) / "source.tar.gz"
+            work.mkdir()
+            (Path(d) / "lib.py").write_text("old\n")
+            with tarfile.open(source, "w:gz") as tar:  # an archive without the repository's .gitignore
+                tar.add(Path(d) / "lib.py", "lib.py")
+
+            def local_sh(container, script, *, timeout, **_):  # /workspace and /tmp, here
+                script = script.replace("/tmp/source.tar.gz", str(source)).replace("/workspace", str(work))
+                p = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True, text=True,
+                                   env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull})
+                return p.returncode, p.stdout + p.stderr, False
+            task = tasks.Task(id="t", path=Path(d), instruction="", meta={"environment": {
+                "setup": "mkdir -p __pycache__ && echo setup > __pycache__/lib.cpython-314.pyc"}})
+            with mock.patch.object(runner, "sh", local_sh), mock.patch.object(runner, "snapshot", return_value=source), \
+                    mock.patch.object(runner.runtime, "upload"), mock.patch.object(runner, "block_lookups"):
+                reason, setup = runner.prepare_workspace("unused", task, Path(d))
+                self.assertIsNone(reason)
+                local_sh(None, "echo new > lib.py && echo run > __pycache__/lib.cpython-314.pyc && "
+                               "mkdir -p .pytest_cache && echo x > .pytest_cache/v", timeout=9)
+                with mock.patch.object(runner.runtime, "download",
+                                       side_effect=lambda c, remote, local, **_: local.write_bytes(
+                                           Path(remote.replace("/workspace", str(work))).read_bytes())):
+                    patch, numstat = runner.capture_patch("unused", setup["baseline"], Path(d) / "agent.patch")
+        self.assertIn("+new", patch)
+        self.assertEqual(runner.diff_stats(numstat)["files"], 1)
+
+    def test_a_setup_whose_download_dropped_is_tried_again(self):
+        task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"environment": {"setup": "SETUP"}})
+        eof = (1, 'go: read "https://proxy.golang.org/x.zip": unexpected EOF', False)
+        for setups, expected in (([eof, eof, (0, "ok", False)], None),
+                                 ([eof, eof, eof], "setup-error"),
+                                 ([(1, "no such module", False)], "setup-error"),  # not a download: not again
+                                 ([(1, "", True)], "setup-timeout")):  # nor after a timeout
+            answers = list(setups)
+            def fake_sh(container, script, *, timeout):
+                if script == "SETUP":
+                    return answers.pop(0)
+                return 0, "a" * 40 if "rev-parse" in script else "", False
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(runner, "sh", fake_sh), \
+                    mock.patch.object(runner, "snapshot"), mock.patch.object(runner.runtime, "upload"), \
+                    mock.patch.object(runner, "block_lookups"), mock.patch.object(runner.time, "sleep"):
+                reason, _ = runner.prepare_workspace("unused", task, Path(d))
+                log = (Path(d) / "setup.log").read_text()
+            self.assertEqual((reason, answers), (expected, []))
+            self.assertIn(setups[0][1], log)
+
     def test_the_agents_own_tests_are_set_aside_before_the_hidden_ones(self):
         import subprocess
         from unittest import mock
@@ -496,6 +572,27 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertEqual(files, {"lib.go": "fixed", "lib_test.go": "old", "fix_test.go": None})
         self.assertTrue(runner.touches_tests("diff --git a/lib.go b/lib.go\ndiff --git a/x_test.go b/x_test.go\n"))
         self.assertFalse(runner.touches_tests("diff --git a/lib.go b/lib.go\n"))
+
+    def test_the_hidden_tests_run_in_a_network_of_their_own(self):
+        task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"verifier": {}})
+        compile(runner.OWN_NETWORK, "own-network", "exec")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(runner.runtime, "upload"):
+            with mock.patch.object(runner, "sh", return_value=(0, "1 passed", False)) as sh:
+                self.assertTrue(runner.run_tests("unused", task, Path(d) / "tests.log")["passed"])
+            script = sh.call_args.args[1]
+            self.assertTrue(script.startswith("python3 -c ") and script.endswith(" bash /tests/test.sh"))
+            # without one, the attempt is lost to infrastructure, not failed
+            refused = (1, "pr-eval: no network of their own for the tests: Operation not permitted", False)
+            with mock.patch.object(runner, "sh", return_value=refused), self.assertRaises(runner.runtime.RuntimeError):
+                runner.run_tests("unused", task, Path(d) / "tests.log")
+            # a check from before is made again
+            (Path(d) / "validation").mkdir()
+            (Path(d) / "validation" / "result.json").write_text(json.dumps(
+                {"backend": "blaxel", "workspace": "w", "image": "i", "region": "r", "status": "reference-fails"}))
+            checked = tasks.Task(id="t", path=Path(d), instruction="", meta={})
+            settings = runner.Settings(image="i", region="r", workspace="w")
+            self.assertIsNone(runner.validation_status(checked, settings))
+            self.assertEqual(runner.validation_status(checked), "reference-fails")
 
 class QueueTest(unittest.TestCase):
     def test_a_task_runs_as_soon_as_its_own_check_passes(self):
@@ -540,6 +637,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
         self.assertEqual(pipeline.resumed_judge({"judge": None}, "gpt-y"), "gpt-y")  # named on the command line
         self.assertEqual(pipeline.resumed_judge({}, "default"), "default")  # a run from before judges were recorded
+        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
+        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, "default"), "default")
+        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, "default"), "a")
 
     def job(self, d, request):
         from unittest import mock
@@ -714,6 +814,100 @@ class AppTest(unittest.TestCase):
                 mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
             self.assertNotIn("error", page.repo_info("o/r"))
 
+    def test_signing_in_with_github_reads_private_repositories_for_that_person(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}) as gh, \
+                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "a@x.co")["error"])
+            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+            self.assertNotIn("error", page.repo_info("o/r", "a@x.co"))
+            self.assertEqual(gh.call_args.args, ("repos/o/r", "tok-a"))
+            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "b@x.co")["error"])  # only for the one who signed in
+            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": "ana"})
+            page.github["a@x.co"]["until"] = 0  # GitHub's token expired
+            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": None})
+
+    def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
+        page = app.App(Path("/nonexistent"))
+        answers = [{"device_code": "dev", "user_code": "AB-12", "verification_uri": "https://github.com/login/device",
+                    "interval": 5, "expires_in": 900},
+                   {"error": "authorization_pending"}, {"error": "slow_down"},
+                   {"access_token": "tok", "expires_in": 28800}]
+        with mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+                mock.patch.object(app, "github_form", side_effect=answers) as form, \
+                mock.patch.object(app.tasks, "gh", return_value={"login": "ana"}):
+            self.assertEqual(page.github_device("a@x.co")["user_code"], "AB-12")
+            self.assertEqual(form.call_args.args[1], {"client_id": "client", "scope": "repo"})
+            self.assertEqual(page.github_state("a@x.co")["device"]["user_code"], "AB-12")  # a reloaded page shows it again
+            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 5})
+            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down
+            self.assertEqual(page.github_poll("a@x.co"), {"login": "ana"})
+        self.assertEqual(page.token("a@x.co"), "tok")
+        self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "login": "ana"})  # no code waiting; no client id here
+        self.assertIn("expired", page.github_poll("a@x.co")["error"])  # nothing is waiting any more
+        page.github_sign_out("a@x.co")
+        self.assertIsNone(page.token("a@x.co"))
+        self.assertIn("isn't set up", page.github_device("a@x.co")["error"])  # locally: no client id, gh's login reads
+
+    def test_a_private_run_is_seen_only_by_who_started_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d) / "jobs"
+            for run_id in ("open", "mine"):
+                (jobs / run_id).mkdir(parents=True)
+                (jobs / run_id / "run.json").write_text(json.dumps({"run_id": run_id, "tasks": [], "models": []}))
+            (jobs / "mine" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
+            (jobs / "mine" / "report.json").write_text("{}")
+            page = app.App(jobs)
+            with mock.patch.object(page, "checks", return_value={"blaxel": True}), \
+                    mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
+                seen = {u: sorted(r["id"] for r in page.state(user=u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
+            self.assertEqual(seen, {"a@x.co": ["mine", "open"], "b@x.co": ["open"], None: ["open"]})
+            self.assertIsNone(page.find("mine", "b@x.co"))
+            self.assertEqual(page.stop("mine", "b@x.co"), page.stop("nope", "b@x.co"))  # as if it weren't there
+            (jobs / "mine" / "trials" / "t__m__1").mkdir(parents=True)
+            self.assertNotIn("no trace", page.trace("mine", "t__m__1", "b@x.co")["error"])  # no such attempt, for them
+            self.assertIn("no trace", page.trace("mine", "t__m__1", "a@x.co")["error"])  # there, not yet traced
+
+    def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(app.pipeline, "preflight"), \
+                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
+                started = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
+            access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
+        self.assertEqual(access, {"owner": "a@x.co", "private": True})
+        self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
+
+    def test_favorite_prs_are_kept_per_person_newest_first(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d) / "jobs")
+            page.favorite({"repo": "o/r", "number": 1, "title": "One", "saved": True}, "a@x.co")
+            page.favorite({"repo": "https://github.com/o/r", "number": 2, "title": "Two", "saved": True}, "a@x.co")
+            page.favorite({"repo": "O/R", "number": 1, "title": "One", "saved": True}, "a@x.co")  # saved again: first
+            page.favorite({"repo": "x/y", "number": 9, "saved": True})  # locally, no one in particular
+            self.assertEqual([(f["repo"], f["number"]) for f in app.App(Path(d) / "jobs").favorites("a@x.co")],
+                             [("O/R", 1), ("o/r", 2)])  # kept on disk, once each
+            page.favorite({"repo": "o/r", "number": 1, "saved": False}, "a@x.co")
+            self.assertEqual([f["number"] for f in page.favorites("a@x.co")], [2])
+            self.assertEqual([f["number"] for f in page.favorites(None)], [9])
+            self.assertEqual(page.favorites("b@x.co"), [])
+            for bad in ({"repo": "nope", "number": 1}, {"repo": "o/r", "number": "1"}, {"repo": "o/r", "number": 0}):
+                self.assertIn("error", page.favorite({**bad, "saved": True}, "a@x.co"))
+
+    def test_finding_prs_by_words(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(page, "repo_info", return_value={"repo": "o/r"}), \
+                mock.patch.object(app.tasks, "search", return_value=[7, 3]) as search, \
+                mock.patch.object(app.tasks, "browse", return_value=[{"number": 7}, {"number": 3}]) as browse:
+            self.assertEqual(page.pulls("o/r", words="binding")["prs"], [{"number": 7}, {"number": 3}])
+            search.return_value = []
+            self.assertEqual(page.pulls("o/r", words="nothing like it")["prs"], [])
+        self.assertEqual(browse.call_args.args[:2], ("o/r", [7, 3]))
+        self.assertEqual(search.call_count, 2)
+
     def test_picked_prs_become_the_runs_arguments(self):
         self.assertEqual(app.App.chosen_pulls({"https://github.com/o/a": [2, 1, 2], "x/b": [9], "y/c": []}),
                          {"o/a": [1, 2], "x/b": [9]})
@@ -738,18 +932,24 @@ class AppTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "agent.jsonl").write_text("{}\n")
             (Path(d) / "r1" / "report.json").write_text("{}")
+            (Path(d) / "r2").mkdir()  # someone's run on a private repository
+            (Path(d) / "r2" / "report.json").write_text("{}")
+            (Path(d) / "r2" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
             handler = type("H", (app.Handler,), {"app": app.App(Path(d))})
             server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()
             port = server.server_address[1]
 
-            def get(path):
+            def get(path, headers=None):
                 conn = http.client.HTTPConnection("127.0.0.1", port)
-                conn.request("GET", path)
+                conn.request("GET", path, headers=headers or {})
                 response = conn.getresponse()
                 return response.status, response.read()
             try:
                 self.assertEqual(get("/r1/report.json")[0], 200)
+                self.assertEqual(get("/r2/report.json")[0], 404)
+                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "b@x.co"})[0], 404)
+                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "a@x.co"})[0], 200)
                 self.assertEqual(get("/r1/trials/t__m__1/agent.jsonl")[0], 404)
                 self.assertEqual(get("/r1/run.json")[0], 404)
                 status, body = get("/api/trace?run=r1&trial=t__m__1")
@@ -921,38 +1121,58 @@ class ReportTest(unittest.TestCase):
             self.assertNotIn("+</script><b>", html)  # an agent's diff can't end the data block
 
 
+def judged_task(d: str) -> tasks.Task:
+    (Path(d) / "solution").mkdir()
+    (Path(d) / "solution" / "reference.patch").write_text("diff")
+    return tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
+
+
+def chat_reply(content: str):
+    return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
+
+
 class JudgeTest(unittest.TestCase):
     task = tasks.Task(id="x", path=Path("/nonexistent"), meta={"task": {"repo": "a/b"}}, instruction="do it")
     judge = Judge(model="m", base_url="http://localhost:9", api_key_env="PR_EVAL_TEST_UNSET")
 
     def test_a_judge_that_cannot_run_is_caught_before_the_run(self):
         self.assertIn("PR_EVAL_TEST_UNSET", self.judge.problem())
+        with mock_env(CLAUDE_CODE_OAUTH_TOKEN="t"), mock.patch.object(config.shutil, "which", return_value="/bin/claude"):
+            self.assertIn("PR_EVAL_TEST_UNSET", Panel([Judge(model="c", provider="anthropic"), self.judge]).problem())
         with mock_env(PR_EVAL_TEST_KEY="k"):
             unreachable = Judge(model="m", base_url="http://127.0.0.1:9", api_key_env="PR_EVAL_TEST_KEY")
             self.assertIsNone(unreachable.problem())  # a network hiccup doesn't stop a run
 
+    def test_a_claude_judge_needs_claude_code(self):
+        with mock.patch.object(config.shutil, "which", return_value=None):
+            self.assertIn("runs through Claude Code", Judge(model="claude-x", provider="anthropic", label="C").problem())
+
     def test_missing_key_is_an_error_not_a_verdict(self):
-        from eval_sandbox import judge
-        self.assertIn("error", judge.grade(self.judge, self.task, "diff", {"passed": True}, ""))
+        with tempfile.TemporaryDirectory() as d:
+            graded = judge.grade(Panel([self.judge]), judged_task(d), "diff", {"passed": True}, "")
+        self.assertIn("PR_EVAL_TEST_UNSET", graded["error"])
+        self.assertNotIn("verdict", graded)
 
     def test_the_judge_asks_for_its_configured_reasoning_effort(self):
-        from unittest import mock
-        from eval_sandbox import judge
-        self.assertEqual(config.load()[1].effort, "high")
+        self.assertEqual({j.effort for j in config.load()[1].judges}, {"high"})
         sent = {}
 
         def respond(request, timeout):
             sent.update(json.loads(request.data))
-            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
-        with tempfile.TemporaryDirectory() as d, mock_env(PR_EVAL_TEST_KEY="k"), \
-                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
-            (Path(d) / "solution").mkdir()
-            (Path(d) / "solution" / "reference.patch").write_text("diff")
-            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
-            graded = judge.grade(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY", effort="high"),
-                                 task, "diff", {"passed": True}, "")
-        self.assertEqual(sent["reasoning_effort"], "high")
-        self.assertEqual((graded["verdict"], graded["effort"]), ("pass", "high"))
+            return chat_reply('{"verdict": "pass", "reason": "ok"}')
+        with mock_env(PR_EVAL_TEST_KEY="k"), mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
+            graded = judge.ask_chat(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY", effort="high"),
+                                    "system", "user")
+        self.assertEqual((sent["reasoning_effort"], sent["response_format"]), ("high", {"type": "json_object"}))
+        self.assertEqual(graded["verdict"], "pass")
+
+    def test_judges_read_text_changes_and_only_the_names_of_binary_ones(self):
+        cache = "diff --git a/x.pyc b/x.pyc\nnew file mode 100644\nGIT binary patch\nliteral 9\nzcmV\n\n"
+        code = "diff --git a/lib.py b/lib.py\n--- a/lib.py\n+++ b/lib.py\n@@ -1 +1 @@\n-old\n+new\n"
+        shown = judge.readable(cache * 3 + code)
+        self.assertTrue(shown.startswith(code))
+        self.assertIn("[3 binary files not shown: x.pyc, x.pyc, x.pyc]", shown)
+        self.assertEqual(judge.readable(code), code)
 
     def test_a_verdict_is_read_from_a_fenced_or_chatty_reply(self):
         self.assertEqual(judge.parse('{"verdict": "fail", "reason": "x"}')["verdict"], "fail")
@@ -961,22 +1181,16 @@ class JudgeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 judge.parse(reply)
 
-    def test_the_configured_judge_runs_on_baseten_without_json_mode(self):
-        _, configured = config.load()
-        self.assertEqual((configured.base_url, configured.api_key_env), (config.BASETEN_URL, "BASETEN_API_KEY"))
-        self.assertFalse(configured.json_mode)  # Baseten puts this model's JSON-mode answer in its reasoning
-        sent = {}
-
-        def respond(request, timeout):
-            sent.update(json.loads(request.data))
-            return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"verdict": "pass", "reason": "ok"}'}}]}).encode())
-        with tempfile.TemporaryDirectory() as d, mock_env(BASETEN_API_KEY="k"), \
-                mock.patch.object(judge.urllib.request, "urlopen", side_effect=respond):
-            (Path(d) / "solution").mkdir()
-            (Path(d) / "solution" / "reference.patch").write_text("diff")
-            task = tasks.Task(id="x", path=Path(d), meta={"task": {"repo": "a/b"}}, instruction="do it")
-            judge.grade(configured, task, "diff", {"passed": True}, "")
-        self.assertNotIn("response_format", sent)
+    def test_the_configured_panel_reaches_each_judge_where_it_runs(self):
+        _, panel = config.load()
+        opus, gpt, kimi = panel.judges
+        self.assertEqual(opus.provider, "anthropic")  # Claude Code, with the Claude models' credential
+        self.assertEqual((gpt.base_url, gpt.api_key_env), ("https://api.openai.com/v1", "OPENAI_API_KEY"))
+        self.assertEqual((kimi.base_url, kimi.api_key_env), (config.BASETEN_URL, "BASETEN_API_KEY"))
+        self.assertIs(panel.chair, kimi)
+        self.assertEqual(panel.only("GPT-6.1 Sol").judges, [gpt])
+        with self.assertRaises(SystemExit):
+            panel.only("gpt-x")
 
     def test_a_judge_model_the_provider_does_not_list_is_caught(self):
         listing = io.BytesIO(json.dumps({"data": [{"id": "other"}]}).encode())
@@ -984,15 +1198,78 @@ class JudgeTest(unittest.TestCase):
             problem = Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY").problem()
         self.assertIn("can't use the judge model m", problem)
 
-    def test_solved_needs_the_tests_and_the_judge(self):
-        from unittest import mock
+    def test_solved_needs_the_tests_and_the_judges(self):
         cases = [(True, {"verdict": "pass"}, ("solved", None)), (True, {"verdict": "fail"}, ("failed", None)),
                  (False, {"verdict": "pass"}, ("failed", None)), (True, {"error": "HTTP 500"}, ("invalid", "judge-error"))]
         for passed, verdict, expected in cases:
             with tempfile.TemporaryDirectory() as d, mock.patch.object(runner.judge_mod, "grade", return_value=dict(verdict)):
-                _, outcome, reason = runner.judge_attempt(self.judge, self.task, "diff", {"passed": passed}, "", Path(d))
+                _, outcome, reason = runner.judge_attempt(Panel([self.judge]), self.task, "diff", {"passed": passed}, "", Path(d))
                 self.assertTrue((Path(d) / "judge.json").is_file())
             self.assertEqual((outcome, reason), expected, (passed, verdict))
+
+
+class PanelTest(unittest.TestCase):
+    panel = Panel([Judge(model="a", label="A"), Judge(model="b", label="B"), Judge(model="c", label="C")],
+                  Judge(model="c", label="C"))
+
+    def grade(self, votes: dict, chair: dict) -> tuple[dict, list[str]]:
+        """The panel's record when each judge answers with `votes[model]` and the chair with `chair`."""
+        asked = []
+
+        def ask(j, system, user):
+            asked.append(user)
+            return dict(chair) if system == judge.CHAIR else dict(votes[j.model])
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(judge, "ask", side_effect=ask):
+            return judge.grade(self.panel, judged_task(d), "diff", {"passed": True}, ""), asked
+
+    def test_the_chair_reads_every_verdict_and_gives_the_final_one(self):
+        votes = {"a": {"verdict": "pass", "reason": "fine"}, "b": {"verdict": "fail", "reason": "gamed"},
+                 "c": {"verdict": "pass", "reason": "ok"}}
+        graded, asked = self.grade(votes, {"verdict": "fail", "reason": "B is right: it hardcodes the value."})
+        self.assertEqual((graded["verdict"], graded["reason"]), ("fail", "B is right: it hardcodes the value."))
+        self.assertEqual([v["label"] for v in graded["panel"]], ["A", "B", "C"])
+        self.assertEqual(graded["chair"]["label"], "C")
+        self.assertIn("- B: fail. gamed", asked[-1])  # the chair sees the judges' reasons
+        self.assertEqual(graded["model"], "a+b+c>c")
+
+    def test_a_judge_that_fails_to_answer_leaves_the_rest_of_the_panel(self):
+        votes = {"a": {"verdict": "pass", "reason": "fine"}, "b": {"error": "HTTP 503"}, "c": {"verdict": "pass", "reason": "ok"}}
+        graded, asked = self.grade(votes, {"verdict": "pass", "reason": "Both judges that answered agree."})
+        self.assertEqual(graded["verdict"], "pass")
+        self.assertIn("- B: no verdict", asked[-1])
+        votes["c"] = {"error": "HTTP 429"}
+        graded, _ = self.grade(votes, {"verdict": "pass", "reason": "x"})
+        self.assertIn("B: HTTP 503", graded["error"])  # one of three is not a panel
+
+    def test_a_unanimous_panel_stands_when_the_chair_fails(self):
+        votes = {k: {"verdict": "fail", "reason": "incomplete"} for k in "abc"}
+        graded, _ = self.grade(votes, {"error": "HTTP 500"})
+        self.assertEqual(graded["verdict"], "fail")
+        votes["a"] = {"verdict": "pass", "reason": "fine"}
+        graded, _ = self.grade(votes, {"error": "HTTP 500"})
+        self.assertIn("chair", graded["error"])  # a split panel needs its chair
+
+    def test_a_claude_judge_runs_claude_code_with_no_tools_and_only_its_credential(self):
+        ran = {}
+
+        def run(command, **kw):
+            ran.update(command=command, **kw)
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+                {"result": '{"verdict": "pass", "reason": "ok"}', "total_cost_usd": 0.02,
+                 "usage": {"input_tokens": 5, "cache_read_input_tokens": 100, "output_tokens": 40}}))
+        with mock_env(CLAUDE_CODE_OAUTH_TOKEN="tok", BASETEN_API_KEY="secret"), \
+                mock.patch.object(judge.shutil, "which", return_value="/bin/claude"), \
+                mock.patch.object(judge.subprocess, "run", side_effect=run):
+            graded = judge.ask_claude(Judge(model="claude-x", provider="anthropic", effort="high"), "be fair", "the diff")
+        command = ran["command"]
+        self.assertEqual(command[command.index("--tools") + 1], "")
+        self.assertEqual(command[command.index("--effort") + 1], "high")
+        self.assertEqual(command[command.index("--system-prompt") + 1], "be fair")
+        self.assertEqual(ran["input"], "the diff")
+        self.assertEqual(ran["env"]["CLAUDE_CODE_OAUTH_TOKEN"], "tok")
+        self.assertNotIn("BASETEN_API_KEY", ran["env"])  # no other key reaches it
+        self.assertEqual(ran["env"]["HOME"], ran["cwd"])  # a throwaway home: no user settings, hooks or memory
+        self.assertEqual((graded["verdict"], graded["input_tokens"], graded["cost_usd"]), ("pass", 105, 0.02))
 
 
 if __name__ == "__main__":

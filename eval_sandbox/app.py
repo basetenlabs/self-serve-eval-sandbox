@@ -17,10 +17,12 @@ import sys
 import threading
 import time
 import tomllib
+import urllib.error
+import urllib.request
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from . import config, pipeline, runner, runtime, tasks, trace
 
@@ -31,7 +33,16 @@ RUN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")  # never "." or ".."
 # diffs stay on disk; an attempt's trace goes out condensed and redacted, by /api/trace.
 REPORT_FILE = re.compile(r"/([A-Za-z0-9_-][A-Za-z0-9_.-]*)/report\.(html|json)")
 MAX_LIMIT = 50
+PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
+# Hosted, people can sign in with GitHub (device flow: an OAuth App's client id, no secret).
+# Their token, kept in memory only, reads and clones their private repositories for them, and
+# a run on a private repository is theirs alone to see. The gateway names who is asking in
+# USER_HEADER; locally there is no gateway and no header, and the `gh` login reads everything.
+GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
+USER_HEADER = "x-pr-eval-user"
+ACCESS = "access.json"  # in a run's folder when not everyone may see it: its owner
+MAX_FAVORITES = 200
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
 # beside it, then the verifier alone once the agent's sandbox is deleted.
 SANDBOXES = {"sandboxes": 2, "setup": 2, "agent": 2, "tests": 1}
@@ -72,15 +83,21 @@ class App:
         self.checked: tuple[float, dict] = (0.0, {})
         self.task_info: dict[Path, dict] = {}
         self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
+        self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
+        self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
+        self.favorites_file = jobs_dir.parent / "data" / "favorites.json"
 
     # ---------- what the page shows ----------
 
-    def state(self, viewing: str = "") -> dict:
+    def state(self, viewing: str = "", user: str | None = None) -> dict:
         for child in list(self.children.values()):
             child.poll()
         catalog, judge = config.load(self.models_config)
-        runs = [r for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
+        everyone = [(d, r) for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
             if self.jobs_dir.is_dir() else []
+        runs = [r for d, r in everyone if self.visible(d, user)]
+        for d, run in everyone:
+            run["private"] = bool(read_json(d / ACCESS).get("private"))
         runs.sort(key=lambda r: r["active_at"], reverse=True)
         for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
@@ -92,9 +109,10 @@ class App:
         return {"checks": self.checks(judge), "models": models, "runs": runs,
                 "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True))},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
-                "busy": any(r["phase"] in pipeline.ACTIVE for r in runs)}
+                "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
+                "github": self.github_state(user), "favorites": self.favorites(user)}
 
-    def checks(self, judge: config.Judge) -> dict:
+    def checks(self, judge: config.Panel) -> dict:
         """Dedicated Blaxel workspace, build CLI and GitHub; cache remote checks briefly."""
         when, cached = self.checked
         if time.monotonic() - when > 15:
@@ -107,11 +125,15 @@ class App:
             except RuntimeError as exc:
                 problem = str(exc)
             gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
+            try:
+                gh_login = tasks.gh("user").get("login") if gh else None
+            except (RuntimeError, SystemExit, subprocess.SubprocessError):
+                gh_login = None
             cached = {"blaxel": problem is None, "blaxel_problem": problem,
-                      "bl_cli": bl_cli, "gh": gh, "image": image, "judge": judge.problem()}
+                      "bl_cli": bl_cli, "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
             self.checked = (time.monotonic(), cached)
-        return {**cached, "judge": {"model": judge.model, "label": judge.label or judge.model, "effort": judge.effort, "env": judge.api_key_env, "ok": not cached["judge"],
-                                    "problem": cached["judge"]}}
+        return {**cached, "judge": {"label": judge.label, "chair": judge.chair.name if judge.chair else None,
+                                    "effort": judge.judges[0].effort, "ok": not cached["judge"], "problem": cached["judge"]}}
 
     def describe(self, job_dir: Path) -> dict | None:
         log = job_dir / "log.txt"
@@ -238,17 +260,20 @@ class App:
                     found[key] = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
         return found
 
-    def repo_info(self, text: str) -> dict:
+    def repo_info(self, text: str, user: str | None = None) -> dict:
         repo = parse_repo(text)
         if not repo:
             return {"error": "Use owner/repo or a GitHub link."}
+        token = self.token(user)
         try:
-            data = tasks.gh(f"repos/{repo}")
+            data = tasks.gh(f"repos/{repo}", token)
         except (RuntimeError, SystemExit) as exc:
             return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
-        # The hosted page shares one GitHub login among everyone signed in; it never reads private code.
-        if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"):
-            return {"repo": repo, "error": "This hosted page runs public repositories only."}
+        # The hosted page's own GitHub login is shared by everyone signed in: it never reads
+        # private code. A private repository needs the visitor's own GitHub sign-in.
+        if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") and not token:
+            return {"repo": repo, "error": "Sign in with GitHub to use a private repository." if GITHUB_CLIENT_ID
+                    else "This hosted page runs public repositories only."}
         language = data.get("language") or "unknown"
         try:
             tasks.recipe(repo, language, [])
@@ -257,39 +282,49 @@ class App:
             defaults = False
         return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults}
 
-    def pulls(self, text: str, numbers: str = "") -> dict:
-        """Pull requests in a repository and which can be tasks: these numbers, or the latest merged."""
-        info = self.repo_info(text)
+    def pulls(self, text: str, numbers: str = "", count: str = "", words: str = "", user: str | None = None) -> dict:
+        """Pull requests in a repository and which can be tasks: these numbers, the merged ones GitHub
+        finds for these words, or the latest `count` merged."""
+        info = self.repo_info(text, user)
         if info.get("error"):
             return info
         repo, wanted = info["repo"], [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
-        key = f"{repo}#{','.join(map(str, wanted))}"
+        latest = min(max(int(count) if count.isdigit() else PICK_COUNT, 1), MAX_PICK_COUNT)
+        token = self.token(user)
+        key = f"{user if token else ''}|{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
         when, found = self.browsed.get(key, (0.0, None))
         if found and time.monotonic() - when < 300:
             return found
         try:
-            found = {**info, "prs": tasks.browse(repo, wanted)}
+            if words.strip() and not wanted:
+                wanted = tasks.search(repo, words, token)
+                if not wanted:
+                    return {**info, "prs": []}
+            found = {**info, "prs": tasks.browse(repo, wanted, latest, token)}
         except (RuntimeError, SystemExit) as exc:
             return {"repo": repo, "error": f"Can't list {repo}'s pull requests ({str(exc)[-80:]})."}
         self.browsed[key] = (time.monotonic(), found)
         return found
 
-    def trace(self, run_id: str, trial: str) -> dict:
+    def trace(self, run_id: str, trial: str, user: str | None = None) -> dict:
         """One attempt's trace, condensed and redacted."""
         path = self.jobs_dir / run_id / "trials" / trial
-        if not (RUN_ID.fullmatch(run_id) and RUN_ID.fullmatch(trial) and path.is_dir()):
+        if not (RUN_ID.fullmatch(run_id) and RUN_ID.fullmatch(trial) and path.is_dir()
+                and self.visible(self.jobs_dir / run_id, user)):
             return {"error": "No such attempt."}
         return trace.load(path) or {"error": "This attempt has no trace: its agent hasn't finished, or never ran."}
 
     # ---------- what the page does ----------
 
-    def start(self, form: dict) -> dict:
+    def start(self, form: dict, user: str | None = None) -> dict:
         with self.lock:
-            return self._start(form)
+            return self._start(form, user)
 
-    def _start(self, form: dict) -> dict:
-        state = self.state()
+    def _start(self, form: dict, user: str | None = None) -> dict:
+        state = self.state(user=user)
         if state["busy"]:
+            if not any(r["phase"] in pipeline.ACTIVE for r in state["runs"]):
+                return {"error": "Someone else's run is going. Start yours when it finishes."}
             return {"error": "A run is already going. Let it finish, or stop it, before starting another."}
         checks = state["checks"]
         if not checks["blaxel"]:
@@ -322,10 +357,12 @@ class App:
         repos = list(pulls) or ([repo] if repo else [])
         if setup and test and len(repos) > 1:
             return {"error": "Install and test commands are for one repository: paste pull requests from one at a time."}
+        private = False
         for name in repos if os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not (setup and test) else []:
-            info = self.repo_info(name)
+            info = self.repo_info(name, user)
             if info.get("error"):
                 return info
+            private = private or bool(info.get("private"))
             if not info["defaults"] and not (setup and test):
                 return {"error": f"{name} is {info['language']}: give the install and test commands "
                                  "(Go and Python repositories have defaults)."}
@@ -335,7 +372,10 @@ class App:
         argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
-        self.spawn(run_id, argv)
+        if private and user:
+            (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
+            (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": True}))
+        self.spawn(run_id, argv, self.token(user))
         return {"id": run_id}
 
     @staticmethod
@@ -351,8 +391,8 @@ class App:
             return f"Choose at most {MAX_LIMIT} pull requests."
         return {repo: numbers for repo, numbers in pulls.items() if numbers}
 
-    def stop(self, run_id: str) -> dict:
-        run = self.find(run_id)
+    def stop(self, run_id: str, user: str | None = None) -> dict:
+        run = self.find(run_id, user)
         if not run or run["phase"] not in pipeline.ACTIVE:
             return {"error": "That run isn't going."}
         child = self.children.get(run_id)
@@ -365,33 +405,144 @@ class App:
         os.kill(pid, signal.SIGINT)  # the run removes its sandboxes and marks itself stopped
         return {"ok": True}
 
-    def resume(self, run_id: str) -> dict:
+    def resume(self, run_id: str, user: str | None = None) -> dict:
         with self.lock:
-            return self._resume(run_id)
+            return self._resume(run_id, user)
 
-    def _resume(self, run_id: str) -> dict:
-        run = self.find(run_id)
+    def _resume(self, run_id: str, user: str | None = None) -> dict:
+        run = self.find(run_id, user)
         if not run or not run["resumable"]:
             return {"error": "That run can't be resumed."}
         if self.state()["busy"]:
             return {"error": "A run is already going. Let it finish, or stop it, first."}
-        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)])
+        if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
+            return {"error": "Sign in with GitHub to resume a run on a private repository."}
+        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.token(user))
         return {"id": run_id}
 
-    def find(self, run_id: str) -> dict | None:
+    def find(self, run_id: str, user: str | None = None) -> dict | None:
         path = self.jobs_dir / run_id
-        return self.describe(path) if RUN_ID.fullmatch(run_id) and path.is_dir() else None
+        return self.describe(path) if RUN_ID.fullmatch(run_id) and path.is_dir() and self.visible(path, user) else None
 
-    def spawn(self, run_id: str, argv: list[str]) -> None:
-        """`pr-eval run` in a process of its own, so it outlives the page and the server."""
+    def visible(self, job_dir: Path, user: str | None) -> bool:
+        """Whether this person may see the run: everyone may, unless someone else started it on a private repository."""
+        access = read_json(job_dir / ACCESS)
+        return not access.get("private") or access.get("owner") == user
+
+    def spawn(self, run_id: str, argv: list[str], github_token: str | None = None) -> None:
+        """`pr-eval run` in a process of its own, so it outlives the page and the server.
+
+        With a visitor's GitHub token, the run reads and clones with it instead of the page's login.
+        """
         with self.lock:
             job_dir = self.jobs_dir / run_id
             job_dir.mkdir(parents=True, exist_ok=True)
             with open(job_dir / "log.txt", "ab") as log:
                 self.children[run_id] = subprocess.Popen(
                     [sys.executable, "-m", "eval_sandbox", "run", *argv], cwd=pipeline.ROOT,
+                    env={**os.environ, "GH_TOKEN": github_token} if github_token else None,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
+    # ---------- GitHub sign-in (hosted) ----------
+
+    def token(self, user: str | None) -> str | None:
+        signed_in = self.github.get(user) if user else None
+        if signed_in and time.monotonic() > signed_in["until"]:  # GitHub's tokens for the page last 8 hours
+            self.github.pop(user, None)
+            return None
+        return signed_in and signed_in["token"]
+
+    def github_state(self, user: str | None) -> dict:
+        """Who reads GitHub for this person: their own sign-in, or the page's login."""
+        device = self.devices.get(user) if user else None
+        waiting = device and time.monotonic() < device["until"]
+        return {"sign_in": bool(GITHUB_CLIENT_ID and user),
+                "login": self.github[user]["login"] if self.token(user) else None,
+                # a sign-in still waiting for GitHub, so a reloaded page shows its code again
+                **({"device": device["shown"]} if waiting else {})}
+
+    def github_device(self, user: str | None) -> dict:
+        """Start a sign-in: a code the person enters on GitHub, approving this page's read of their repositories."""
+        if not (GITHUB_CLIENT_ID and user):
+            return {"error": "GitHub sign-in isn't set up on this page."}
+        try:
+            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID, "scope": "repo"})
+        except (OSError, ValueError) as exc:
+            return {"error": f"GitHub didn't answer ({exc})."}
+        if not got.get("device_code"):
+            return {"error": got.get("error_description") or "GitHub refused to start a sign-in."}
+        interval = int(got.get("interval") or 5)
+        shown = {"user_code": got["user_code"], "verification_uri": got["verification_uri"], "interval": interval}
+        self.devices[user] = {"code": got["device_code"], "interval": interval, "shown": shown,
+                              "until": time.monotonic() + int(got.get("expires_in") or 900)}
+        return shown
+
+    def github_poll(self, user: str | None) -> dict:
+        """Whether the person has approved the sign-in yet; the page asks every few seconds."""
+        device = self.devices.get(user) if user else None
+        if not device or time.monotonic() > device["until"]:
+            self.devices.pop(user, None)
+            return {"error": "The sign-in code expired. Start again."}
+        try:
+            got = github_form("https://github.com/login/oauth/access_token", {
+                "client_id": GITHUB_CLIENT_ID, "device_code": device["code"],
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+        except (OSError, ValueError):
+            return {"pending": True, "interval": device["interval"]}  # asked again at the next poll
+        if got.get("error") in ("authorization_pending", "slow_down"):
+            if got["error"] == "slow_down":
+                device["interval"] += 5
+            return {"pending": True, "interval": device["interval"]}
+        self.devices.pop(user, None)
+        if not got.get("access_token"):
+            return {"error": got.get("error_description") or "GitHub didn't sign you in."}
+        try:
+            login = tasks.gh("user", got["access_token"]).get("login")
+        except (RuntimeError, SystemExit):
+            login = None
+        self.github[user] = {"token": got["access_token"], "login": login,
+                             "until": time.monotonic() + int(got.get("expires_in") or 8 * 3600) - 60}
+        return {"login": login}
+
+    def github_sign_out(self, user: str | None) -> dict:
+        self.github.pop(user, None)
+        self.devices.pop(user, None)
+        return {"ok": True}
+
+    # ---------- favorite pull requests ----------
+
+    def favorites(self, user: str | None) -> list[dict]:
+        """This person's saved pull requests, newest first."""
+        return read_json(self.favorites_file).get(user or "local", [])
+
+    def favorite(self, form: dict, user: str | None = None) -> dict:
+        """Save a pull request for later, or forget it: {repo, number, title, saved}."""
+        repo, number = parse_repo(str(form.get("repo") or "")), form.get("number")
+        if not repo or not isinstance(number, int) or number < 1:
+            return {"error": "A favorite is a repository and a pull request number."}
+        with self.lock:
+            everyone = read_json(self.favorites_file)
+            same = (repo.lower(), number)  # GitHub names ignore case
+            mine = [f for f in everyone.get(user or "local", []) if (f["repo"].lower(), f["number"]) != same]
+            if form.get("saved"):
+                mine.insert(0, {"repo": repo, "number": number, "title": str(form.get("title") or "")[:300],
+                                "saved_at": pipeline.now()})
+            everyone[user or "local"] = mine[:MAX_FAVORITES]
+            self.favorites_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.favorites_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(everyone, indent=1))
+            tmp.replace(self.favorites_file)
+        return {"favorites": everyone[user or "local"]}
+
+
+def github_form(url: str, form: dict) -> dict:
+    """POST a form to GitHub's sign-in endpoints and read the JSON answer."""
+    request = urllib.request.Request(url, data=urlencode(form).encode(), headers={"accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:  # its answer still says why
+        return json.loads(exc.read() or b"{}")
 
 
 def cell(model: str, attempt: int, result: dict) -> dict:
@@ -436,15 +587,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if url.path in ("/", "/index.html"):
             return self.send_body(PAGE.read_bytes(), "text/html; charset=utf-8")
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
+        user = self.user()
         if url.path == "/api/state":
-            return self.send_json(self.app.state(query.get("run", "")))
+            return self.send_json(self.app.state(query.get("run", ""), user))
         if url.path == "/api/repo":
-            return self.send_json(self.app.repo_info(query.get("name", "")))
+            return self.send_json(self.app.repo_info(query.get("name", ""), user))
         if url.path == "/api/prs":
-            return self.send_json(self.app.pulls(query.get("repo", ""), query.get("numbers", "")))
+            return self.send_json(self.app.pulls(query.get("repo", ""), query.get("numbers", ""), query.get("count", ""),
+                                                 query.get("q", ""), user))
         if url.path == "/api/trace":
-            return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", "")))
-        if REPORT_FILE.fullmatch(url.path):
+            return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", ""), user))
+        if (report := REPORT_FILE.fullmatch(url.path)) and self.app.visible(self.app.jobs_dir / report[1], user):
             return super().do_GET()
         return self.send_error(404)
 
@@ -457,13 +610,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
         except json.JSONDecodeError:
             return self.send_error(400)
-        path = urlsplit(self.path).path
+        path, user = urlsplit(self.path).path, self.user()
         if path == "/api/runs":
-            return self.send_json(self.app.start(body))
+            return self.send_json(self.app.start(body, user))
         if match := re.fullmatch(r"/api/runs/([^/]+)/(stop|resume)", path):
             run_id, action = match.groups()
-            return self.send_json(self.app.stop(run_id) if action == "stop" else self.app.resume(run_id))
+            return self.send_json(self.app.stop(run_id, user) if action == "stop" else self.app.resume(run_id, user))
+        if path == "/api/favorites":
+            return self.send_json(self.app.favorite(body, user))
+        if path == "/api/github/device":
+            return self.send_json(self.app.github_device(user))
+        if path == "/api/github/poll":
+            return self.send_json(self.app.github_poll(user))
+        if path == "/api/github/sign-out":
+            return self.send_json(self.app.github_sign_out(user))
         return self.send_error(404)
+
+    def user(self) -> str | None:
+        """Who is asking, as the hosted gateway names them; locally, no one in particular."""
+        return self.headers.get(USER_HEADER) or None
 
     def same_origin(self) -> bool:
         port = self.server.server_address[1]

@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import judge as judge_mod
 from . import runtime
-from .config import BASETEN_URL, Judge, Model, credential_env
+from .config import BASETEN_URL, Model, Panel, credential_env
 from .tasks import TEST_FILE, Task, snapshot
 from .tasks import load as load_task
 
@@ -52,8 +52,31 @@ HARNESS_ENV = {
     "IS_SANDBOX": "1",
 }
 
+# The hidden tests run in a network of their own, with only loopback: the sandbox's API holds
+# port 8080 on every interface, and tests that serve on it (gin's, for one) would fail on the
+# base and merged code alike. Offline like the agent was, and as the same unprivileged user:
+# the namespace's capabilities only bring loopback up and are gone at exec.
+VERIFIER = "own-network"
+OWN_NETWORK = """import ctypes, fcntl, os, socket, struct, sys
+uid, gid = os.getuid(), os.getgid()
+if ctypes.CDLL(None, use_errno=True).unshare(0x10000000 | 0x40000000):  # CLONE_NEWUSER | CLONE_NEWNET
+    sys.exit("pr-eval: no network of their own for the tests: " + os.strerror(ctypes.get_errno()))
+for name, text in (("uid_map", f"{uid} {uid} 1"), ("setgroups", "deny"), ("gid_map", f"{gid} {gid} 1")):
+    with open(f"/proc/self/{name}", "w") as f:
+        f.write(text)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+flags = struct.unpack("16sh", fcntl.ioctl(s, 0x8913, struct.pack("16sh", b"lo", 0)))[1]  # SIOCGIFFLAGS
+fcntl.ioctl(s, 0x8914, struct.pack("16sh", b"lo", flags | 1))  # SIOCSIFFLAGS, IFF_UP
+os.execvp(sys.argv[1], sys.argv[1:])
+"""
+
 # Egress is enforced by the Blaxel proxy firewall, not hostname overrides.
 DISALLOWED_TOOLS = "WebFetch,WebSearch"
+
+# Caches that running code leaves behind are nobody's change. A repository can keep its
+# .gitignore out of the archive the task is cut from, and then every .pyc the agent's test
+# runs wrote would be in its diff, burying the change under megabytes of binary.
+CACHES = ("__pycache__/", "*.py[co]", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/")
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 PROVIDER_ERROR = re.compile(r"API Error|authentication|unauthori[sz]ed|invalid api key|credit balance|"
@@ -88,7 +111,7 @@ class Settings:
     region: str = "us-pdx-1"
     workspace: str | None = None
     agent_timeout: int | None = None   # overrides the task's own
-    judge: Judge | None = None
+    judge: Panel | None = None
     keep_sandboxes: bool = False
 
 
@@ -311,6 +334,14 @@ def start_container(name: str, run_id: str, settings: Settings, memory: int | No
         raise runtime.RuntimeError("Run is stopping; the caller deletes this sandbox.")
 
 
+# How a dependency download that the network dropped reads in Go, pip, uv and npm's output.
+# Seen under a full run's load: about 1 setup in 30 cut off mid-file, and an instant retry
+# cut off again.
+DROPPED_DOWNLOAD = re.compile(r"unexpected EOF|connection reset|ECONNRESET|ETIMEDOUT|EAI_AGAIN|i/o timeout|"
+                              r"TLS handshake timeout|IncompleteRead|Read timed out|50[234] (Bad Gateway|Service "
+                              r"Unavailable|Gateway Time-?out)", re.I)
+
+
 def sandbox_memory(task: Task, settings: Settings) -> int:
     """MB for this task's sandboxes: the run's size, or more where the repository needs it."""
     return max(settings.memory, int(task.meta["environment"].get("memory_mb", 0)))
@@ -320,19 +351,26 @@ def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | 
     """Base source in /workspace, dependencies installed, both committed as the baseline.
 
     Returns (invalid reason or None, setup stats). The baseline includes whatever setup
-    wrote outside .gitignore, so the agent's diff is only the agent's.
+    wrote outside .gitignore and CACHES, so the agent's diff is only the agent's.
     """
     runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
     commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
     code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
-                                 f"git init -q -b main && git add -A && {commit} base", timeout=300)
+                                 f"git init -q -b main && printf '%s\\n' {' '.join(map(shlex.quote, CACHES))} "
+                                 f">>.git/info/exclude && git add -A && {commit} base", timeout=300)
     if code != 0:
         (log_dir / "setup.log").write_text(out)
         return "workspace-error", {}
     started = time.monotonic()
     timeout = int(task.meta["environment"].get("setup_timeout_sec", 900))
-    code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
-    (log_dir / "setup.log").write_text(out)
+    logs = []
+    for wait in (10, 30, None):  # a download can drop mid-file, and installing dependencies again is harmless
+        code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
+        logs.append(out)
+        if code == 0 or timed_out or wait is None or not DROPPED_DOWNLOAD.search(out):
+            break
+        time.sleep(wait)
+    (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
     stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
     if code != 0:
         return ("setup-timeout" if timed_out else "setup-error"), stats
@@ -398,8 +436,10 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
     runtime.upload(container, task.path / "tests", "/tests")
     started = time.monotonic()
     timeout = int(task.meta["verifier"].get("timeout_sec", 900))
-    code, out, timed_out = sh(container, "bash /tests/test.sh", timeout=timeout)
+    code, out, timed_out = sh(container, f"python3 -c {shlex.quote(OWN_NETWORK)} bash /tests/test.sh", timeout=timeout)
     log_path.write_text(out)
+    if code and "pr-eval: no network of their own" in out:
+        raise runtime.RuntimeError("The sandbox can't give the hidden tests a network of their own.")
     return {"exit_code": code, "passed": code == 0 and not timed_out, "timed_out": timed_out,
             "seconds": round(time.monotonic() - started, 1), "summary": test_summary(out), "output": out}
 
@@ -521,11 +561,11 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     return finish(outcome, reason)
 
 
-def judge_attempt(judge: Judge, task: Task, patch: str, tests: dict, test_output: str,
+def judge_attempt(judge: Panel, task: Task, patch: str, tests: dict, test_output: str,
                   trial_dir: Path) -> tuple[dict, str, str | None]:
     """Grade one attempt and save the verdict. Returns (verdict, outcome, invalid reason).
 
-    Solved needs both: the hidden tests passed and the judge agreed.
+    Solved needs both: the hidden tests passed and the judges' final verdict was pass.
     """
     started = time.monotonic()
     verdict = judge_mod.grade(judge, task, patch, tests, test_output)
@@ -617,7 +657,7 @@ def validation_status(task: Task, settings: Settings | None = None) -> str | Non
 
 def environment_identity(settings: Settings) -> dict:
     return {"backend": "blaxel", "workspace": runtime.workspace(settings.workspace),
-            "image": settings.image, "region": settings.region}
+            "image": settings.image, "region": settings.region, "verifier": VERIFIER}
 
 
 def diff_stats(numstat: str) -> dict:
@@ -856,10 +896,10 @@ def cleanup(run_id: str | None = None, workspace: str | None = None) -> list[str
     return runtime.cleanup(run_id, workspace)
 
 
-def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 8, force: bool = False) -> list[dict]:
-    """Grade finished attempts again with this judge, without re-running any agent.
+def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = 8, force: bool = False) -> list[dict]:
+    """Grade finished attempts again with these judges, without re-running any agent.
 
-    Skips attempts already graded by the same judge model and prompt version unless
+    Skips attempts already graded by the same judges and prompt version unless
     `force`. Attempts that never reached the judge (setup, provider or verifier errors,
     empty diffs) are left as they are.
     """
@@ -872,7 +912,7 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 
         if result["outcome"] == "invalid" and result.get("invalid_reason") != "judge-error":
             return None
         old = result.get("judge") or {}
-        if not force and old.get("model") == judge.model and old.get("prompt_version") == judge_mod.PROMPT_VERSION:
+        if not force and old.get("model") == judge.name and old.get("prompt_version") == judge_mod.PROMPT_VERSION:
             return None
         before = result["outcome"]
         verdict, result["outcome"], result["invalid_reason"] = judge_attempt(
@@ -888,6 +928,6 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Judge, *, concurrency: int = 
         changed = [r for r in pool.map(one, dirs) if r]
     meta_path = job_dir / "run.json"
     meta = json.loads(meta_path.read_text())
-    meta["judge"] = {"model": judge.model, "base_url": judge.base_url, "prompt_version": judge_mod.PROMPT_VERSION}
+    meta["judge"] = {**judge.as_dict(), "prompt_version": judge_mod.PROMPT_VERSION}
     write_json(meta_path, meta)
     return changed

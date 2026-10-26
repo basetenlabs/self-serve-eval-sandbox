@@ -6,7 +6,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { compact, day, dur, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
-import type { Model, Report, Task, Trial } from "@/lib/types";
+import type { Model, Report, Task, Trial, Vote } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { taskState, type TrialsFor } from "./TasksTable";
 import { TraceView } from "./TraceView";
@@ -33,7 +33,7 @@ function Body({ task: t, report, ranked, colors, trialsFor }: { task: Task; repo
         <Eyebrow parts={[`${t.repo} #${t.pr ?? ""}`, t.language, t.size && `${t.size}${t.lines_changed ? `, ${t.lines_changed} lines in ${t.files_changed} files` : ""}`, t.merged_at && `Merged ${day(t.merged_at)}`]} />
         <SheetTitle className="mt-3 text-[22px] leading-snug font-normal tracking-[-0.01em]">{t.title}</SheetTitle>
         <SheetDescription className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
-          <span>Graded with {scope}{report.run.judge ? ", then the judge" : ""}.</span>
+          <span>Graded with {scope}{!report.run.judge ? "" : (report.run.judge.panel?.length ?? 1) > 1 ? ", then a panel of judges" : ", then the judge"}.</span>
           {t.url && (
             <a href={t.url} target="_blank" rel="noopener" className="label-mono inline-flex items-center gap-1 text-foreground hover:underline">
               Merged PR <ArrowUpRightIcon className="size-3.5" />
@@ -86,7 +86,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   if (r.outcome === "invalid") rows.push(["Why not scored", r.invalid_reason || "unknown"]);
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
   if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`} />]);
-  if (r.judge) rows.push(["Judge", r.judge.error ? `Error: ${r.judge.error}` : <Lead word={r.judge.verdict === "pass" ? "Pass" : "Fail"} rest={r.judge.reason ? ` · ${r.judge.reason}` : ""} />]);
+  if (r.judge) rows.push([(r.judge.panel?.length ?? 1) > 1 ? "Judges" : "Judge", r.judge.error ? `Error: ${r.judge.error}` : <Verdicts judge={r.judge} />]);
   if (r.diff) rows.push(["Change", `${r.diff.files} files, +${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`]);
   const o = OUTCOME[r.outcome];
   return (
@@ -128,6 +128,29 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
         ))}
       </Tabs>
     </article>
+  );
+}
+
+/** The final verdict with the chair's overview, then each judge's own vote. */
+function Verdicts({ judge: j }: { judge: NonNullable<Trial["judge"]> }) {
+  const votes: Vote[] = (j.panel?.length ?? 0) > 1 ? j.panel! : [];
+  return (
+    <>
+      <Lead word={j.verdict === "pass" ? "Pass" : "Fail"} rest={j.reason ? ` · ${j.reason}` : ""} />
+      {j.chair?.label && <span className="text-muted-foreground"> ({j.chair.label}, chair)</span>}
+      {votes.length > 0 && (
+        <ul className="mt-2 grid gap-1.5 border-l border-rule pl-3 text-[12.5px] leading-snug" aria-label="Each judge's vote">
+          {votes.map((v, i) => (
+            <li key={i} className="grid grid-cols-[3.75rem_minmax(0,1fr)] gap-2">
+              <span className={cn("label-mono pt-px text-[10.5px]", v.verdict === "pass" ? "text-foreground" : "text-muted-foreground")}>
+                {v.error ? "No vote" : v.verdict === "pass" ? "Pass" : "Fail"}
+              </span>
+              <span className="text-muted-foreground"><span className="text-foreground">{v.label}</span> · {v.error ? `didn't answer: ${v.error}` : v.reason}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

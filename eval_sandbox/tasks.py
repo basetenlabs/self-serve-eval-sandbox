@@ -32,6 +32,7 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TASKS = ROOT / "tasks"
@@ -160,11 +161,13 @@ def write_toml(path: Path, sections: dict[str, dict]) -> None:
     path.write_text("\n".join(lines))
 
 
-def gh(endpoint: str):
-    """One GitHub API call through the gh CLI, which carries the user's own login."""
+def gh(endpoint: str, token: str | None = None):
+    """One GitHub API call through the gh CLI, which carries the user's own login, or `token`:
+    the hosted page's visitor's, when they signed in with GitHub."""
     if not shutil.which("gh"):
         raise SystemExit("pr-eval collect reads pull requests with the GitHub CLI: install gh, then `gh auth login`.")
-    p = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True, timeout=120)
+    p = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True, timeout=120,
+                       env={**os.environ, "GH_TOKEN": token} if token else None)
     if p.returncode:
         raise RuntimeError(f"gh api {endpoint}: {p.stderr.strip()[-300:]}")
     return json.loads(p.stdout)
@@ -437,7 +440,7 @@ def merged_prs(repo: str, since: str | None = None, pages: int = 10):
                 yield pr
 
 
-def browse(repo: str, numbers: list[int] | None = None, count: int = 30) -> list[dict]:
+def browse(repo: str, numbers: list[int] | None = None, count: int = 30, token: str | None = None) -> list[dict]:
     """Pull requests to pick from, and whether each can be a task: `numbers`, in that order,
     else the most recently merged, newest first.
 
@@ -445,7 +448,7 @@ def browse(repo: str, numbers: list[int] | None = None, count: int = 30) -> list
     """
     def fetch(number: int) -> dict:
         try:
-            return gh(f"repos/{repo}/pulls/{number}")
+            return gh(f"repos/{repo}/pulls/{number}", token)
         except RuntimeError:
             return {"number": number, "html_url": f"https://github.com/{repo}/pull/{number}", "missing": True}
 
@@ -458,7 +461,7 @@ def browse(repo: str, numbers: list[int] | None = None, count: int = 30) -> list
         else:
             try:
                 files = [{"path": f["filename"], "role": role(f["filename"]), "lines": f["additions"] + f["deletions"]}
-                         for f in gh(f"repos/{repo}/pulls/{pr['number']}/files?per_page=100")]
+                         for f in gh(f"repos/{repo}/pulls/{pr['number']}/files?per_page=100", token)]
                 why = unfit(files)
             except RuntimeError:
                 why = "GitHub didn't list its files"
@@ -472,9 +475,25 @@ def browse(repo: str, numbers: list[int] | None = None, count: int = 30) -> list
         if numbers:
             prs = list(pool.map(fetch, numbers))
         else:
-            listing = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100")
-            prs = sorted((pr for pr in listing if pr.get("merged_at")), key=lambda pr: pr["merged_at"], reverse=True)[:count]
+            merged = []
+            for page in range(1, 6):  # many closed PRs were never merged, so one page can hold too few
+                listing = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={page}", token)
+                merged += [pr for pr in listing if pr.get("merged_at")]
+                if len(listing) < 100 or len(merged) >= count:
+                    break
+            prs = sorted(merged, key=lambda pr: pr["merged_at"], reverse=True)[:count]
         return list(pool.map(row, prs))
+
+
+def search(repo: str, words: str, token: str | None = None, count: int = 12) -> list[int]:
+    """Merged pull requests whose title or description has these words, by GitHub's search, best first."""
+    if number := re.fullmatch(r"#?(\d+)", words.strip()):
+        return [int(number[1])]
+    terms = " ".join(re.findall(r"[\w.-]+", words))[:200]
+    if not terms:
+        return []
+    found = gh(f"search/issues?q={quote(f'repo:{repo} is:pr is:merged {terms}')}&per_page={count}", token)
+    return [item["number"] for item in found.get("items", [])]
 
 
 def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = None, limit: int = 20,
