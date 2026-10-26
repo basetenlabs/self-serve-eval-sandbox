@@ -103,7 +103,7 @@ class App:
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
                 run["board"] = self.board(run)
         estimates = self.estimates(runs)
-        models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider,
+        models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "model": m.model,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
@@ -190,7 +190,7 @@ class App:
         return {
             "id": job_dir.name, "title": title, "started": meta.get("created_at"), "tasks": len(run_tasks),
             "active_at": max(last),  # ISO times in UTC sort as text
-            "models": [{"key": m["key"], "label": m["label"], "kind": m.get("kind")} for m in models],
+            "models": [{"key": m["key"], "label": m["label"], "kind": m.get("kind"), "model": m.get("model")} for m in models],
             "phase": phase, "detail": detail, "note": meta.get("note"), "judged": bool(meta.get("judge")),
             "progress": {"done": done, "total": total},
             "checking": {"done": sum((tasks_dir / c / "validation" / "result.json").is_file() for c in candidates),
@@ -201,6 +201,7 @@ class App:
             "log": tail(log) if phase in ("failed", "stopped") else None, "lost": lost,
             "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "blaxel"
                          and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
+            "again": again(meta),
         }
 
     def board(self, run: dict) -> dict:
@@ -543,6 +544,23 @@ def github_form(url: str, form: dict) -> dict:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:  # its answer still says why
         return json.loads(exc.read() or b"{}")
+
+
+def again(meta: dict) -> dict | None:
+    """What Run again puts back in the form: the run's pull requests (the ones its check kept, so a
+    repository's latest merges stay the same PRs), its models and its commands."""
+    request = meta.get("request") or {}
+    models = [m["key"] for m in meta.get("models") or []]
+    if request.get("quick"):
+        return {"quick": True, "models": models}
+    pulls: dict[str, list[int]] = {}
+    for task_id in meta.get("tasks") or meta.get("candidates") or []:
+        number = task_id.rsplit("-", 1)[-1]
+        if number.isdigit():
+            pulls.setdefault(repo_of(task_id), []).append(int(number))
+    if not pulls or sum(map(len, pulls.values())) > MAX_LIMIT:
+        return None
+    return {"pulls": pulls, "setup": request.get("setup"), "test": request.get("test"), "models": models}
 
 
 def cell(model: str, attempt: int, result: dict) -> dict:

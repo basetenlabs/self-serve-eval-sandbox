@@ -130,6 +130,7 @@ function Scores({ run, models, colors }: { run: Run; models: Model[]; colors: Re
                 <span className="flex min-w-0 items-center gap-2 text-[14px] font-medium"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
                 <span className="num text-[20px] leading-7">{graded ? `${solved}/${graded}` : "–"}</span>
               </div>
+              {m.model && <div className="truncate font-mono text-[11px] text-muted-foreground">{m.model}</div>}
               <div className="mt-1.5 h-2.5 bg-node" aria-hidden>
                 <div className="h-full transition-[width] duration-700" style={{ width: `${graded ? (100 * solved) / graded : 0}%`, background: colors[m.key]?.fill }} />
               </div>

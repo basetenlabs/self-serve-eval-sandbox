@@ -1,10 +1,12 @@
-import { ArrowRightIcon, ChevronRightIcon } from "lucide-react";
+import { ArrowRightIcon, ChevronRightIcon, RepeatIcon } from "lucide-react";
+import * as React from "react";
 import { Empty, Eyebrow, isActive, LiveDot } from "@/components/brand";
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { plural } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import type { AppState, Run } from "@/lib/types";
-import { NewRun } from "./NewRun";
+import { fillAgain, NewRun } from "./NewRun";
 import { Readiness } from "./Readiness";
 import { RunsList } from "./RunsList";
 
@@ -19,6 +21,8 @@ export function HomePage({ state, error, go, hurry }: {
   state: AppState | null; error: string | null; go: (r: Route) => void; hurry: () => void;
 }) {
   const live = state?.runs.find((r) => isActive(r.phase));
+  const last = state?.runs.find((r) => r.again);
+  const [form, setForm] = React.useState(0); // a new key remounts the form, which reads what fillAgain left
   return (
     <>
       <section className="px-4 pt-12 pb-10 sm:px-6 md:px-8 md:pt-16">
@@ -46,14 +50,21 @@ export function HomePage({ state, error, go, hurry }: {
       {live && <LiveBanner run={live} />}
 
       <section className="grid border-t border-dashed border-rule lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 px-4 py-10 sm:px-6 md:px-8">
-          <div className="mb-8 flex items-end justify-between gap-4">
+        <div id="new-run" className="min-w-0 scroll-mt-20 px-4 py-10 sm:px-6 md:px-8">
+          <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
               <div className="label-mono text-muted-foreground">New run</div>
               <h2 className="mt-1 text-[28px] leading-tight tracking-[-0.02em]">Pick the PRs and the models</h2>
             </div>
+            {last?.again && (
+              <Tip content={`The pull requests and models of ${last.title}. Add a new model, then start.`}>
+                <Button type="button" variant="outline" size="sm" onClick={() => { fillAgain(last.again!); setForm((n) => n + 1); }}>
+                  <RepeatIcon className="size-3.5" />Same as last run
+                </Button>
+              </Tip>
+            )}
           </div>
-          {state ? <NewRun state={state} go={go} hurry={hurry} /> : <ComposerSkeleton error={error} />}
+          {state ? <NewRun key={form} state={state} go={go} hurry={hurry} /> : <ComposerSkeleton error={error} />}
         </div>
         <aside className="border-t border-dashed border-rule px-4 py-10 sm:px-6 md:px-8 lg:border-t-0 lg:border-l">
           <div className="lg:sticky lg:top-24">

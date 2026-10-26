@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Setting pr-eval up for someone rather than changing it? Follow [SETUP.md](SETUP.md).
+
 Rules for anyone (human or agent) working in this repo:
 
 - No customer names, customer data or customer-identifying details anywhere: code, docs, sample data, commit messages, branch names or generated reports. Sample data comes from public repositories only.

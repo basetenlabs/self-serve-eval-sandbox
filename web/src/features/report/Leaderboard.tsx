@@ -74,6 +74,7 @@ function Row({ m, rank, s, swatch, leads }: {
             <Swatch swatch={swatch} size={12} />
             <span className="truncate text-[17px] font-medium">{m.label}</span>
           </span>
+          {m.model && <span className="mt-1 block truncate font-mono text-[11.5px] text-muted-foreground">{m.model}</span>}
           <span className="label-mono mt-1 block text-[10.5px] text-muted-foreground">{isOpen(m) ? "Open · served on Baseten" : "Closed · comparison"}</span>
         </span>
         <ChevronDownIcon className={cn("size-4 justify-self-end text-muted-foreground transition-transform md:order-last", open && "rotate-180")} />

@@ -13,13 +13,14 @@ import { dur, plural, usd } from "@/lib/format";
 import { parsePasted, pullCount } from "@/lib/github";
 import { type Route, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
-import type { AppState, CatalogModel, Favorite, PullList, RepoInfo } from "@/lib/types";
+import type { Again, AppState, CatalogModel, Favorite, PullList, RepoInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { GitHubAccount } from "./GitHubAccount";
 import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPicker";
 
-type Source = "quick" | "repo";
+type Source = "quick" | "repo" | "suite";
 type Pick = "latest" | "choose";
+const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 const LIMITS = [5, 10, 20, 40];
 const QUICK_MINUTES = 5; // every quick-sample attempt starts at once; a few minutes end to end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -28,14 +29,16 @@ const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator
 export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) => void; hurry: () => void }) {
   const toast = useToast();
   const [stored, setSource] = useStored<string>("pr-eval-source", "quick");
-  const source: Source = stored === "repo" ? "repo" : "quick";
+  const source: Source = stored === "repo" || stored === "suite" ? stored : "quick";
   const [text, setText] = useStored("pr-eval-pulls", "");
+  const [handed] = React.useState(takeCommands);
+  React.useEffect(() => { try { sessionStorage.removeItem(COMMANDS); } catch { /* private window */ } }, []);
   const [pick, setPick] = useStored<Pick>("pr-eval-pick", "latest");
   const [limit, setLimit] = React.useState(state.default_limit);
   const [chosen, setChosen] = React.useState<number[]>([]);
   const [checked, setChecked] = React.useState<Record<string, PullList | null>>({});
-  const [setup, setSetup] = React.useState("");
-  const [test, setTest] = React.useState("");
+  const [setup, setSetup] = React.useState(handed.setup);
+  const [test, setTest] = React.useState(handed.test);
   const [info, setInfo] = React.useState<RepoInfo | null>(null);
   const [looking, setLooking] = React.useState(false);
   const usable = state.models.filter((m) => !m.missing);
@@ -50,11 +53,23 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     void save(pull, saved).then((problem) => problem && toast("Couldn't save it", { body: problem, tone: "danger" }));
   };
   const github = state.github.login; // a GitHub sign-in can open private repositories, so look again
+  // The eval suite: every starred pull request, from any repository, less the ones unticked for this run.
+  const [skipped, setSkipped] = React.useState<string[]>([]);
+  const suite = favorites.slice(0, state.max_limit);
+  const inSuite = (f: Favorite) => !skipped.includes(`${f.repo.toLowerCase()}#${f.number}`);
+  const suitePulls = suite.filter(inSuite).reduce<Record<string, number[]>>((acc, f) => {
+    const repo = Object.keys(acc).find((r) => r.toLowerCase() === f.repo.toLowerCase()) ?? f.repo; // GitHub names ignore case
+    return { ...acc, [repo]: [...(acc[repo] ?? []), f.number] };
+  }, {});
+  const pickSuite = (f: Favorite, on: boolean) => {
+    const key = `${f.repo.toLowerCase()}#${f.number}`;
+    setSkipped(on ? skipped.filter((k) => k !== key) : [...skipped, key]);
+  };
 
   // What was typed: one repository to take PRs from, or links to exact pull requests.
   const pasted = React.useMemo(() => parsePasted(text), [text]);
   const pastedRepos = Object.keys(pasted.pulls);
-  const mode = source === "quick" ? "quick" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
+  const mode = source === "quick" ? "quick" : source === "suite" ? "suite" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
   const repo = mode === "repo" ? pasted.repos[0] : null;
 
   // Look the repository up as it's typed: language, whether it has default commands, access.
@@ -81,7 +96,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const lookups = mode === "pasted" ? pastedRepos.flatMap((r) => checked[r] ?? []) : info ? [info] : [];
   const lookupError = lookups.find((l) => l.error)?.error;
   const needsCommands = lookups.find((l) => l.repo && !l.error && l.defaults === false);
-  const prs = mode === "quick" ? state.quick.tasks : mode === "pasted" ? pullCount(pastedPulls)
+  const prs = mode === "quick" ? state.quick.tasks : mode === "suite" ? pullCount(suitePulls) : mode === "pasted" ? pullCount(pastedPulls)
     : mode === "repo" ? (pick === "choose" ? chosen.length : limit) : 0;
 
   const models = state.models.filter((m) => chosenModels.includes(m.key));
@@ -105,9 +120,10 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     setError(null);
     setStarting(true);
     const which = mode === "quick" ? { quick: true }
+      : mode === "suite" ? { pulls: suitePulls }
       : mode === "pasted" ? { pulls: pastedPulls }
         : pick === "choose" ? { pulls: { [repo!]: chosen } } : { repo, limit };
-    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test });
+    const res = await post("/api/runs", { ...which, models: chosenModels, ...(mode === "suite" ? {} : { setup, test }) });
     setStarting(false);
     if (res.error || !res.id) {
       setError(res.error ?? "The run didn't start.");
@@ -142,12 +158,36 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   return (
     <form ref={form} onSubmit={start} onInput={() => setError(null)} className="grid gap-10" aria-label="New run">
       <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
-        <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-2" aria-label="Pull requests">
+        <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
           <SourceTile value="quick" title="Quick sample" figure={`${state.quick.tasks} PRs`} tag="Fast"
             text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
           <SourceTile value="repo" title="Your pull requests" figure="Any repo"
             text="Paste pull request links, or pick from a repository's latest merges." />
+          <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
+            text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
         </RadioGroup.Root>
+
+        {source === "suite" && (
+          <div className="mt-4 grid animate-enter gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+            <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
+              <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
+            </div>
+            {favorites.length ? (
+              <>
+                <SavedPulls favorites={suite} picked={inSuite} onPick={pickSuite} onFavorite={onFavorite} />
+                <p className="text-[13px] text-muted-foreground">
+                  {favorites.length > suite.length ? `The newest ${suite.length} run; unstar some to make room for others. ` : ""}
+                  Star more under <b className="font-medium text-foreground">Your pull requests</b>. Repositories that aren't Go or Python need their own install and test commands: run those from there.
+                </p>
+              </>
+            ) : (
+              <p className="text-[13px] text-muted-foreground">
+                Nothing starred yet. Under <b className="font-medium text-foreground">Your pull requests</b>, star the pull requests that stand for your team's work.
+                They gather here, from any repository, so the next model gets the same test in one click.
+              </p>
+            )}
+          </div>
+        )}
 
         {source === "repo" && (
           <div className="mt-4 grid animate-enter gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
@@ -260,13 +300,34 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             {state.busy ? "A run is going. You can start another when it finishes."
               : !models.length ? "Choose at least one model."
                 : checking ? "Checking the pull requests on GitHub."
-                : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request." : "Name a repository or paste pull request links.")
+                : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request."
+                  : mode === "suite" ? "Star or tick at least one pull request." : "Name a repository or paste pull request links.")
                   : "Runs keep going if you close this page. Sandboxes are deleted as each attempt ends."}
           </span>
         </div>
       </Column>
     </form>
   );
+}
+
+/** Put a run's pull requests, models and commands in the form; it reads them when it next mounts. */
+export function fillAgain(again: Again) {
+  const links = Object.entries(again.pulls ?? {}).flatMap(([repo, numbers]) => numbers.map((n) => `https://github.com/${repo}/pull/${n}`));
+  try {
+    localStorage.setItem("pr-eval-source", JSON.stringify(again.quick ? "quick" : "repo"));
+    if (!again.quick) localStorage.setItem("pr-eval-pulls", JSON.stringify(links.join("\n")));
+    localStorage.setItem("pr-eval-models", JSON.stringify(again.models));
+    sessionStorage.setItem(COMMANDS, JSON.stringify({ setup: again.setup ?? "", test: again.test ?? "" }));
+  } catch { /* private window: the form stays as it was */ }
+}
+
+function takeCommands(): { setup: string; test: string } {
+  try {
+    const got = JSON.parse(sessionStorage.getItem(COMMANDS) ?? "{}");
+    return { setup: String(got.setup ?? ""), test: String(got.test ?? "") };
+  } catch {
+    return { setup: "", test: "" };
+  }
 }
 
 function SourceTile({ value, title, figure, text, tag }: { value: Source; title: string; figure: string; text: string; tag?: string }) {
@@ -369,6 +430,7 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
                   <span aria-hidden className={cn("size-3 shrink-0", isOpen(m) ? "bg-[#19E76E]" : "bg-[#3DA6FF]")} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-medium">{m.label}</span>
+                    {m.model && <span className="block truncate font-mono text-[11.5px] text-muted-foreground">{m.model}</span>}
                     <span className="label-mono block text-[10.5px] text-muted-foreground">
                       {m.missing ? "Needs its API key"
                         : [m.cost_per_attempt != null ? `${usd(m.cost_per_attempt)} / try` : "No price yet",

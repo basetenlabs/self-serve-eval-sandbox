@@ -1,10 +1,12 @@
-import { ArrowLeftIcon, ArrowUpRightIcon, ChevronRightIcon, RotateCwIcon, SquareIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowUpRightIcon, ChevronRightIcon, RepeatIcon, RotateCwIcon, SquareIcon } from "lucide-react";
 import * as React from "react";
 import { Empty, Eyebrow, isActive, PhaseBadge } from "@/components/brand";
 import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
+import { fillAgain } from "@/features/home/NewRun";
 import { Results, TaskDrawer, Tasks } from "@/features/report/ReportView";
 import { post, useReport } from "@/lib/api";
 import { plural, when } from "@/lib/format";
@@ -44,7 +46,7 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   const finished = report ? new Set(report.trials.map((t) => t.task_id)) : null;
   return (
     <>
-      <RunHeader run={run} state={state} sentence={report ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} />
+      <RunHeader run={run} state={state} sentence={report ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} go={go} />
       <section className="border-t border-dashed border-rule px-4 py-8 sm:px-6 md:px-8">
         <Pipeline run={run} />
         <RunNotes run={run} />
@@ -68,7 +70,9 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   );
 }
 
-function RunHeader({ run, state, sentence, hurry }: { run: Run; state: AppState; sentence: string | null; hurry: () => void }) {
+function RunHeader({ run, state, sentence, hurry, go }: {
+  run: Run; state: AppState; sentence: string | null; hurry: () => void; go: (r: Route) => void;
+}) {
   const toast = useToast();
   const [stopping, setStopping] = React.useState(false);
   const active = isActive(run.phase);
@@ -84,6 +88,11 @@ function RunHeader({ run, state, sentence, hurry }: { run: Run; state: AppState;
     if (res.error) toast("Couldn't resume", { body: res.error, tone: "danger" });
     else toast("Resumed", { body: "Unfinished attempts run again." });
     hurry();
+  };
+  const again = () => {
+    fillAgain(run.again!);
+    go({ page: "home" });
+    requestAnimationFrame(() => document.getElementById("new-run")?.scrollIntoView());
   };
   const vs = run.models.map((m) => m.label).join(" vs ");
   const reportUrl = run.report ? `/${run.report.replace(/^\//, "")}` : null;
@@ -113,6 +122,11 @@ function RunHeader({ run, state, sentence, hurry }: { run: Run; state: AppState;
           )}
           {run.resumable && (
             <Button variant="outline" onClick={resume} disabled={state.busy}><RotateCwIcon className="size-3.5" />Resume</Button>
+          )}
+          {!active && run.again && (
+            <Tip content="A new run on the same pull requests and models. Add a model before you start.">
+              <Button variant="outline" onClick={again}><RepeatIcon className="size-3.5" />Run again</Button>
+            </Tip>
           )}
           {reportUrl && (
             <Button asChild>

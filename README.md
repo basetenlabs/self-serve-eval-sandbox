@@ -4,9 +4,11 @@ Check whether an open model can do your team's real coding work. `pr-eval` repla
 
 Status: v0. Claude Code is the only harness.
 
+Setting it up with a coding agent? Give it this repository's link and [SETUP.md](SETUP.md), a step-by-step guide with a check after each step.
+
 ## Quickstart
 
-You need Python 3.12 to 3.14 (the Blaxel SDK does not install on 3.15 yet), the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for 16 sandboxes at once: eight attempts, each with a grading sandbox that gets ready alongside it (`--concurrency` lowers that). Create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
+You need Python 3.12 to 3.14 (the Blaxel SDK does not install on 3.15 yet), the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for 16 sandboxes at once: eight attempts, each with a grading sandbox that gets ready alongside it (`--concurrency` lowers that). The quick sample on the page starts all 20 of its attempts at once, so it needs 40. Create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
 
 One-time setup (replace `dedicated-eval-workspace` with the new workspace's name):
 
