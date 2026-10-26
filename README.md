@@ -6,7 +6,7 @@ Status: v0. Claude Code is the only harness.
 
 ## Quickstart
 
-You need Python 3.12+, the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for 16 sandboxes at once: eight attempts, each with a grading sandbox that gets ready alongside it (`--concurrency` lowers that). Create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
+You need Python 3.12 to 3.14 (the Blaxel SDK does not install on 3.15 yet), the GitHub CLI (`gh auth login`), and a **new, dedicated Blaxel workspace** with capacity for 16 sandboxes at once: eight attempts, each with a grading sandbox that gets ready alongside it (`--concurrency` lowers that). Create one in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. No local Docker daemon is needed. Install the Blaxel CLI (runs use it to build and find the trial image), then sign in to that dedicated workspace. Do not use a main, shared or already-in-use workspace. Model calls and Blaxel compute incur charges.
 
 One-time setup (replace `dedicated-eval-workspace` with the new workspace's name):
 
@@ -30,7 +30,7 @@ You also need three provider keys:
 The judges are a panel of three, set in `configs/models.toml`: Claude Opus 5.5, GPT-6.1 Sol and Kimi K3, each at high reasoning effort, each grading on its own. Kimi K3 then chairs: it reads the same evidence and all three verdicts and writes the final one.
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -e .  # includes the Blaxel Python SDK
+python3.13 -m venv .venv && source .venv/bin/activate && pip install -e .  # or python3.12 or python3.14; includes the Blaxel Python SDK
 pr-eval serve
 ```
 
