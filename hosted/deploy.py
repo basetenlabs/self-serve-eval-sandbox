@@ -13,8 +13,9 @@ Where it runs (the dedicated trial workspace, so the page can start trials there
     Secrets  read on this Mac (Keychain, `gh auth token`) and handed to the page's process
              environment only; never written to the volume, the image or this repository
 
-Keys come from the environment when set, else from the Keychain:
-    BASETEN_API_KEY         Keychain baseten-api-key (open models and the Kimi K3 judge)
+Keys come from the Keychain, else from the environment:
+    BASETEN_API_KEY         Keychain pr-eval-host-baseten-api-key (Baseten workspace key pr-eval-host:
+                            open models and the Kimi K3 judge)
     CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models and the Opus judge)
     OPENAI_API_KEY          Keychain baseten-openai-api-key (the GPT-6.1 Sol judge)
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
@@ -60,7 +61,7 @@ RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
 # no raw transcripts or logs.
 SEED_FILES = ["run.json", "report.json", "report.html"]
 SECRETS = {
-    "BASETEN_API_KEY": "baseten-api-key",
+    "BASETEN_API_KEY": "pr-eval-host-baseten-api-key",
     "CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-claude-code-oauth-token",
     "OPENAI_API_KEY": "baseten-openai-api-key",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
@@ -73,12 +74,16 @@ def step(message: str) -> None:
 
 
 def keychain(service: str) -> str | None:
-    p = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, text=True)
+    try:
+        p = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, text=True)
+    except FileNotFoundError:  # not a Mac
+        return None
     return p.stdout.strip() or None
 
 
 def secrets() -> dict[str, str]:
-    found = {name: os.environ.get(name) or keychain(service) for name, service in SECRETS.items()}
+    # The page's own Keychain items come first, so a personal key exported in the shell never reaches it.
+    found = {name: keychain(service) or os.environ.get(name) for name, service in SECRETS.items()}
     found["GH_TOKEN"] = os.environ.get("GH_TOKEN") or subprocess.run(
         ["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
     if missing := [name for name, value in found.items() if not value]:

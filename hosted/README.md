@@ -30,7 +30,7 @@ bl push -d hosted --name pr-eval-host --type sandbox -w pr-eval-01db4d88   # the
 .venv/bin/python hosted/deploy.py --seed jobs/grafana-1021                   # create or update
 ```
 
-`deploy.py` reads the keys from the environment or the macOS Keychain (the list is at the top of
+`deploy.py` reads the keys from the macOS Keychain or the environment (the list is at the top of
 the file), creates the volume, sandbox and public preview when they don't exist yet, uploads the
 app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
 401). `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
