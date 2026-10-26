@@ -10,7 +10,7 @@ export function benchMarkdown(report: Report, ranked: Model[]): string {
     "Time per task (median)", "Total wall clock", "Cost per solved task"];
   const rows = ranked.map((m) => {
     const s = S[m.key];
-    return [m.label, `${s.solved}/${s.valid} ${pct(s.pass_at_1)}`,
+    return [m.model ? `${m.label} (\`${m.model}\`)` : m.label, `${s.solved}/${s.valid} ${pct(s.pass_at_1)}`,
       ...(multi ? [`${s.tasks_solved}/${s.tasks} ${s.tasks ? pct(s.tasks_solved / s.tasks) : "–"}`] : []),
       dur(s.median_seconds), elapsed(s.timing?.elapsed_seconds), usd(s.cost_per_solved)];
   });

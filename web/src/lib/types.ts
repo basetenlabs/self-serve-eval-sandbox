@@ -7,6 +7,8 @@ export interface Model {
   label: string;
   kind?: Kind | null;
   provider?: string;
+  /** The exact id its API serves, e.g. deepseek-ai/DeepSeek-V4.1-Flash-1017. */
+  model?: string | null;
 }
 
 // ---------- /api/state ----------
@@ -96,7 +98,18 @@ export interface Run {
   resumable: boolean;
   /** On a private repository: only the person who started it sees it. */
   private?: boolean;
+  /** What Run again puts back in the form; null when it can't. */
+  again?: Again | null;
   board?: Board;
+}
+
+/** A run's pull requests, models and commands, to start the same run again. */
+export interface Again {
+  quick?: boolean;
+  pulls?: Record<string, number[]>;
+  setup?: string | null;
+  test?: string | null;
+  models: string[];
 }
 
 export interface AppState {

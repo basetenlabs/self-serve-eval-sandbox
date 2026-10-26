@@ -797,12 +797,24 @@ class AppTest(unittest.TestCase):
                 run = page.describe(job)
                 board = page.board(run)
         self.assertEqual(run["title"], "Quick sample")
+        self.assertEqual(run["again"], {"quick": True, "models": ["m"]})
         rows = {r["id"]: r for r in board["rows"]}
         self.assertEqual(rows["o__r-1"]["title"], "Fix 1")
         self.assertEqual(rows["o__r-1"]["cells"][0]["stage"], "agent")
         self.assertEqual((rows["o__r-2"]["cells"][0]["stage"], rows["o__r-2"]["cells"][0]["seconds"]), ("solved", 125))
         self.assertEqual((rows["o__r-3"]["check"]["stage"], rows["o__r-3"]["cells"][0]["stage"]), ("base", "waiting"))
         self.assertEqual(board["sandboxes"], app.SANDBOXES["agent"] + 1)  # the agent's two, and the check's one
+
+    def test_run_again_brings_back_the_same_prs_models_and_commands(self):
+        models = [{"key": "a", "label": "A", "model": "org/A-1017"}, {"key": "b", "label": "B"}]
+        latest = {"request": {"repos": ["o/my-repo"], "limit": 10, "setup": "npm ci", "test": "npx t"}, "models": models,
+                  "candidates": ["o__my-repo-1", "o__my-repo-2", "o__my-repo-3"], "tasks": ["o__my-repo-3", "o__my-repo-1"]}
+        # the PRs the check kept, not the repository's latest merges, which move on
+        self.assertEqual(app.again(latest), {"pulls": {"o/my-repo": [3, 1]}, "setup": "npm ci", "test": "npx t", "models": ["a", "b"]})
+        stopped = {"request": {"pulls": {"o/r": [5], "x/y": [2]}}, "candidates": ["o__r-5", "x__y-2"], "tasks": [], "models": []}
+        self.assertEqual(app.again(stopped)["pulls"], {"o/r": [5], "x/y": [2]})  # stopped while checking
+        self.assertIsNone(app.again({"request": {"repos": ["o/r"]}, "models": models}))  # stopped before it found any
+        self.assertIsNone(app.again({"tasks": [f"o__r-{n}" for n in range(1, app.MAX_LIMIT + 2)], "models": models}))
 
     def test_the_hosted_page_refuses_private_repositories(self):
         page = app.App(Path("/nonexistent"))
