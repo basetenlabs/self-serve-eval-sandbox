@@ -1,4 +1,4 @@
-# The hosted page's sandbox: the sign-in gateway (Node), `pr-eval serve` (Python with the
+# The hosted page's sandbox: the sign-in server (Node, @blaxel/sign-in), `pr-eval serve` (Python with the
 # pinned Blaxel SDK), and the CLIs a run calls (git, gh, bl, and Claude Code for the Opus
 # judge). The app itself is uploaded to the volume by hosted/deploy.py, so a code change
 # never needs a new image.

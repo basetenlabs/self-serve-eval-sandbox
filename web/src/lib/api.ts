@@ -9,7 +9,7 @@ const SLOW_MS = 15000;
 async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { cache: "no-store", signal, headers: { accept: "application/json" } });
   if (res.status === 401 || res.redirected) {
-    location.reload(); // the hosted page's sign-in expired; the gateway shows its sign-in page
+    location.reload(); // the hosted page's sign-in expired; the reload shows the sign-in page
     throw new Error("Signed out");
   }
   if (!res.ok) throw new Error(`${url} answered ${res.status}`);

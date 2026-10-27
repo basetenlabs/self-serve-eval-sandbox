@@ -1,0 +1,15 @@
+{
+  "name": "pr-eval-host",
+  "private": true,
+  "description": "The hosted eval page's sign-in: @blaxel/sign-in in front of `pr-eval serve`.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.mjs",
+    "check": "node --disable-warning=ExperimentalWarning node_modules/@blaxel/sign-in/server.mjs --check --config site.config.mjs"
+  },
+  "dependencies": {
+    "@blaxel/sign-in": "npm:@blaxel-ai/sign-in@0.1.0"
+  }
+}

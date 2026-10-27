@@ -14,5 +14,3 @@ data/
 tasks/
 *.egg-info/
 build/
-# The hosted gateway's sign-in state for local runs (OAuth client, session key, sessions).
-.auth-state/

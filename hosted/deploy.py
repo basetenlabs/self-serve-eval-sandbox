@@ -7,9 +7,10 @@
 Where it runs (the dedicated trial workspace, so the page can start trials there):
 
     Sandbox  pr-eval-host, from the image in hosted/Dockerfile (bl push -d hosted, once)
-    Preview  public HTTPS; hosted/gateway.mjs signs people in and is the only public door
+    Preview  public HTTPS; hosted/server.mjs (@blaxel/sign-in) signs people in and is the only public door
     Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/),
-             the sign-in state (/data/auth: OAuth client, session key, sessions)
+             the sign-in state (/data/sign-in: OAuth client, session key, sessions). /data/auth is the
+             earlier gateway's; its OAuth client is imported once, so nobody is asked to consent again.
     Secrets  read on this Mac (Keychain, `gh auth token`) and handed to the page's process
              environment only; never written to the volume, the image or this repository
 
@@ -60,6 +61,10 @@ RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
 # no raw transcripts or logs.
 SEED_FILES = ["run.json", "report.json", "report.html"]
+# The sign-in server's package ships inside the release as installed here (`npm ci` in hosted/), so the
+# sandbox never needs a GitHub Packages token.
+SIGN_IN = ROOT / "hosted" / "node_modules" / "@blaxel" / "sign-in"
+AUTH = "/data/sign-in"
 SECRETS = {
     "BASETEN_API_KEY": "pr-eval-host-baseten-api-key",
     "CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-claude-code-oauth-token",
@@ -99,9 +104,9 @@ def sdk():
     return SyncSandboxInstance, SyncVolumeInstance
 
 
-def run(sandbox, command: str, timeout: int = 300, env: dict | None = None) -> str:
+def run(sandbox, command: str, timeout: int = 300, env: dict | None = None, cwd: str | None = None) -> str:
     result = sandbox.process.exec({"command": f"set -eu\n{command}", "env": env or {}, "waitForCompletion": True,
-                                   "timeout": timeout})
+                                   "timeout": timeout, **({"workingDir": cwd} if cwd else {})})
     if result.exit_code:
         raise SystemExit(f"sandbox command failed ({result.exit_code}): {(result.stderr or result.stdout or '')[-2000:]}")
     return result.stdout or ""
@@ -130,7 +135,7 @@ def host():
             "labels": LABELS,
         })
         ready(sandbox)
-    # The gateway owns sign-in, so the preview itself is public.
+    # The sign-in server owns sign-in, so the preview itself is public.
     preview = sandbox.previews.create_if_not_exists({"metadata": {"name": "web"},
                                                      "spec": {"port": PORT, "public": True, "prefixUrl": PREFIX}})
     url = preview.spec.url
@@ -160,13 +165,24 @@ def upload(sandbox, files: dict[str, bytes], remote: str) -> None:
     run(sandbox, f"mkdir -p {shlex.quote(remote)} && tar -xzf {target} -C {shlex.quote(remote)} && rm {target}")
 
 
+def sign_in_package() -> list[Path]:
+    """The installed @blaxel/sign-in, checked against the lockfile's version."""
+    locked = json.loads((ROOT / "hosted" / "package-lock.json").read_text())["packages"]["node_modules/@blaxel/sign-in"]
+    installed = SIGN_IN / "package.json"
+    if not installed.is_file() or json.loads(installed.read_text()).get("version") != locked["version"]:
+        raise SystemExit(f'@blaxel/sign-in {locked["version"]} is not installed: cd hosted && NODE_AUTH_TOKEN="$(gh auth token)" npm ci')
+    return sorted(f for f in SIGN_IN.rglob("*") if f.is_file())
+
+
 def release_files() -> dict[str, bytes]:
     out = {}
     for entry in RELEASE:
         path = ROOT / entry
         for file in [path] if path.is_file() else sorted(path.rglob("*")):
-            if file.is_file() and "__pycache__" not in file.parts and not file.name.startswith("."):
+            if file.is_file() and not {"__pycache__", "node_modules"} & set(file.parts) and not file.name.startswith("."):
                 out[str(file.relative_to(ROOT))] = file.read_bytes()
+    for file in sign_in_package():
+        out[str(file.relative_to(ROOT))] = file.read_bytes()
     return out
 
 
@@ -197,21 +213,25 @@ def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
 
 def start(sandbox, origin: str, keys: dict[str, str]) -> None:
     for process in sandbox.process.list() or []:
-        if (process.name or "").startswith(("pr-eval-page", "pr-eval-gateway")) and process.status in ("running", "starting"):
+        if (process.name or "").startswith(("pr-eval-page", "pr-eval-gateway", "pr-eval-sign-in")) and process.status in ("running", "starting"):
             sandbox.process.kill(process.name)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
-                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
+                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID, "APP_ORIGIN": origin,
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
+    sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
+                   "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
+    # Once: adopt the earlier gateway's OAuth client for this origin, so nobody is asked to consent again.
+    run(sandbox, f"if [ -f /data/auth/oauth-client.json ] && ! ls {AUTH}/oauth-client-*.json >/dev/null 2>&1; then "
+                 "node node_modules/@blaxel/sign-in/server.mjs --import-client /data/auth/oauth-client.json --config site.config.mjs; fi",
+        env=sign_in_env, cwd=f"{APP}/hosted")
     # No `timeout`: on Blaxel it can end a long-lived process once it elapses.
     sandbox.process.exec({"name": f"pr-eval-page-{stamp}", "workingDir": APP, "env": page_env,
                           "command": f"mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs",
                           "restartOnFailure": True, "maxRestarts": 25})
-    sandbox.process.exec({"name": f"pr-eval-gateway-{stamp}", "workingDir": f"{APP}/hosted",
-                          "env": {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin,
-                                  "BLAXEL_ENV": "prod", "AUTH_STATE_DIR": "/data/auth", "BL_SANDBOX_API": "http://localhost:8080",
-                                  "NODE_ENV": "production"},
-                          "command": "exec node gateway.mjs", "restartOnFailure": True, "maxRestarts": 25})
+    sandbox.process.exec({"name": f"pr-eval-sign-in-{stamp}", "workingDir": f"{APP}/hosted", "env": sign_in_env,
+                          "command": "exec node --disable-warning=ExperimentalWarning server.mjs",
+                          "restartOnFailure": True, "maxRestarts": 25})
     run(sandbox, f"for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:{PORT}/login "
                  f"&& curl -s -o /dev/null http://127.0.0.1:{PAGE_PORT}/api/state -H 'host: 127.0.0.1:{PAGE_PORT}' && exit 0; sleep 1; done; "
                  "echo 'the page did not start' >&2; exit 1", timeout=90)
@@ -274,12 +294,13 @@ def main() -> int:
     sandbox, origin = host()
     print(origin)
     step("Uploading the app")
-    run(sandbox, f"mkdir -p {APP} /data/auth && chmod 700 /data/auth && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))
-    upload(sandbox, release_files(), APP)
+    files = release_files()
+    run(sandbox, f"mkdir -p {APP} {AUTH} && chmod 700 {AUTH} && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))
+    upload(sandbox, files, APP)
     if args.seed:
         step(f"Copying {len(args.seed)} run summaries")
         upload(sandbox, seed_files(args.seed, keys), APP)
-    step("Starting the page and the sign-in gateway")
+    step("Starting the page and the sign-in server")
     start(sandbox, origin, keys)
     verify(origin)
     print(f"\nOpen {origin}/ and sign in with a @baseten.co or @blaxel.ai Blaxel account.")
