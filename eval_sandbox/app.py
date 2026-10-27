@@ -632,6 +632,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             return self.send_error(400)
         path, user = urlsplit(self.path).path, self.user()
+        if user:  # hosted: runs spend money, so the log says who started, stopped or resumed one
+            print(f"[eval] {user} POST {path}", flush=True)
         if path == "/api/runs":
             return self.send_json(self.app.start(body, user))
         if match := re.fullmatch(r"/api/runs/([^/]+)/(stop|resume)", path):

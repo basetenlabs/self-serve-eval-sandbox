@@ -18,13 +18,6 @@ export function Shell({ state, route, go, offline, children }: {
   const [theme, toggleTheme] = useTheme();
   const live = state?.runs.find((r) => ["collecting", "checking", "running"].includes(r.phase));
   const sandboxes = live?.board?.sandboxes ?? 0;
-  const slot = React.useRef<HTMLDivElement>(null);
-
-  // On the hosted page the sign-in gateway appends a Sign out form to the body; it belongs up here.
-  React.useEffect(() => {
-    const form = document.querySelector("form.auth-session");
-    if (form && slot.current && form.parentElement !== slot.current) slot.current.append(form);
-  });
 
   return (
     <div className="min-h-screen">
@@ -66,7 +59,7 @@ export function Shell({ state, route, go, offline, children }: {
                 {theme === "dark" ? <SunIcon /> : <MoonIcon />}
               </Button>
             </Tip>
-            <div ref={slot} className="session-slot contents" />
+            <SignOut />
           </div>
         </div>
       </header>
@@ -80,5 +73,35 @@ export function Shell({ state, route, go, offline, children }: {
         </div>
       </footer>
     </div>
+  );
+}
+
+type SignIn = {
+  getSession(options: { redirect: boolean }): Promise<{ user: { email: string } } | null>;
+  signOut(): Promise<void>;
+  watchSession(): void;
+};
+// Served by the sign-in in front of the hosted page; locally there is none, and no Sign out.
+const SIGN_IN = "/auth/client.js";
+
+/** The hosted page's Sign out. It also sends the page to sign in again the moment the session ends. */
+function SignOut() {
+  const [signIn, setSignIn] = React.useState<{ client: SignIn; email: string } | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    import(/* @vite-ignore */ SIGN_IN).then(async (client: SignIn) => {
+      const session = await client.getSession({ redirect: false });
+      if (!session) return;
+      setSignIn({ client, email: session.user.email });
+      client.watchSession();
+    }).catch(() => {});
+  }, []);
+  if (!signIn) return null;
+  return (
+    <Tip content={error ?? `Signed in as ${signIn.email}`}>
+      <Button variant="outline" size="sm" onClick={() => signIn.client.signOut().catch((e: Error) => setError(e.message))}>
+        Sign out
+      </Button>
+    </Tip>
   );
 }
