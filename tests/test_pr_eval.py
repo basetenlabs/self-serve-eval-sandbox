@@ -960,8 +960,10 @@ class AppTest(unittest.TestCase):
             try:
                 self.assertEqual(get("/r1/report.json")[0], 200)
                 self.assertEqual(get("/r2/report.json")[0], 404)
-                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "b@x.co"})[0], 404)
-                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "a@x.co"})[0], 200)
+                self.assertEqual(get("/r2/report.json", {"x-forwarded-email": "b@x.co"})[0], 404)
+                self.assertEqual(get("/r2/report.json", {"x-forwarded-email": "a@x.co"})[0], 200)
+                # The old gateway's header is just another header now: sending it names no one.
+                self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "a@x.co"})[0], 404)
                 self.assertEqual(get("/r1/trials/t__m__1/agent.jsonl")[0], 404)
                 self.assertEqual(get("/r1/run.json")[0], 404)
                 status, body = get("/api/trace?run=r1&trial=t__m__1")
@@ -989,6 +991,11 @@ class AppTest(unittest.TestCase):
                 self.assertEqual(post({"content-type": "application/json", "origin": "https://evil.example"}), 403)
                 self.assertEqual(post({"content-type": "application/json", "host": "evil.example"}), 403)
                 self.assertEqual(post({"content-type": "application/json", "origin": f"http://127.0.0.1:{port}"}), 400)
+                # Hosted, the browser's Origin is the public site's, and only that one.
+                with mock.patch.object(app, "APP_ORIGIN", "https://eval.example"):
+                    self.assertEqual(post({"content-type": "application/json", "origin": "https://eval.example"}), 400)
+                    self.assertEqual(post({"content-type": "application/json", "origin": "https://other.example"}), 403)
+                    self.assertEqual(post({"content-type": "application/json", "origin": "https://eval.example.evil"}), 403)
             finally:
                 server.shutdown()
                 server.server_close()

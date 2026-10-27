@@ -37,10 +37,13 @@ PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, 
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
 # Hosted, people can sign in with GitHub (device flow: an OAuth App's client id, no secret).
 # Their token, kept in memory only, reads and clones their private repositories for them, and
-# a run on a private repository is theirs alone to see. The gateway names who is asking in
-# USER_HEADER; locally there is no gateway and no header, and the `gh` login reads everything.
+# a run on a private repository is theirs alone to see. The sign-in server in front of the hosted
+# page (@blaxel/sign-in) names who is asking in USER_HEADER, after dropping any value the browser
+# sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
-USER_HEADER = "x-pr-eval-user"
+USER_HEADER = "x-forwarded-email"
+# Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
+APP_ORIGIN = os.environ.get("APP_ORIGIN")
 ACCESS = "access.json"  # in a run's folder when not everyone may see it: its owner
 MAX_FAVORITES = 200
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
@@ -645,14 +648,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.send_error(404)
 
     def user(self) -> str | None:
-        """Who is asking, as the hosted gateway names them; locally, no one in particular."""
+        """Who is asking, as the hosted sign-in names them; locally, no one in particular."""
         return self.headers.get(USER_HEADER) or None
 
     def same_origin(self) -> bool:
         port = self.server.server_address[1]
         allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
         origin = self.headers.get("origin")
-        return self.headers.get("host") in allowed and (origin is None or urlsplit(origin).netloc in allowed)
+        return self.headers.get("host") in allowed and (
+            origin is None or urlsplit(origin).netloc in allowed or bool(APP_ORIGIN) and origin == APP_ORIGIN)
 
     def send_json(self, data: dict) -> None:
         self.send_body(json.dumps(data).encode(), "application/json", 400 if "error" in data else 200)
