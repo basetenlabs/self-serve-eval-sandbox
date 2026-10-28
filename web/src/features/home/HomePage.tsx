@@ -1,4 +1,4 @@
-import { ArrowRightIcon, ChevronRightIcon, RepeatIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, ChevronRightIcon, RepeatIcon } from "lucide-react";
 import * as React from "react";
 import { Empty, Eyebrow, isActive, LiveDot } from "@/components/brand";
 import { Button } from "@/components/ui/button";
@@ -17,14 +17,23 @@ const STEPS = [
   { n: "04", title: "Grade", text: "Hidden tests run in a fresh sandbox, then a panel of AI judges reviews the change." },
 ];
 
+// Back from adding repositories to the GitHub App, in a tab GitHub opened: install, update, or request
+// (an organization's owner has to approve it).
+const fromGitHub = new URLSearchParams(location.search).get("setup_action");
+
 export function HomePage({ state, error, go, hurry }: {
   state: AppState | null; error: string | null; go: (r: Route) => void; hurry: () => void;
 }) {
   const live = state?.runs.find((r) => isActive(r.phase));
   const last = state?.runs.find((r) => r.again);
   const [form, setForm] = React.useState(0); // a new key remounts the form, which reads what fillAgain left
+  const [installed, setInstalled] = React.useState(fromGitHub);
+  React.useEffect(() => {
+    if (fromGitHub) history.replaceState(null, "", location.pathname + location.hash); // a reload doesn't say it again
+  }, []);
   return (
     <>
+      {installed && <InstalledNote action={installed} onClose={() => setInstalled(null)} />}
       <section className="px-4 pt-12 pb-10 sm:px-6 md:px-8 md:pt-16">
         <Eyebrow parts={["Baseten", "Open-model coding eval"]} />
         <h1 className="mt-5 max-w-[17ch] text-[40px] leading-[1.05] font-normal tracking-[-0.035em] text-balance sm:text-[56px]">
@@ -110,6 +119,22 @@ function LiveBanner({ run }: { run: Run }) {
         <div className="h-full bg-[#009735] transition-[width] duration-700 dark:bg-[#19E76E]" style={{ width: `${share * 100}%` }} />
       </div>
     </a>
+  );
+}
+
+/** GitHub opened this page in a new tab: the person's first tab is where they were, and it looks again on its own. */
+function InstalledNote({ action, onClose }: { action: string; onClose: () => void }) {
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-dashed border-rule bg-surface px-4 py-4 text-[14px] sm:px-6 md:px-8">
+      <CheckIcon className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1">
+        {action === "request"
+          ? "GitHub sent your request to the organization's owners. Once one approves it, your repositories show up on the page you started from."
+          : "GitHub saved the repositories Baseten Eval Sandbox can read."}{" "}
+        <span className="text-muted-foreground">You can close this tab and go back to the one you started in: it looks again when you return.</span>
+      </span>
+      <Button type="button" size="sm" variant="ghost" onClick={onClose}>Dismiss</Button>
+    </div>
   );
 }
 

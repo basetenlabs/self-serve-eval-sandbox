@@ -20,7 +20,7 @@ import tomllib
 import urllib.error
 import urllib.request
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -35,17 +35,27 @@ REPORT_FILE = re.compile(r"/([A-Za-z0-9_-][A-Za-z0-9_.-]*)/report\.(html|json)")
 MAX_LIMIT = 50
 PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
-# Hosted, people can sign in with GitHub (device flow: an OAuth App's client id, no secret).
-# Their token, kept in memory only, reads and clones their private repositories for them, and
+# Hosted, people can sign in with GitHub (device flow: a GitHub App's client id, no secret). The app
+# reads only Contents, Pull requests and Metadata, and only on the repositories each person installs
+# it on. Their token, kept in memory only, reads and clones those private repositories for them, and
 # a run on a private repository is theirs alone to see. The sign-in server in front of the hosted
 # page (@blaxel/sign-in) names who is asking in USER_HEADER, after dropping any value the browser
 # sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
+GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the page that adds repositories to it
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
-ACCESS = "access.json"  # in a run's folder when not everyone may see it: its owner
+ACCESS = "access.json"  # in a run's folder started by someone signed in: its owner, and whether only they see it
 MAX_FAVORITES = 200
+# Hosted, everyone shares one Blaxel workspace and one set of model keys: how many runs may go at once,
+# in all and for one person, and how much runs started in the last day may cost (the agents' cost, as
+# reports count it), in all and for one person. Locally: one run at a time and no spending limit.
+MAX_RUNS = int(os.environ.get("PR_EVAL_MAX_RUNS") or 1)
+RUNS_PER_PERSON = int(os.environ.get("PR_EVAL_RUNS_PER_PERSON") or 1)
+SPEND_TOTAL = float(os.environ.get("PR_EVAL_SPEND_TOTAL") or 0) or None
+SPEND_PER_PERSON = float(os.environ.get("PR_EVAL_SPEND_PER_PERSON") or 0) or None
+SPEND_WINDOW = timedelta(days=1)
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
 # beside it, then the verifier alone once the agent's sandbox is deleted.
 SANDBOXES = {"sandboxes": 2, "setup": 2, "agent": 2, "tests": 1}
@@ -88,6 +98,7 @@ class App:
         self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
         self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
         self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
+        self.claims: dict[str, set[str] | None] = {}  # repositories of each run started here, before its run.json
         self.favorites_file = jobs_dir.parent / "data" / "favorites.json"
 
     # ---------- what the page shows ----------
@@ -96,8 +107,7 @@ class App:
         for child in list(self.children.values()):
             child.poll()
         catalog, judge = config.load(self.models_config)
-        everyone = [(d, r) for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
-            if self.jobs_dir.is_dir() else []
+        everyone = self.everyone()
         runs = [r for d, r in everyone if self.visible(d, user)]
         for d, run in everyone:
             run["private"] = bool(read_json(d / ACCESS).get("private"))
@@ -113,7 +123,44 @@ class App:
                 "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True))},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
+                **self.limits(everyone, runs, user),
                 "github": self.github_state(user), "favorites": self.favorites(user)}
+
+    def everyone(self) -> list[tuple[Path, dict]]:
+        """Every run, whoever may see it."""
+        return [(d, r) for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
+            if self.jobs_dir.is_dir() else []
+
+    def limits(self, everyone: list[tuple[Path, dict]], runs: list[dict], user: str | None) -> dict:
+        """`blocked`: why this person can't start a run now, if they can't. `spend`: what their runs
+        started in the last day cost, and their limit, when there is one."""
+        since = (datetime.now(timezone.utc) - SPEND_WINDOW).isoformat(timespec="seconds")
+        going = mine = 0
+        spent = my_spent = 0.0
+        for d, run in everyone:
+            own = bool(user) and read_json(d / ACCESS).get("owner") == user
+            if run["phase"] in pipeline.ACTIVE:
+                going, mine = going + 1, mine + own
+            if (run["started"] or since) >= since:  # ISO times in UTC sort as text
+                spent, my_spent = spent + run["cost"], my_spent + run["cost"] * own
+        mine_cap = SPEND_PER_PERSON if user else None
+        if user and mine >= RUNS_PER_PERSON:
+            blocked = "Your run is still going. Start another when it finishes, or stop it." if RUNS_PER_PERSON == 1 \
+                else f"You have {mine} runs going, the most for one person. Start another when one finishes."
+        elif going >= MAX_RUNS:
+            blocked = f"{going} runs are going, the most at once. Start yours when one finishes." if MAX_RUNS > 1 \
+                else "A run is already going. Let it finish, or stop it, before starting another." \
+                if any(r["phase"] in pipeline.ACTIVE for r in runs) else "Someone else's run is going. Start yours when it finishes."
+        elif mine_cap and my_spent >= mine_cap:
+            blocked = (f"You've reached your {usd(mine_cap)} limit: your runs from the last 24 hours cost {usd(my_spent)}. "
+                       "Each run stops counting a day after it started.")
+        elif SPEND_TOTAL and spent >= SPEND_TOTAL:
+            blocked = (f"This page has reached its {usd(SPEND_TOTAL)} limit: runs from the last 24 hours cost {usd(spent)}. "
+                       "Each run stops counting a day after it started.")
+        else:
+            blocked = None
+        return {"blocked": blocked, "spend": {"spent": my_spent, "cap": mine_cap} if mine_cap else None,
+                "spent_total": spent}
 
     def checks(self, judge: config.Panel) -> dict:
         """Dedicated Blaxel workspace, build CLI and GitHub; cache remote checks briefly."""
@@ -149,7 +196,7 @@ class App:
                     "active_at": pipeline.now(), "phase": "collecting" if starting else "failed",
                     "detail": "Starting" if starting else "The run stopped before it began; see its log.",
                     "note": None, "progress": {"done": 0, "total": 0}, "checking": {"done": 0, "total": 0},
-                    "left_out": [], "summary": {}, "report": None, "lost": 0, "resumable": False,
+                    "left_out": [], "summary": {}, "report": None, "lost": 0, "resumable": False, "cost": 0.0,
                     "log": None if starting else tail(log)}
         meta = read_json(job_dir / "run.json")
         if not meta:
@@ -201,6 +248,7 @@ class App:
             "left_out": [{"id": t, "pr": t.rsplit("-", 1)[-1], "why": pipeline.LEFT_OUT.get(s, s)}
                          for t, s in (meta.get("left_out") or {}).items()],
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
+            "cost": sum(s.get("cost_usd") or 0 for s in (data.get("summary") or {}).values()),  # so far, while it goes
             "log": tail(log) if phase in ("failed", "stopped") else None, "lost": lost,
             "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "blaxel"
                          and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
@@ -278,6 +326,9 @@ class App:
         try:
             data = tasks.gh(f"repos/{repo}", token)
         except (RuntimeError, SystemExit) as exc:
+            if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
+                return {"repo": repo, "install": install_url(),
+                        "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
             return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
         # The hosted page's own GitHub login is shared by everyone signed in: it never reads
         # private code. A private repository needs the visitor's own GitHub sign-in.
@@ -332,10 +383,8 @@ class App:
 
     def _start(self, form: dict, user: str | None = None) -> dict:
         state = self.state(user=user)
-        if state["busy"]:
-            if not any(r["phase"] in pipeline.ACTIVE for r in state["runs"]):
-                return {"error": "Someone else's run is going. Start yours when it finishes."}
-            return {"error": "A run is already going. Let it finish, or stop it, before starting another."}
+        if state.get("blocked"):
+            return {"error": state["blocked"]}
         checks = state["checks"]
         if not checks["blaxel"]:
             return {"error": checks["blaxel_problem"]}
@@ -376,17 +425,70 @@ class App:
             if not info["defaults"] and not (setup and test):
                 return {"error": f"{name} is {info['language']}: give the install and test commands "
                                  "(Go and Python repositories have defaults)."}
-        run_id = f"{repos[0].split('/')[-1] if repos else 'quick'}-{datetime.now():%Y%m%d-%H%M%S}"
+        claim = None if quick else {name.lower() for name in repos}
+        if problem := self.taken(claim) or self.over_budget(state, keys, state["quick"]["tasks"] if quick else
+                                                            sum(map(len, pulls.values())) or limit,
+                                                            "quick" if quick else ",".join(sorted(claim)), user):
+            return {"error": problem}
+        run_id = named = f"{repos[0].split('/')[-1] if repos else 'quick'}-{datetime.now():%Y%m%d-%H%M%S}"
+        for n in range(2, 100):  # two people may start the same kind of run in the same second
+            if not (self.jobs_dir / run_id).exists():
+                break
+            run_id = f"{named}-{n}"
         argv = [f"{name}#{n}" for name, numbers in pulls.items() for n in numbers] or ([repo] if repo else [])
         argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else [] if pulls else ["--limit", str(limit)]
         argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
-        if private and user:
+        if user:  # whose run it is, for their limits; on a private repository, only they see it
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
-            (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": True}))
+            (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
+        self.claims[run_id] = claim
         self.spawn(run_id, argv, self.token(user))
         return {"id": run_id}
+
+    def taken(self, claim: set[str] | None, resuming: str | None = None) -> str | None:
+        """Why a run on these repositories (None: the quick sample) can't start beside the runs going:
+        two runs on one repository would clone it, collect its pull requests and check them at once.
+        The quick sample's tasks are collected and checked once, so its runs only read them."""
+        sample = {name.lower() for name in tasks.sample(True)}
+        for d, run in self.everyone() if MAX_RUNS > 1 else []:
+            if run["phase"] not in pipeline.ACTIVE or run["id"] == resuming:
+                continue
+            theirs = self.repos_of(d)
+            if claim is None and theirs is None:
+                continue
+            if shared := sorted((sample if claim is None else claim) & (sample if theirs is None else theirs)):
+                return f"Another run is using {shared[0]} right now. Start yours when it finishes."
+        return None
+
+    def repos_of(self, job_dir: Path) -> set[str] | None:
+        """The repositories a run reads, lower case; None for the quick sample."""
+        meta = read_json(job_dir / "run.json")
+        if not meta:
+            return self.claims.get(job_dir.name, set())
+        request = meta.get("request") or {}
+        if request.get("quick"):
+            return None
+        named = [*(request.get("repos") or []), *(request.get("pulls") or {})]
+        return {name.lower() for name in [*named, *map(repo_of, meta.get("candidates") or meta.get("tasks") or [])]}
+
+    @staticmethod
+    def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None) -> str | None:
+        """Why a run of `count` pull requests with these models would go over a spending limit, from each
+        model's cost per attempt as the page estimates it. A model with no earlier run counts nothing."""
+        if not (SPEND_TOTAL or (SPEND_PER_PERSON and user)):
+            return None
+        cost = sum(((m.get("by_scope") or {}).get(scope) or m).get("cost_per_attempt") or 0
+                   for m in state["models"] if m["key"] in keys) * count
+        mine = state.get("spend")
+        if mine and cost > mine["cap"] - mine["spent"]:
+            return (f"This run would cost about {usd(cost)}, and you have {usd(max(0, mine['cap'] - mine['spent']))} "
+                    f"left of your {usd(mine['cap'])} for the last 24 hours. Choose fewer pull requests or models.")
+        if SPEND_TOTAL and cost > SPEND_TOTAL - state["spent_total"]:
+            return (f"This run would cost about {usd(cost)}, and this page has {usd(max(0, SPEND_TOTAL - state['spent_total']))} "
+                    f"left of its {usd(SPEND_TOTAL)} for the last 24 hours. Choose fewer pull requests or models.")
+        return None
 
     @staticmethod
     def chosen_pulls(value) -> dict[str, list[int]] | str:
@@ -423,8 +525,8 @@ class App:
         run = self.find(run_id, user)
         if not run or not run["resumable"]:
             return {"error": "That run can't be resumed."}
-        if self.state()["busy"]:
-            return {"error": "A run is already going. Let it finish, or stop it, first."}
+        if blocked := self.state(user=user)["blocked"] or self.taken(self.repos_of(self.jobs_dir / run_id), run_id):
+            return {"error": blocked}
         if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
             return {"error": "Sign in with GitHub to resume a run on a private repository."}
         self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.token(user))
@@ -449,7 +551,7 @@ class App:
             job_dir.mkdir(parents=True, exist_ok=True)
             with open(job_dir / "log.txt", "ab") as log:
                 self.children[run_id] = subprocess.Popen(
-                    [sys.executable, "-m", "eval_sandbox", "run", *argv], cwd=pipeline.ROOT,
+                    [sys.executable, "-m", "eval_sandbox", "run", *argv, "--jobs", str(self.jobs_dir)], cwd=pipeline.ROOT,
                     env={**os.environ, "GH_TOKEN": github_token} if github_token else None,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
@@ -468,15 +570,17 @@ class App:
         waiting = device and time.monotonic() < device["until"]
         return {"sign_in": bool(GITHUB_CLIENT_ID and user),
                 "login": self.github[user]["login"] if self.token(user) else None,
+                **({"install": install_url()} if GITHUB_APP and self.token(user) else {}),
                 # a sign-in still waiting for GitHub, so a reloaded page shows its code again
                 **({"device": device["shown"]} if waiting else {})}
 
     def github_device(self, user: str | None) -> dict:
-        """Start a sign-in: a code the person enters on GitHub, approving this page's read of their repositories."""
+        """Start a sign-in: a code the person enters on GitHub, approving this page's read of the
+        repositories they install the app on. A GitHub App takes no scope: its permissions are its own."""
         if not (GITHUB_CLIENT_ID and user):
             return {"error": "GitHub sign-in isn't set up on this page."}
         try:
-            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID, "scope": "repo"})
+            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID})
         except (OSError, ValueError) as exc:
             return {"error": f"GitHub didn't answer ({exc})."}
         if not got.get("device_code"):
@@ -545,6 +649,11 @@ class App:
         return {"favorites": everyone[user or "local"]}
 
 
+def install_url() -> str:
+    """Where a person picks the repositories the GitHub App may read."""
+    return f"https://github.com/apps/{GITHUB_APP}/installations/new"
+
+
 def github_form(url: str, form: dict) -> dict:
     """POST a form to GitHub's sign-in endpoints and read the JSON answer."""
     request = urllib.request.Request(url, data=urlencode(form).encode(), headers={"accept": "application/json"})
@@ -591,6 +700,10 @@ def read_json(path: Path) -> dict:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def usd(x: float) -> str:
+    return f"${x:,.0f}" if x >= 100 else f"${x:.2f}"
 
 
 def tail(path: Path, lines: int = 15) -> str | None:

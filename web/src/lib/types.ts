@@ -121,7 +121,12 @@ export interface AppState {
   quick: { tasks: number; repos: number };
   default_limit: number;
   max_limit: number;
+  /** Some run is going, anyone's: the page polls faster. */
   busy: boolean;
+  /** Why you can't start a run now: your run is going, the most runs are, or a spending limit is reached. */
+  blocked?: string | null;
+  /** What your runs started in the last 24 hours cost, and your limit, when there is one. */
+  spend?: { spent: number; cap: number } | null;
   github: GitHubAccount;
   favorites: Favorite[];
 }
@@ -130,6 +135,8 @@ export interface AppState {
 export interface GitHubAccount {
   sign_in: boolean;
   login: string | null;
+  /** Where to choose which repositories the GitHub App may read. */
+  install?: string;
   /** A sign-in waiting for you to enter its code on GitHub. */
   device?: { user_code: string; verification_uri: string; interval: number };
 }
@@ -148,6 +155,8 @@ export interface RepoInfo {
   private?: boolean;
   defaults?: boolean;
   error?: string;
+  /** Where to add this repository to the GitHub App, when the person's sign-in can't read it yet. */
+  install?: string;
 }
 
 /** A pull request to pick, from /api/prs; `why` says why it can't be a task. */

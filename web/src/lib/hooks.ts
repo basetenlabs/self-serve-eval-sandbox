@@ -48,6 +48,19 @@ export function useTheme(): ["light" | "dark", () => void] {
   return [theme, toggle];
 }
 
+/** Counts the times this tab comes back into focus while `active`: to look again after someone
+ * changed something on another site, such as which repositories the GitHub App may read. */
+export function useFocusCount(active: boolean): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const onFocus = () => setCount((n) => n + 1);
+    addEventListener("focus", onFocus);
+    return () => removeEventListener("focus", onFocus);
+  }, [active]);
+  return count;
+}
+
 /** A value kept in localStorage for this browser, e.g. the last models chosen. */
 export function useStored<T>(key: string, initial: T): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(() => {

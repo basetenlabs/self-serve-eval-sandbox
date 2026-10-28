@@ -95,7 +95,7 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
           <Button type="button" size="sm" variant="ghost" disabled={!chosen.length} onClick={() => onChange([])}>Clear</Button>
         </span>
       </div>
-      {list?.error ? <Problem>{list.error}</Problem> : (
+      {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
         <ul className="max-h-[420px] overflow-y-auto bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-label={`${repo} pull requests`} aria-busy={loading || searching}>
           {!list && !needle ? Array.from({ length: 5 }, (_, i) => <SkeletonRow key={i} />) : groups.map((g) => (
             <React.Fragment key={g.label || "all"}>
@@ -219,7 +219,7 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
           {list?.language && !list.error ? ` · ${list.language}` : ""}
         </span>
       </div>
-      {list?.error ? <Problem>{list.error}</Problem> : (
+      {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
         <ul className="bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-busy={loading}>
           {numbers.map((n) => {
             const row = rows.get(n);
@@ -304,11 +304,16 @@ function SkeletonRow({ number, trailing }: { number?: number; trailing?: React.R
   );
 }
 
-function Problem({ children }: { children: React.ReactNode }) {
+function Problem({ children, install }: { children: React.ReactNode; install?: string }) {
   return (
-    <div role="alert" className="flex items-start gap-2 bg-danger-surface px-3 py-2.5 text-[13px]">
+    <div role="alert" className="flex flex-wrap items-start gap-2 bg-danger-surface px-3 py-2.5 text-[13px]">
       <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-[#AC0EB2] dark:text-[#FFA9FD]" />
-      <span>{children}</span>
+      <span className="min-w-0 flex-1">{children}</span>
+      {install && (
+        <Button asChild size="sm">
+          <a href={install} target="_blank" rel="noreferrer">Add it on GitHub <ExternalLinkIcon /></a>
+        </Button>
+      )}
     </div>
   );
 }

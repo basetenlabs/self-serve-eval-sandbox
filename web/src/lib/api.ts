@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useFocusCount } from "./hooks";
 import type { AppState, Favorite, PullList, RepoInfo, Report, Trace } from "./types";
 
 // The page polls quickly while a run is going and slowly otherwise. Every action goes through
@@ -6,13 +7,14 @@ import type { AppState, Favorite, PullList, RepoInfo, Report, Trace } from "./ty
 const FAST_MS = 2500;
 const SLOW_MS = 15000;
 
-async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
+// The server's own answers carry `error`, sent with HTTP 400: `answers` reads those as answers too.
+async function getJSON<T>(url: string, signal?: AbortSignal, answers = false): Promise<T> {
   const res = await fetch(url, { cache: "no-store", signal, headers: { accept: "application/json" } });
   if (res.status === 401 || res.redirected) {
     location.reload(); // the hosted page's sign-in expired; the reload shows the sign-in page
     throw new Error("Signed out");
   }
-  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+  if (!res.ok && !(answers && res.status === 400)) throw new Error(`${url} answered ${res.status}`);
   return res.json() as Promise<T>;
 }
 
@@ -26,13 +28,15 @@ export async function post<T = { ok?: boolean; id?: string; error?: string }>(ur
 }
 
 export const repoInfo = (name: string, signal?: AbortSignal) =>
-  getJSON<RepoInfo>(`/api/repo?name=${encodeURIComponent(name)}`, signal);
+  getJSON<RepoInfo>(`/api/repo?name=${encodeURIComponent(name)}`, signal, true);
 
 /** A repository's latest merged pull requests, the given ones, or the ones GitHub finds for `words`,
  * with whether each can be a task. */
 export function usePulls(repo: string | null, numbers?: number[], count?: number, words?: string) {
   const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}${count ? `&count=${count}` : ""}${words ? `&q=${encodeURIComponent(words)}` : ""}` : null;
   const [got, setGot] = useState<{ url: string; repo: string; list: PullList } | null>(null);
+  // Back from adding the repository to the GitHub App: look again.
+  const focused = useFocusCount(!!(got && got.url === url && got.list.install));
   useEffect(() => {
     if (!url) return;
     const abort = new AbortController();
@@ -42,7 +46,7 @@ export function usePulls(repo: string | null, numbers?: number[], count?: number
       .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }) as PullList)
       .then((list) => { if (!abort.signal.aborted) setGot({ url, repo: repo!, list }); });
     return () => abort.abort();
-  }, [url, repo]);
+  }, [url, repo, focused]);
   const list = got && got.url === url ? got.list : null;
   // While a longer list of the same repository loads, the shorter one stays on screen.
   const shown = list ?? (got && got.repo === repo && !got.list.error ? got.list : null);

@@ -14,15 +14,23 @@ sign in, start runs and read reports.
   when it starts. They are never written to the volume, the image or this repository.
 - **GitHub:** the page's own GitHub login, shared by everyone, reads public repositories only
   (`PR_EVAL_PUBLIC_REPOS_ONLY`). For private ones, people **Sign in with GitHub** on the page:
-  GitHub's device flow through the OAuth App "Baseten Eval Sandbox" (owned by SystemSculpt; its
-  client id is in `deploy.py`, there is no secret). Their token lives in the page's memory only,
-  for 8 hours or until they sign out or the page restarts, and their runs clone with it. A run
-  on a private repository is seen only by the person who started it (`access.json` in its folder).
-  An organization that restricts OAuth Apps (basetenlabs does) has to approve the app before its
-  private repositories show up: the person asks for it on GitHub's authorize screen.
+  GitHub's device flow through the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
+  (read-only Contents, Pull requests and Metadata; no webhooks; owned by SystemSculpt until it
+  moves to basetenlabs; its client id is in `deploy.py`, and the page needs no secret). It reads
+  only the repositories each person adds to it: a repository it can't read yet shows **Add it on
+  GitHub**, and the page looks again when they come back. Their token lives in the page's memory
+  only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. A
+  run on a private repository is seen only by the person who started it (`access.json` in its
+  folder). In an organization, an owner installs the app, or approves the person's request to.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
 - **Runs:** trials run in the same dedicated workspace as local runs (`pr-eval-01db4d88`). While a
   run is going, the sign-in server keeps the sandbox awake.
+- **Limits:** two runs go at once, one per person, and two runs never share a repository (both
+  would clone it and check its pull requests at once), except two quick samples. Runs started in
+  the last 24 hours may cost $300 in all and $50 per person (the agents' cost as reports count it;
+  judges and Blaxel aren't included). A run whose estimate would go over waits. Set them with
+  `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`, `PR_EVAL_SPEND_TOTAL` and
+  `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time and no spending limit.
 
 ## Deploy
 

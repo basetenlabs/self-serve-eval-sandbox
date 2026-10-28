@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 from types import SimpleNamespace
@@ -859,6 +860,16 @@ class AppTest(unittest.TestCase):
             page.github["a@x.co"]["until"] = 0  # GitHub's token expired
             self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": None})
 
+    def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
+        page = app.App(Path("/nonexistent"))
+        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+        install = "https://github.com/apps/eval-app/installations/new"
+        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")), \
+                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
+            self.assertEqual(page.repo_info("o/r", "a@x.co")["install"], install)
+            self.assertNotIn("install", page.repo_info("o/r", "b@x.co"))  # not signed in: the page's own login missed it
+            self.assertEqual(page.github_state("a@x.co")["install"], install)  # where to add more
+
     def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
         page = app.App(Path("/nonexistent"))
         answers = [{"device_code": "dev", "user_code": "AB-12", "verification_uri": "https://github.com/login/device",
@@ -869,7 +880,7 @@ class AppTest(unittest.TestCase):
                 mock.patch.object(app, "github_form", side_effect=answers) as form, \
                 mock.patch.object(app.tasks, "gh", return_value={"login": "ana"}):
             self.assertEqual(page.github_device("a@x.co")["user_code"], "AB-12")
-            self.assertEqual(form.call_args.args[1], {"client_id": "client", "scope": "repo"})
+            self.assertEqual(form.call_args.args[1], {"client_id": "client"})  # a GitHub App: its own permissions
             self.assertEqual(page.github_state("a@x.co")["device"]["user_code"], "AB-12")  # a reloaded page shows it again
             self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 5})
             self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down
@@ -912,6 +923,99 @@ class AppTest(unittest.TestCase):
             access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
         self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
+
+    @staticmethod
+    def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
+                request: dict | None = None, age: timedelta = timedelta()) -> None:
+        (jobs / run_id).mkdir(parents=True)
+        started = (datetime.now(timezone.utc) - age).isoformat(timespec="seconds")
+        (jobs / run_id / "run.json").write_text(json.dumps({
+            "run_id": run_id, "created_at": started, "request": request or {"repos": ["o/a"]},
+            "tasks": [], "models": [], "status": {"phase": phase, "pid": 1}}))
+        (jobs / run_id / "report.json").write_text(json.dumps({"models": [], "trials": [], "summary": {"m": {"cost_usd": cost}}}))
+        if owner:
+            (jobs / run_id / app.ACCESS).write_text(json.dumps({"owner": owner, "private": False}))
+
+    def hosted_state(self, page: app.App, user: str | None) -> dict:
+        with mock.patch.object(page, "checks", return_value={"blaxel": True}), mock.patch.object(app, "alive", return_value=True), \
+                mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
+            return page.state(user=user)
+
+    def test_how_many_runs_go_at_once_in_all_and_for_one_person(self):
+        quick = next(iter(app.tasks.sample(True))).lower()
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d)
+            self.add_run(jobs, "r1", "a@x.co")
+            page = app.App(jobs)
+            self.assertIn("already going", self.hosted_state(page, None)["blocked"])  # locally: one at a time, as before
+            with mock.patch.object(app, "MAX_RUNS", 2), mock.patch.object(app, "alive", return_value=True):
+                self.assertIn("Your run is still going", self.hosted_state(page, "a@x.co")["blocked"])
+                self.assertIsNone(self.hosted_state(page, "b@x.co")["blocked"])
+                self.assertIn("using o/a", page.taken({"o/a", "o/b"}))  # it would clone and check o/a at once
+                self.assertIsNone(page.taken({"o/b"}))
+                self.assertIsNone(page.taken(None))  # the quick sample doesn't read o/a
+                self.add_run(jobs, "r2", "c@x.co", request={"quick": True})
+                self.assertIsNone(page.taken(None))  # two quick samples only read their checked tasks
+                self.assertIn(f"using {quick}", page.taken({quick}))
+                self.assertIn("2 runs are going", self.hosted_state(page, "b@x.co")["blocked"])
+                page.claims["r3"] = {"o/c"}
+                (jobs / "r3").mkdir()  # started a moment ago: no run.json yet
+                page.children["r3"] = SimpleNamespace(poll=lambda: None)
+                self.assertIn("using o/c", page.taken({"o/c"}))
+            self.assertIsNone(page.taken({"o/a"}))  # one run at a time: nothing to share with
+
+    def test_spending_limits_count_the_last_day_in_all_and_for_one_person(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 50.0), \
+                mock.patch.object(app, "SPEND_TOTAL", 100.0):
+            jobs = Path(d)
+            self.add_run(jobs, "r1", "a@x.co", phase="done", cost=45)
+            self.add_run(jobs, "old", "a@x.co", phase="done", cost=1000, age=timedelta(days=2))
+            page = app.App(jobs)
+            state = self.hosted_state(page, "a@x.co")
+            self.assertEqual((state["spend"], state["blocked"]), ({"spent": 45, "cap": 50}, None))
+            self.assertIsNone(self.hosted_state(page, None)["spend"])  # locally, no one's own limit
+            model = {"key": "m", "cost_per_attempt": 1.0, "by_scope": {"o/a": {"cost_per_attempt": 0.1}}}
+            state["models"] = [model]
+            self.assertIn("about $10.00, and you have $5.00 left of your $50.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co"))
+            self.assertIsNone(page.over_budget(state, ["m"], 10, "o/a", "a@x.co"))  # cheaper on this repository
+            self.assertIsNone(page.over_budget(state, ["other"], 10, "o/x", "a@x.co"))  # no earlier run to price it
+            self.add_run(jobs, "r2", "a@x.co", phase="done", cost=10)
+            self.assertIn("reached your $50.00 limit", self.hosted_state(page, "a@x.co")["blocked"])
+            self.add_run(jobs, "r3", None, phase="done", cost=50)
+            state = self.hosted_state(page, "b@x.co")
+            self.assertIn("reached its $100 limit", state["blocked"])
+            self.assertEqual(state["spend"], {"spent": 0, "cap": 50})
+
+    def test_a_run_started_while_signed_in_records_its_starter(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
+                    mock.patch.object(app.pipeline, "preflight"), \
+                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
+                started = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
+                page.state.return_value = {**ready, "blocked": "Your run is still going."}
+                refused = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
+            access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
+        self.assertEqual(access, {"owner": "a@x.co", "private": False})  # everyone sees it; it counts as theirs
+        self.assertEqual(refused, {"error": "Your run is still going."})
+
+    def test_runs_started_in_the_same_second_get_their_own_folders(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}, "quick": {"tasks": 10}}
+            with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
+                    mock.patch.object(app.pipeline, "preflight"), \
+                    mock.patch.object(app, "datetime", SimpleNamespace(now=lambda: datetime(2026, 10, 29, 9, 0, 0))):
+                ids = [page.start({"quick": True, "models": ["m"]}, who)["id"] for who in ("a@x.co", "b@x.co")]
+        self.assertEqual(ids, ["quick-20261029-090000", "quick-20261029-090000-2"])
+
+    def test_a_run_lands_in_the_pages_jobs_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            with mock.patch.object(app.subprocess, "Popen") as popen:
+                page.spawn("r1", ["o/a#1"])
+        self.assertEqual(popen.call_args.args[0][-3:], ["o/a#1", "--jobs", d])  # not the default jobs/ folder
 
     def test_favorite_prs_are_kept_per_person_newest_first(self):
         with tempfile.TemporaryDirectory() as d:
