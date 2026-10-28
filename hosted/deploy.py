@@ -4,7 +4,8 @@
     .venv/bin/python hosted/deploy.py --seed jobs/x    also copy finished runs' reports and traces to the hosted page
     .venv/bin/python hosted/deploy.py --delete         remove the sandbox (add --volume to drop its data too)
 
-Where it runs (the dedicated trial workspace, so the page can start trials there):
+Where it runs: the dedicated trial workspace, so the page can start trials there. It is set like local
+runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy stops if neither is.
 
     Sandbox  pr-eval-host, from the image in hosted/Dockerfile (bl push -d hosted, once)
     Preview  public HTTPS; hosted/server.mjs (@blaxel/sign-in) signs people in and is the only public door
@@ -46,8 +47,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from eval_sandbox import trace  # noqa: E402
-WORKSPACE = "pr-eval-01db4d88"
+from eval_sandbox import runtime, trace  # noqa: E402
+WORKSPACE = ""  # set in main() from the same setting local runs use
 REGION = "us-pdx-1"
 SANDBOX = "pr-eval-host"
 VOLUME = "pr-eval-host-data"
@@ -291,12 +292,21 @@ def delete(volume: bool) -> None:
         raise SystemExit(f"could not delete volume {VOLUME}; try again in a minute")
 
 
+def workspace() -> str:
+    try:
+        return runtime.workspace()
+    except runtime.RuntimeError as exc:
+        raise SystemExit(f"{exc} Or save it in {runtime.CONFIG_PATH}.") from None
+
+
 def main() -> int:
+    global WORKSPACE
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=Path, nargs="*", default=[], help="finished runs to show on the hosted page")
     parser.add_argument("--delete", action="store_true", help="remove the hosted sandbox")
     parser.add_argument("--volume", action="store_true", help="with --delete, also remove its data")
     args = parser.parse_args()
+    WORKSPACE = workspace()
     if args.delete:
         delete(args.volume)
         return 0
