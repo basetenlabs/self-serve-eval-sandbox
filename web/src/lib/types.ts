@@ -121,7 +121,12 @@ export interface AppState {
   quick: { tasks: number; repos: number };
   default_limit: number;
   max_limit: number;
+  /** Some run is going, anyone's: the page polls faster. */
   busy: boolean;
+  /** Why you can't start a run now: your run is going, the most runs are, or a spending limit is reached. */
+  blocked?: string | null;
+  /** What your runs started in the last 24 hours cost, and your limit, when there is one. */
+  spend?: { spent: number; cap: number } | null;
   github: GitHubAccount;
   favorites: Favorite[];
 }

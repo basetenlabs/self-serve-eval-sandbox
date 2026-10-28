@@ -61,6 +61,11 @@ APP = "/data/app"
 LABELS = {"app": "pr-eval-host", "owner": "mstolarz"}
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
+# One workspace and one set of keys serve everyone: runs going at once, in all and per person, and what runs
+# started in the last 24 hours may cost in dollars, in all and per person (a quick sample is about $2).
+LIMITS = {name: os.environ.get(name, default) for name, default in {
+    "PR_EVAL_MAX_RUNS": "2", "PR_EVAL_RUNS_PER_PERSON": "1",
+    "PR_EVAL_SPEND_TOTAL": "300", "PR_EVAL_SPEND_PER_PERSON": "50"}.items()}
 # The release: everything the page and its runs read from the repository.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
@@ -223,7 +228,7 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
                 "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
-                "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin,
+                "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin, **LIMITS,
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}

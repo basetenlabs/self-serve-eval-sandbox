@@ -25,6 +25,12 @@ sign in, start runs and read reports.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
 - **Runs:** trials run in the same dedicated workspace as local runs (`pr-eval-01db4d88`). While a
   run is going, the sign-in server keeps the sandbox awake.
+- **Limits:** two runs go at once, one per person, and two runs never share a repository (both
+  would clone it and check its pull requests at once), except two quick samples. Runs started in
+  the last 24 hours may cost $300 in all and $50 per person (the agents' cost as reports count it;
+  judges and Blaxel aren't included). A run whose estimate would go over waits. Set them with
+  `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`, `PR_EVAL_SPEND_TOTAL` and
+  `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time and no spending limit.
 
 ## Deploy
 

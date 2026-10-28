@@ -9,7 +9,7 @@ import { Input, Kbd, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { post, repoInfo, samePull, useFavorites } from "@/lib/api";
-import { dur, plural, usd } from "@/lib/format";
+import { dur, money, plural, usd } from "@/lib/format";
 import { parsePasted, pullCount } from "@/lib/github";
 import { type Route, useFocusCount, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
@@ -113,7 +113,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
   const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(5, Math.round((slowest * attempts) / 4 / 60 / 5) * 5);
   const commandsGiven = !!(setup.trim() && test.trim());
-  const blocked = state.busy || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
+  const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
+  const over = left != null && cost != null && prs > 0 && cost > left;
+  const blocked = !!state.blocked || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
   const toggleModel = (key: string, on: boolean) => {
@@ -305,7 +307,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             <Kbd className="ml-1 hidden sm:inline-flex">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
           </Button>
           <span className="text-[13px] text-muted-foreground">
-            {state.busy ? "A run is going. You can start another when it finishes."
+            {state.blocked ? state.blocked
+              : over ? `This run would cost about ${usd(cost)}, and you have ${usd(left)} left of your ${usd(state.spend!.cap)} for the last 24 hours. Choose fewer pull requests or models.`
               : !models.length ? "Choose at least one model."
                 : checking ? "Checking the pull requests on GitHub."
                 : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request."
@@ -313,6 +316,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                   : "Runs keep going if you close this page. Sandboxes are deleted as each attempt ends."}
           </span>
         </div>
+        {state.spend && (
+          <p className="label-mono mt-3 text-muted-foreground">
+            Your runs, last 24 hours: {money(state.spend.spent)} of your {money(state.spend.cap)}
+          </p>
+        )}
       </Column>
     </form>
   );

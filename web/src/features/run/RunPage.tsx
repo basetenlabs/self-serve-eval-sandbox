@@ -121,7 +121,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
             />
           )}
           {run.resumable && (
-            <Button variant="outline" onClick={resume} disabled={state.busy}><RotateCwIcon className="size-3.5" />Resume</Button>
+            <Button variant="outline" onClick={resume} disabled={!!state.blocked}><RotateCwIcon className="size-3.5" />Resume</Button>
           )}
           {!active && run.again && (
             <Tip content="A new run on the same pull requests and models. Add a model before you start.">
