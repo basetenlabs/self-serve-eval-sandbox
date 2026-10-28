@@ -122,6 +122,17 @@ def recipe(repo: str, language: str, test_paths: list[str], package_json: dict |
                 "test": f"go test -count=1 -timeout=600s {packages}",
                 "scope": "the Go packages of the PR's changed tests", "setup_timeout": 1800,
                 "memory": 16384}  # the sandbox size its runs are proven at
+    if repo == "PostHog/posthog":
+        files = [p for p in test_paths if p.endswith(".py")]
+        if test_paths and not files:
+            raise Skip("no Python tests (only PostHog's Python tests run here)")
+        # It pins its Python and a newer uv than the image's. Disk is half the memory, and its
+        # environment and uv's cache don't both fit as copies, so the environment hardlinks the cache.
+        return {"setup": ("export UV_PYTHON_INSTALL_DIR=$HOME/.uv-python UV_LINK_MODE=hardlink && "
+                          "uvx uv@latest sync --frozen --no-progress --quiet --no-install-package pywatchman"),
+                "test": ".venv/bin/python -m pytest -q --tb=short -p no:cacheprovider "
+                        + " ".join(shlex.quote(p) for p in files),
+                "scope": "the PR's changed Python test files", "setup_timeout": 1800, "memory": 16384}
     if language == "Go":
         return {"setup": "go mod download && go build ./... >/dev/null",
                 "test": "go test -count=1 -timeout=300s ./...",
