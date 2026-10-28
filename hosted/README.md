@@ -23,8 +23,9 @@ sign in, start runs and read reports.
   run on a private repository is seen only by the person who started it (`access.json` in its
   folder). In an organization, an owner installs the app, or approves the person's request to.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
-- **Runs:** trials run in the same dedicated workspace as local runs (`pr-eval-01db4d88`). While a
-  run is going, the sign-in server keeps the sandbox awake.
+- **Runs:** trials run in the same dedicated workspace as local runs, and the page's sandbox lives
+  there too: `deploy.py` reads it from `PR_EVAL_BLAXEL_WORKSPACE`, else `~/.config/pr-eval/blaxel.json`,
+  and stops if neither is set. While a run is going, the sign-in server keeps the sandbox awake.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
   would clone it and check its pull requests at once), except two quick samples. Runs started in
   the last 24 hours may cost $300 in all and $50 per person (the agents' cost as reports count it;
@@ -35,7 +36,7 @@ sign in, start runs and read reports.
 ## Deploy
 
 ```sh
-bl push -d hosted --name pr-eval-host --type sandbox -w pr-eval-01db4d88   # the image, once and after changing hosted/Dockerfile
+bl push -d hosted --name pr-eval-host --type sandbox -w <workspace>        # the image, once and after changing hosted/Dockerfile
 (cd hosted && NODE_AUTH_TOKEN="$(gh auth token)" npm ci)                    # @blaxel/sign-in, from GitHub Packages
 .venv/bin/python hosted/deploy.py --seed jobs/grafana-1021                   # create or update
 ```
@@ -54,7 +55,7 @@ trial's result.json and condensed, redacted trace, all scanned for credentials f
 transcripts stay on your Mac. A sandbox keeps the image it was created from: after a new
 image, `deploy.py --delete` and deploy again (runs and sign-in state stay on the volume).
 
-Logs: `bl logs sandbox pr-eval-host -w pr-eval-01db4d88`.
+Logs: `bl logs sandbox pr-eval-host -w <workspace>`.
 
 ## Remove
 
