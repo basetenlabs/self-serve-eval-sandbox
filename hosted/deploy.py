@@ -17,7 +17,8 @@ Where it runs (the dedicated trial workspace, so the page can start trials there
 Keys come from the Keychain, else from the environment:
     BASETEN_API_KEY         Keychain pr-eval-host-baseten-api-key (Baseten workspace key pr-eval-host:
                             open models and the Kimi K3 judge)
-    CLAUDE_CODE_OAUTH_TOKEN Keychain pr-eval-claude-code-oauth-token (Claude models and the Opus judge)
+    ANTHROPIC_API_KEY       Keychain pr-eval-host-anthropic-api-key (company key self-serve-eval-sandbox:
+                            Claude models and the Opus judge)
     OPENAI_API_KEY          Keychain baseten-openai-api-key (the GPT-6.1 Sol judge)
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
@@ -67,7 +68,7 @@ SIGN_IN = ROOT / "hosted" / "node_modules" / "@blaxel" / "sign-in"
 AUTH = "/data/sign-in"
 SECRETS = {
     "BASETEN_API_KEY": "pr-eval-host-baseten-api-key",
-    "CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-claude-code-oauth-token",
+    "ANTHROPIC_API_KEY": "pr-eval-host-anthropic-api-key",
     "OPENAI_API_KEY": "baseten-openai-api-key",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
