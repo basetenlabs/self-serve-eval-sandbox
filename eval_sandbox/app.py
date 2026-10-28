@@ -449,7 +449,7 @@ class App:
             job_dir.mkdir(parents=True, exist_ok=True)
             with open(job_dir / "log.txt", "ab") as log:
                 self.children[run_id] = subprocess.Popen(
-                    [sys.executable, "-m", "eval_sandbox", "run", *argv], cwd=pipeline.ROOT,
+                    [sys.executable, "-m", "eval_sandbox", "run", *argv, "--jobs", str(self.jobs_dir)], cwd=pipeline.ROOT,
                     env={**os.environ, "GH_TOKEN": github_token} if github_token else None,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 

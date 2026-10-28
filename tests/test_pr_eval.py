@@ -913,6 +913,13 @@ class AppTest(unittest.TestCase):
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
         self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
 
+    def test_a_run_lands_in_the_pages_jobs_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            with mock.patch.object(app.subprocess, "Popen") as popen:
+                page.spawn("r1", ["o/a#1"])
+        self.assertEqual(popen.call_args.args[0][-3:], ["o/a#1", "--jobs", d])  # not the default jobs/ folder
+
     def test_favorite_prs_are_kept_per_person_newest_first(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d) / "jobs")
