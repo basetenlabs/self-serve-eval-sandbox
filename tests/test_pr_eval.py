@@ -859,6 +859,16 @@ class AppTest(unittest.TestCase):
             page.github["a@x.co"]["until"] = 0  # GitHub's token expired
             self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": None})
 
+    def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
+        page = app.App(Path("/nonexistent"))
+        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+        install = "https://github.com/apps/eval-app/installations/new"
+        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")), \
+                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
+            self.assertEqual(page.repo_info("o/r", "a@x.co")["install"], install)
+            self.assertNotIn("install", page.repo_info("o/r", "b@x.co"))  # not signed in: the page's own login missed it
+            self.assertEqual(page.github_state("a@x.co")["install"], install)  # where to add more
+
     def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
         page = app.App(Path("/nonexistent"))
         answers = [{"device_code": "dev", "user_code": "AB-12", "verification_uri": "https://github.com/login/device",
@@ -869,7 +879,7 @@ class AppTest(unittest.TestCase):
                 mock.patch.object(app, "github_form", side_effect=answers) as form, \
                 mock.patch.object(app.tasks, "gh", return_value={"login": "ana"}):
             self.assertEqual(page.github_device("a@x.co")["user_code"], "AB-12")
-            self.assertEqual(form.call_args.args[1], {"client_id": "client", "scope": "repo"})
+            self.assertEqual(form.call_args.args[1], {"client_id": "client"})  # a GitHub App: its own permissions
             self.assertEqual(page.github_state("a@x.co")["device"]["user_code"], "AB-12")  # a reloaded page shows it again
             self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 5})
             self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down

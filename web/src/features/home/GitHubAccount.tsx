@@ -66,6 +66,11 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
     body = (
       <>
         <span className="min-w-0 flex-1"><b className="font-medium">@{github.login}</b> <span className="text-muted-foreground">· your private repositories and runs stay yours</span></span>
+        {github.install && (
+          <Button asChild size="sm" variant="ghost">
+            <a href={github.install} target="_blank" rel="noreferrer">Choose repositories <ExternalLinkIcon /></a>
+          </Button>
+        )}
         <Button type="button" size="sm" variant="ghost" onClick={signOut}>Sign out</Button>
       </>
     );

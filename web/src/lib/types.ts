@@ -130,6 +130,8 @@ export interface AppState {
 export interface GitHubAccount {
   sign_in: boolean;
   login: string | null;
+  /** Where to choose which repositories the GitHub App may read. */
+  install?: string;
   /** A sign-in waiting for you to enter its code on GitHub. */
   device?: { user_code: string; verification_uri: string; interval: number };
 }
@@ -148,6 +150,8 @@ export interface RepoInfo {
   private?: boolean;
   defaults?: boolean;
   error?: string;
+  /** Where to add this repository to the GitHub App, when the person's sign-in can't read it yet. */
+  install?: string;
 }
 
 /** A pull request to pick, from /api/prs; `why` says why it can't be a task. */

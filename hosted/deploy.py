@@ -23,8 +23,11 @@ Keys come from the Keychain, else from the environment:
     BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
 
-People sign in with GitHub through the OAuth App "Baseten Eval Sandbox" (device flow, owned by
-SystemSculpt). Its client id is public; it has no secret here. Their tokens stay in the page's memory.
+People sign in with GitHub through the GitHub App "Baseten Eval Sandbox" (device flow; read-only
+Contents, Pull requests and Metadata; owned by SystemSculpt until it moves to basetenlabs). Its client
+id is public and the page needs nothing else: its client secret and private key stay in this Mac's
+Keychain (pr-eval-github-app-client-secret, pr-eval-github-app-private-key). Their tokens stay in the
+page's memory.
 """
 from __future__ import annotations
 
@@ -56,7 +59,8 @@ PAGE_PORT = 8765
 PREFIX = "eval"
 APP = "/data/app"
 LABELS = {"app": "pr-eval-host", "owner": "mstolarz"}
-GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Ov23li1ZAcTSk0isJf5x")
+GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
+GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # The release: everything the page and its runs read from the repository.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
@@ -218,7 +222,8 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
             sandbox.process.kill(process.name)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
-                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID, "APP_ORIGIN": origin,
+                "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
+                "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin,
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}

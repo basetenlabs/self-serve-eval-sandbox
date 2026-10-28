@@ -1,4 +1,4 @@
-import { AlertCircleIcon, CheckIcon, ChevronRightIcon, GitPullRequestIcon, LoaderIcon, StarIcon } from "lucide-react";
+import { AlertCircleIcon, CheckIcon, ChevronRightIcon, ExternalLinkIcon, GitPullRequestIcon, LoaderIcon, StarIcon } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import * as React from "react";
 import { Column } from "@/components/brand";
@@ -11,7 +11,7 @@ import { Tip } from "@/components/ui/tooltip";
 import { post, repoInfo, samePull, useFavorites } from "@/lib/api";
 import { dur, plural, usd } from "@/lib/format";
 import { parsePasted, pullCount } from "@/lib/github";
-import { type Route, useStored } from "@/lib/hooks";
+import { type Route, useFocusCount, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
 import type { Again, AppState, CatalogModel, Favorite, PullList, RepoInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -72,7 +72,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const mode = source === "quick" ? "quick" : source === "suite" ? "suite" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
   const repo = mode === "repo" ? pasted.repos[0] : null;
 
-  // Look the repository up as it's typed: language, whether it has default commands, access.
+  // Look the repository up as it's typed: language, whether it has default commands, access. If it
+  // couldn't be read, look again on coming back to this tab (say, from adding it to the GitHub App).
+  const refocused = useFocusCount(!!info?.install);
   React.useEffect(() => {
     setInfo(null);
     setChosen([]);
@@ -86,7 +88,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         .finally(() => !abort.signal.aborted && setLooking(false));
     }, 450);
     return () => { abort.abort(); window.clearTimeout(timer); setLooking(false); };
-  }, [repo, github]);
+  }, [repo, github, refocused]);
 
   // Pasted PRs that can't be tasks (not merged, no tests) stay out of the run.
   const pastedPulls = Object.fromEntries(pastedRepos
@@ -377,7 +379,12 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn }: 
     );
   } else if (mode === "repo") {
     if (looking) body = <span className="inline-flex items-center gap-1.5 text-muted-foreground"><LoaderIcon className="size-3.5 animate-spin" /> Looking it up</span>;
-    else if (info?.error) body = <span className={danger}>{info.error}</span>;
+    else if (info?.error) body = (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <span className={danger}>{info.error}</span>
+        {info.install && <a className="inline-flex items-center gap-1 font-medium underline underline-offset-2" href={info.install} target="_blank" rel="noreferrer">Add it on GitHub <ExternalLinkIcon className="size-3.5" /></a>}
+      </span>
+    );
     else if (info?.repo) body = (
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <CheckIcon className="size-3.5" />

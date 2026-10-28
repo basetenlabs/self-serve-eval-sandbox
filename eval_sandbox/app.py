@@ -35,12 +35,14 @@ REPORT_FILE = re.compile(r"/([A-Za-z0-9_-][A-Za-z0-9_.-]*)/report\.(html|json)")
 MAX_LIMIT = 50
 PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
-# Hosted, people can sign in with GitHub (device flow: an OAuth App's client id, no secret).
-# Their token, kept in memory only, reads and clones their private repositories for them, and
+# Hosted, people can sign in with GitHub (device flow: a GitHub App's client id, no secret). The app
+# reads only Contents, Pull requests and Metadata, and only on the repositories each person installs
+# it on. Their token, kept in memory only, reads and clones those private repositories for them, and
 # a run on a private repository is theirs alone to see. The sign-in server in front of the hosted
 # page (@blaxel/sign-in) names who is asking in USER_HEADER, after dropping any value the browser
 # sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
+GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the page that adds repositories to it
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
@@ -278,6 +280,9 @@ class App:
         try:
             data = tasks.gh(f"repos/{repo}", token)
         except (RuntimeError, SystemExit) as exc:
+            if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
+                return {"repo": repo, "install": install_url(),
+                        "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
             return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
         # The hosted page's own GitHub login is shared by everyone signed in: it never reads
         # private code. A private repository needs the visitor's own GitHub sign-in.
@@ -468,15 +473,17 @@ class App:
         waiting = device and time.monotonic() < device["until"]
         return {"sign_in": bool(GITHUB_CLIENT_ID and user),
                 "login": self.github[user]["login"] if self.token(user) else None,
+                **({"install": install_url()} if GITHUB_APP and self.token(user) else {}),
                 # a sign-in still waiting for GitHub, so a reloaded page shows its code again
                 **({"device": device["shown"]} if waiting else {})}
 
     def github_device(self, user: str | None) -> dict:
-        """Start a sign-in: a code the person enters on GitHub, approving this page's read of their repositories."""
+        """Start a sign-in: a code the person enters on GitHub, approving this page's read of the
+        repositories they install the app on. A GitHub App takes no scope: its permissions are its own."""
         if not (GITHUB_CLIENT_ID and user):
             return {"error": "GitHub sign-in isn't set up on this page."}
         try:
-            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID, "scope": "repo"})
+            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID})
         except (OSError, ValueError) as exc:
             return {"error": f"GitHub didn't answer ({exc})."}
         if not got.get("device_code"):
@@ -543,6 +550,11 @@ class App:
             tmp.write_text(json.dumps(everyone, indent=1))
             tmp.replace(self.favorites_file)
         return {"favorites": everyone[user or "local"]}
+
+
+def install_url() -> str:
+    """Where a person picks the repositories the GitHub App may read."""
+    return f"https://github.com/apps/{GITHUB_APP}/installations/new"
 
 
 def github_form(url: str, form: dict) -> dict:
