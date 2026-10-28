@@ -99,7 +99,12 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const prs = mode === "quick" ? state.quick.tasks : mode === "suite" ? pullCount(suitePulls) : mode === "pasted" ? pullCount(pastedPulls)
     : mode === "repo" ? (pick === "choose" ? chosen.length : limit) : 0;
 
-  const models = state.models.filter((m) => chosenModels.includes(m.key));
+  // Price from a run over the same repositories when there is one: a large repository costs far more per attempt.
+  const scope = mode === "quick" ? "quick"
+    : (mode === "suite" ? Object.keys(suitePulls) : mode === "pasted" ? Object.keys(pastedPulls) : repo ? [repo] : [])
+      .map((r) => r.toLowerCase()).sort().join(",");
+  const catalog = state.models.map((m) => ({ ...m, ...m.by_scope?.[scope] }));
+  const models = catalog.filter((m) => chosenModels.includes(m.key));
   const attempts = prs * models.length;
   const priced = models.length > 0 && models.every((m) => m.cost_per_attempt != null);
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
@@ -269,7 +274,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
       </Column>
 
       <Column heading="2. Models" aside={<span className="label-mono text-muted-foreground">{models.length} chosen</span>}>
-        <ModelPicker models={state.models} chosen={chosenModels} onToggle={toggleModel} />
+        <ModelPicker models={catalog} chosen={chosenModels} onToggle={toggleModel} />
       </Column>
 
       <Column heading="3. Start">
@@ -279,7 +284,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           <PlanStat label="Sandboxes at once" value={!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
             tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests." />
           <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
-            tip={priced ? "From each model's cost per attempt in its most recent run." : "No earlier run to estimate from yet."} />
+            tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
+              : "No earlier run to estimate from yet."} />
           <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
             tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
         </div>

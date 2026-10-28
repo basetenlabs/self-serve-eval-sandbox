@@ -779,6 +779,20 @@ class AppTest(unittest.TestCase):
         self.assertTrue(dead_run["resumable"])
         self.assertIn("boom", dead_run["log"])
 
+    def test_estimates_come_from_a_run_over_the_same_repositories(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d)
+            for run_id, request, task_ids, cost in (("big", {"repos": ["O/Big"]}, ["O__Big-1"], 2.0),
+                                                     ("quick", {"quick": True}, ["o__r-1", "o__s-2"], 0.2)):
+                (jobs / run_id).mkdir()
+                (jobs / run_id / "run.json").write_text(json.dumps({"run_id": run_id, "request": request, "tasks": task_ids}))
+                (jobs / run_id / "report.json").write_text(json.dumps(
+                    {"summary": {"m": {"valid": 1, "cost_per_attempt": cost, "median_seconds": 60}}}))
+            found = app.App(jobs).estimates([{"id": "big"}, {"id": "quick"}])  # newest first
+        self.assertEqual(found["m"]["cost_per_attempt"], 2.0)  # with nothing closer, the most recent run
+        self.assertEqual(found["m"]["by_scope"], {"o/big": {"cost_per_attempt": 2.0, "seconds_per_attempt": 60},
+                                                  "quick": {"cost_per_attempt": 0.2, "seconds_per_attempt": 60}})
+
     def test_the_board_shows_each_attempt_live(self):
         with tempfile.TemporaryDirectory() as d:
             jobs, tasks_dir = Path(d) / "jobs", Path(d) / "tasks"

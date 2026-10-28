@@ -18,6 +18,8 @@ export interface CatalogModel extends Model {
   default?: boolean;
   cost_per_attempt?: number;
   seconds_per_attempt?: number;
+  /** The same, from the most recent run over each set of repositories ("o/a,o/b", lower case) or "quick". */
+  by_scope?: Record<string, { cost_per_attempt: number; seconds_per_attempt: number }>;
 }
 
 export interface Checks {

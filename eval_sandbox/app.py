@@ -256,12 +256,18 @@ class App:
         return self.task_info[path]
 
     def estimates(self, runs: list[dict]) -> dict[str, dict]:
-        """Cost and time per attempt for each model, from the most recent run that has them."""
+        """Cost and time per attempt for each model, from the most recent run that has them, and from the
+        most recent over each set of repositories (`by_scope`): a large repository costs far more per attempt."""
         found: dict[str, dict] = {}
         for run in runs:  # newest first
-            for key, s in (read_json(self.jobs_dir / run["id"] / "report.json").get("summary") or {}).items():
-                if key not in found and s.get("valid") and s.get("cost_per_attempt") is not None:
-                    found[key] = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
+            job_dir = self.jobs_dir / run["id"]
+            meta = read_json(job_dir / "run.json")
+            scope = "quick" if (meta.get("request") or {}).get("quick") \
+                else ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
+            for key, s in (read_json(job_dir / "report.json").get("summary") or {}).items():
+                if s.get("valid") and s.get("cost_per_attempt") is not None:
+                    each = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
+                    found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(scope, each)
         return found
 
     def repo_info(self, text: str, user: str | None = None) -> dict:
