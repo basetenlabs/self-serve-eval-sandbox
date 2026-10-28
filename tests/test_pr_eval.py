@@ -252,6 +252,12 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(grafana["memory"], 16384)
         with self.assertRaises(tasks.Skip):
             tasks.recipe("grafana/grafana", "TypeScript", ["public/app/a.test.tsx"])
+        posthog = tasks.recipe("PostHog/posthog", "Python", ["posthog/test/test_a.py", "frontend/src/a.test.ts"])
+        self.assertTrue(posthog["test"].endswith("pytest -q --tb=short -p no:cacheprovider posthog/test/test_a.py"))
+        self.assertIn("UV_LINK_MODE=hardlink", posthog["setup"])
+        self.assertEqual(posthog["memory"], 16384)
+        with self.assertRaises(tasks.Skip):
+            tasks.recipe("PostHog/posthog", "Python", ["frontend/src/a.test.ts"])
         with self.assertRaises(tasks.Skip):
             tasks.recipe("someone/rust", "Rust", [])
 
