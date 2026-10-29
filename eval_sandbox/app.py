@@ -465,7 +465,7 @@ class App:
             run_id = f"{named}-{n}"
         argv = [f"{name}#{n}" for name, numbers in pulls.items() for n in numbers] or ([repo] if repo else [])
         argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else [] if pulls else ["--limit", str(limit)]
-        argv += ["--models", ",".join(keys), "--name", run_id]
+        argv += ["--models", ",".join(keys), "--name", run_id, "--judges-checked"]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         if user:  # whose run it is, for their limits; on a private repository, only they see it
