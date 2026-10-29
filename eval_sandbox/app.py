@@ -326,6 +326,9 @@ class App:
         try:
             data = tasks.gh(f"repos/{repo}", token)
         except (RuntimeError, SystemExit) as exc:
+            if token and "HTTP 401" in str(exc):  # their sign-in ran out, or they revoked it on GitHub
+                self.github.pop(user, None)
+                return {"repo": repo, "error": "Your GitHub sign-in ran out. Sign in with GitHub again."}
             if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
                 return {"repo": repo, "install": install_url(),
                         "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
@@ -557,9 +560,12 @@ class App:
 
     # ---------- GitHub sign-in (hosted) ----------
 
+    # GitHub's deadlines follow the clock, not time.monotonic(): the hosted sandbox sleeps when nobody
+    # uses it, and monotonic time stands still while it does.
+
     def token(self, user: str | None) -> str | None:
         signed_in = self.github.get(user) if user else None
-        if signed_in and time.monotonic() > signed_in["until"]:  # GitHub's tokens for the page last 8 hours
+        if signed_in and time.time() > signed_in["until"]:  # GitHub's tokens for the page last 8 hours
             self.github.pop(user, None)
             return None
         return signed_in and signed_in["token"]
@@ -567,7 +573,7 @@ class App:
     def github_state(self, user: str | None) -> dict:
         """Who reads GitHub for this person: their own sign-in, or the page's login."""
         device = self.devices.get(user) if user else None
-        waiting = device and time.monotonic() < device["until"]
+        waiting = device and time.time() < device["until"]
         return {"sign_in": bool(GITHUB_CLIENT_ID and user),
                 "login": self.github[user]["login"] if self.token(user) else None,
                 **({"install": install_url()} if GITHUB_APP and self.token(user) else {}),
@@ -588,13 +594,13 @@ class App:
         interval = int(got.get("interval") or 5)
         shown = {"user_code": got["user_code"], "verification_uri": got["verification_uri"], "interval": interval}
         self.devices[user] = {"code": got["device_code"], "interval": interval, "shown": shown,
-                              "until": time.monotonic() + int(got.get("expires_in") or 900)}
+                              "until": time.time() + int(got.get("expires_in") or 900)}
         return shown
 
     def github_poll(self, user: str | None) -> dict:
         """Whether the person has approved the sign-in yet; the page asks every few seconds."""
         device = self.devices.get(user) if user else None
-        if not device or time.monotonic() > device["until"]:
+        if not device or time.time() > device["until"]:
             self.devices.pop(user, None)
             return {"error": "The sign-in code expired. Start again."}
         try:
@@ -615,7 +621,7 @@ class App:
         except (RuntimeError, SystemExit):
             login = None
         self.github[user] = {"token": got["access_token"], "login": login,
-                             "until": time.monotonic() + int(got.get("expires_in") or 8 * 3600) - 60}
+                             "until": time.time() + int(got.get("expires_in") or 8 * 3600) - 60}
         return {"login": login}
 
     def github_sign_out(self, user: str | None) -> dict:

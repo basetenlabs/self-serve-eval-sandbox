@@ -852,7 +852,7 @@ class AppTest(unittest.TestCase):
         with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}) as gh, \
                 mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
             self.assertIn("Sign in with GitHub", page.repo_info("o/r", "a@x.co")["error"])
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
             self.assertNotIn("error", page.repo_info("o/r", "a@x.co"))
             self.assertEqual(gh.call_args.args, ("repos/o/r", "tok-a"))
             self.assertIn("Sign in with GitHub", page.repo_info("o/r", "b@x.co")["error"])  # only for the one who signed in
@@ -862,13 +862,23 @@ class AppTest(unittest.TestCase):
 
     def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
         page = app.App(Path("/nonexistent"))
-        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
         install = "https://github.com/apps/eval-app/installations/new"
         with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")), \
                 mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
             self.assertEqual(page.repo_info("o/r", "a@x.co")["install"], install)
             self.assertNotIn("install", page.repo_info("o/r", "b@x.co"))  # not signed in: the page's own login missed it
             self.assertEqual(page.github_state("a@x.co")["install"], install)  # where to add more
+
+    def test_a_github_sign_in_that_ran_out_asks_to_sign_in_again(self):
+        page = app.App(Path("/nonexistent"))
+        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
+        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Bad credentials (HTTP 401)")), \
+                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
+            info = page.repo_info("o/r", "a@x.co")
+        self.assertIn("Sign in with GitHub again", info["error"])
+        self.assertNotIn("install", info)  # nothing to add on GitHub: the repository may well be there
+        self.assertIsNone(page.token("a@x.co"))
 
     def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
         page = app.App(Path("/nonexistent"))
@@ -888,6 +898,8 @@ class AppTest(unittest.TestCase):
         self.assertEqual(page.token("a@x.co"), "tok")
         self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "login": "ana"})  # no code waiting; no client id here
         self.assertIn("expired", page.github_poll("a@x.co")["error"])  # nothing is waiting any more
+        with mock.patch.object(app.time, "time", return_value=app.time.time() + 8 * 3600):
+            self.assertIsNone(page.token("a@x.co"))  # 8 hours by the clock, however long the sandbox slept
         page.github_sign_out("a@x.co")
         self.assertIsNone(page.token("a@x.co"))
         self.assertIn("isn't set up", page.github_device("a@x.co")["error"])  # locally: no client id, gh's login reads
@@ -914,7 +926,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.monotonic() + 60}
+            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
             ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
