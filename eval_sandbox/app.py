@@ -249,7 +249,7 @@ class App:
         if data := read_json(report_json):
             last += [t.get("finished_at") or "" for t in data["trials"]]
             summary = {m["key"]: {k: data["summary"][m["key"]].get(k) for k in
-                                  ("pass_at_1", "solved", "valid", "cost_per_solved", "invalid")}
+                                  ("pass_at_1", "solved", "tasks_solved", "valid", "cost_per_solved", "invalid")}
                        for m in data["models"] if m["key"] in data["summary"]}
         lost = sum(map(runner.lost, data.get("trials") or []))  # resume runs these again
         candidates = meta.get("candidates") or []

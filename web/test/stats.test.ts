@@ -21,9 +21,14 @@ describe("stats", () => {
     expect(wilson(0, 0)).toBeNull();
   });
 
-  it("ranks by solve rate, then cost per solved task", () => {
+  it("ranks by tasks solved, then cost per solved task", () => {
     const S = { glm: s(0.6, 6, 10, 0.1, 100), kimi: s(0.6, 6, 10, 0.05, 100), sonnet: s(0.7, 7, 10, 0.9, 80) };
     expect(rank([glm, kimi, sonnet], S).map((m) => m.key)).toEqual(["sonnet", "kimi", "glm"]);
+  });
+
+  it("ranks more tasks solved above a higher rate on fewer attempts", () => {
+    const S = { glm: s(0.6, 6, 10, 0.1, 100), kimi: s(1, 5, 5, 0.1, 100) };
+    expect(rank([kimi, glm], S).map((m) => m.key)).toEqual(["glm", "kimi"]);
   });
 
   it("names the cheapest open model that matches the closed one", () => {

@@ -74,6 +74,8 @@ export interface Board {
 export interface RunSummary {
   pass_at_1: number | null;
   solved: number;
+  /** Tasks solved at least once; missing from runs listed before it was added. */
+  tasks_solved?: number | null;
   valid: number;
   cost_per_solved: number | null;
   invalid: number;

@@ -4,7 +4,7 @@ import { Column, Swatch } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { compact, dur, elapsed, pct, plural, usd } from "@/lib/format";
+import { compact, dur, elapsed, pct, usd } from "@/lib/format";
 import { isOpen, type Swatch as SwatchT } from "@/lib/models";
 import { wilson } from "@/lib/stats";
 import type { Model, Report, Summary } from "@/lib/types";
@@ -24,7 +24,7 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
     return vals.filter((v) => v === top).length === 1 ? top : null;
   };
   const best = {
-    rate: lead((s) => (s.valid ? s.pass_at_1 : null), true),
+    solved: lead((s) => (s.valid ? s.tasks_solved : null), true),
     cost: lead((s) => s.cost_per_solved, false),
     time: lead((s) => s.median_seconds, false),
   };
@@ -42,7 +42,7 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
       aside={<Button variant="outline" size="sm" onClick={copy}><CopyIcon className="size-3.5" />Copy as Markdown</Button>}
     >
       <div className="hidden grid-cols-[2.5rem_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_2rem] gap-4 border-b border-rule px-3 pb-2 md:grid">
-        {["#", "Model", "Solve rate ↑", "Cost per solved ↓", "Time per task ↓", "Total wall clock"].map((h) => (
+        {["#", "Model", "Solved ↑", "Cost per solved ↓", "Time per task ↓", "Total wall clock"].map((h) => (
           <span key={h} className="label-mono text-[10.5px] text-muted-foreground">{h}</span>
         ))}
       </div>
@@ -50,7 +50,7 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
         {ranked.map((m, i) => (
           <Row key={m.key} m={m} rank={i + 1} s={S[m.key]} swatch={colors[m.key]} judged={!!report.run.judge}
             leads={{
-              rate: best.rate != null && !!S[m.key]?.valid && S[m.key].pass_at_1 === best.rate,
+              solved: best.solved != null && !!S[m.key]?.valid && S[m.key].tasks_solved === best.solved,
               cost: best.cost != null && S[m.key]?.cost_per_solved === best.cost,
               time: best.time != null && S[m.key]?.median_seconds === best.time,
             }} />
@@ -63,7 +63,7 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
 const GRID = "md:grid-cols-[2.5rem_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_2rem]";
 
 function Row({ m, rank, s, swatch, leads, judged }: {
-  m: Model; rank: number; s: Summary | undefined; swatch?: SwatchT; leads: { rate?: boolean; cost?: boolean; time?: boolean }; judged: boolean;
+  m: Model; rank: number; s: Summary | undefined; swatch?: SwatchT; leads: { solved?: boolean; cost?: boolean; time?: boolean }; judged: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   if (!s) return null;
@@ -87,8 +87,7 @@ function Row({ m, rank, s, swatch, leads, judged }: {
           <span className="label-mono mt-1 block text-[10.5px] text-muted-foreground">{isOpen(m) ? "Open · served on Baseten" : "Closed · comparison"}</span>
         </span>
         <ChevronDownIcon className={cn("size-4 justify-self-end text-muted-foreground transition-transform md:order-last", open && "rotate-180")} />
-        <Figure label="Solve rate" lead={leads.rate} value={pct(s.pass_at_1)} note={`${plural(s.solved, "attempt")} solved`}
-          bar={s.pass_at_1 ?? 0} fill={swatch?.fill} />
+        <Figure label="Solved" lead={leads.solved} value={`${s.tasks_solved} solved`} note={judged ? "Tests pass, judges agree" : "Hidden tests pass"} />
         <Figure label="Cost per solved" lead={leads.cost} value={usd(s.cost_per_solved)} note={`${usd(s.cost_per_attempt)} per attempt`} />
         <Figure label="Time per task" lead={leads.time} value={dur(s.median_seconds)} note="Median, agent time" />
         <Figure label="Total wall clock" value={elapsed(t?.elapsed_seconds)} note={`${t && t.timed_attempts < s.attempts ? "≥ " : ""}${elapsed(t?.total_working_seconds)} agent time`} />
@@ -98,7 +97,7 @@ function Row({ m, rank, s, swatch, leads, judged }: {
         <div className={cn("grid animate-enter grid-cols-2 gap-x-4 gap-y-4 border-t border-frame px-3 pt-4 pb-5", GRID)}>
           <span className="hidden md:block" />
           <span className="hidden md:block" />
-          <Details items={[["95% range", ci ? `${pct(ci[0])}–${pct(ci[1])}` : "–"], ["Solved at least once", `${s.tasks_solved} / ${s.tasks} tasks`]]} />
+          <Details items={[["Solve rate", `${pct(s.pass_at_1)} per attempt`], ["95% range", ci ? `${pct(ci[0])}–${pct(ci[1])}` : "–"]]} />
           <Details items={[["Total cost", usd(s.cost_usd)], ["Tokens per attempt", `${compact(s.mean_input_tokens)} in / ${compact(s.mean_output_tokens)} out`]]} />
           <Details items={[["Median turns", s.median_turns == null ? "–" : String(Math.round(s.median_turns))], ["Hit the time limit", String(s.agent_timeouts || 0)]]} />
           <Details items={[["Not scored (infrastructure)", String(s.invalid || 0)], ...(judged ? [["Passed tests, judges said no", String(s.judge_disagreements || 0)] as const] : [])]} />
@@ -108,7 +107,7 @@ function Row({ m, rank, s, swatch, leads, judged }: {
   );
 }
 
-function Figure({ label, value, note, lead, bar, fill }: { label: string; value: string; note: string; lead?: boolean; bar?: number; fill?: string }) {
+function Figure({ label, value, note, lead }: { label: string; value: string; note: string; lead?: boolean }) {
   return (
     <span className="col-span-1 min-w-0 max-md:col-start-2 max-md:col-end-3">
       <span className="label-mono block text-[10.5px] text-muted-foreground md:hidden">{label}</span>
@@ -116,11 +115,6 @@ function Figure({ label, value, note, lead, bar, fill }: { label: string; value:
         <span className="num text-[24px] leading-8 tracking-[-0.02em]">{value}</span>
         {lead && <Badge variant="solid" className="px-1 text-[9.5px]">Best</Badge>}
       </span>
-      {bar != null && (
-        <span className="mt-1 block h-1 w-full max-w-36 bg-node" aria-hidden>
-          <span className="block h-full animate-grow" style={{ width: `${bar * 100}%`, background: fill }} />
-        </span>
-      )}
       <span className="mt-1 block text-[12px] text-muted-foreground">{note}</span>
     </span>
   );
