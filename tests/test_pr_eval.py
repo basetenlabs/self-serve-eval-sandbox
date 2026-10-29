@@ -971,7 +971,7 @@ class AppTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
             page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
@@ -979,6 +979,20 @@ class AppTest(unittest.TestCase):
             access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
         self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
+
+    def test_starting_a_run_takes_the_judges_check_from_the_page(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            checks = {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": "the judge needs KEY"}}
+            with mock.patch.object(page, "state", return_value={"busy": False, "runs": [], "checks": checks}), \
+                    mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(app.pipeline, "preflight") as preflight, \
+                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
+                self.assertEqual(page.start({"pulls": {"o/a": [1]}, "models": ["m"]}), {"error": "the judge needs KEY"})
+                checks["judge"]["problem"] = None
+                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"]}))
+        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked again
+        spawn.assert_called_once()
 
     @staticmethod
     def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
@@ -1045,7 +1059,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_started_while_signed_in_records_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
@@ -1059,7 +1073,7 @@ class AppTest(unittest.TestCase):
     def test_runs_started_in_the_same_second_get_their_own_folders(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True}, "quick": {"tasks": 10}}
+            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}, "quick": {"tasks": 10}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(app, "datetime", SimpleNamespace(now=lambda: datetime(2026, 10, 29, 9, 0, 0))):
@@ -1107,7 +1121,7 @@ class AppTest(unittest.TestCase):
             self.assertIsInstance(app.App.chosen_pulls(bad), str, bad)
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "checks": {"blaxel": True, "bl_cli": True, "gh": True}}
+            ready = {"busy": False, "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
