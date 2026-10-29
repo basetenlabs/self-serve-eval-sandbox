@@ -4,7 +4,7 @@ import { Eyebrow, Swatch } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { compact, day, dur, usd } from "@/lib/format";
+import { compact, day, dur, plural, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
 import type { Model, Report, Task, Trial, Vote } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -75,8 +75,9 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   const [view, setView] = React.useState("diff");
   const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") : "";
   const setAside = r.tests?.set_aside ?? [];
+  const patch = React.useMemo(() => withoutCaches(r.patch), [r.patch]);
   const views = [
-    { key: "diff", label: "Agent's diff", text: r.patch },
+    { key: "diff", label: "Agent's diff", text: patch.text },
     { key: "trace", label: "Trace", text: null },
     { key: "merged", label: "Merged diff", text: t.reference_patch },
     { key: "tests", label: "Test output", text: r.verifier_tail },
@@ -87,7 +88,8 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
   if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`} />]);
   if (r.judge) rows.push([(r.judge.panel?.length ?? 1) > 1 ? "Judges" : "Judge", r.judge.error ? `Error: ${r.judge.error}` : <Verdicts judge={r.judge} />]);
-  if (r.diff) rows.push(["Change", `${r.diff.files} files, +${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`]);
+  // The file count of an older run's diff counts its cache files too, so it's left out there.
+  if (r.diff) rows.push(["Change", `${patch.hidden ? "" : `${plural(r.diff.files, "file")}, `}+${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`]);
   const o = OUTCOME[r.outcome];
   return (
     <article className="column-rule">
@@ -123,7 +125,8 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
         {views.map((v) => (
           <TabsContent key={v.key} value={v.key} className="mt-2">
             {v.key === "trace" ? <TraceView runId={runId} trial={r.trial} active={view === "trace"} />
-              : <Code text={v.text} diff={v.key === "diff" || v.key === "merged"} />}
+              : <Code text={v.text} diff={v.key === "diff" || v.key === "merged"}
+                  empty={v.key === "diff" && patch.hidden ? "This older run saved cache files in place of the change. The trace shows the agent's edits." : undefined} />}
           </TabsContent>
         ))}
       </Tabs>
@@ -159,8 +162,23 @@ function Lead({ word, rest }: { word: string; rest: string }) {
   return <><span className="font-medium">{word}</span>{rest}</>;
 }
 
-function Code({ text, diff }: { text?: string | null; diff: boolean }) {
-  if (!text) return <div className="placeholder-cell px-4 py-6 text-center label-mono text-muted-foreground">Empty</div>;
+// Runs from before the runner left caches out of the agent's diff carry every .pyc its test runs
+// wrote (runner.CACHES), burying the change under binary patches.
+const CACHE = /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)\/|\.py[co]$/;
+
+/** The agent's diff without cache files, and how many files that took out. */
+function withoutCaches(patch?: string | null) {
+  if (!patch) return { text: patch, hidden: 0 };
+  const files = patch.split(/^(?=diff --git )/m);
+  const kept = files.filter((f) => !CACHE.test(/^diff --git a\/(\S+)/.exec(f)?.[1] ?? ""));
+  return { text: kept.join(""), hidden: files.length - kept.length };
+}
+
+function Code({ text, diff, empty }: { text?: string | null; diff: boolean; empty?: string }) {
+  if (!text?.trim()) {
+    return empty ? <div className="placeholder-cell px-4 py-6 text-center text-[13px] text-muted-foreground">{empty}</div>
+      : <div className="placeholder-cell px-4 py-6 text-center label-mono text-muted-foreground">Empty</div>;
+  }
   const lines = text.split("\n");
   return (
     <pre className="max-h-[460px] overflow-auto bg-code py-2 font-mono text-[12px] leading-[1.6]">
