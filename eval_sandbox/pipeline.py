@@ -93,11 +93,13 @@ class Job:
 
 
 def preflight(model_keys: list[str], judge_choice: str = "default",
-              models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Panel | None]:
+              models_config: Path = config.DEFAULT_MODELS, *, judges_checked: bool = False,
+              ) -> tuple[list[config.Model], config.Panel | None]:
     """The models and judges for a run, or SystemExit saying what is missing.
 
     `judge_choice` is "default" for the configured panel, "none" for tests only, or one
-    judge's model id or label to grade with that judge alone.
+    judge's model id or label to grade with that judge alone. `judges_checked` doesn't ask the
+    judges' providers again: the page checked them a moment before it started the run.
     """
     catalog, judge = config.load(models_config)
     unknown = [k for k in model_keys if k not in catalog]
@@ -110,7 +112,7 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
         return models, None
     if judge_choice != "default":
         judge = judge.only(judge_choice)
-    if problem := judge.problem():
+    if not judges_checked and (problem := judge.problem()):
         raise SystemExit(problem)
     return models, judge
 

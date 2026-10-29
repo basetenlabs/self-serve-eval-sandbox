@@ -994,6 +994,15 @@ class AppTest(unittest.TestCase):
                 self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"]}))
         self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked again
         spawn.assert_called_once()
+        self.assertIn("--judges-checked", spawn.call_args.args[1])  # nor by the run it starts
+
+    def test_a_run_the_page_started_does_not_ask_the_judges_again(self):
+        panel = SimpleNamespace(problem=mock.Mock(return_value="the judge needs KEY"))
+        with mock.patch.object(app.pipeline.config, "load", return_value=({}, panel)):
+            self.assertEqual(app.pipeline.preflight([], judges_checked=True), ([], panel))
+            panel.problem.assert_not_called()
+            with self.assertRaises(SystemExit):
+                app.pipeline.preflight([])
 
     @staticmethod
     def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
@@ -1129,7 +1138,7 @@ class AppTest(unittest.TestCase):
                 started = page.start({"pulls": {"o/a": [3, 1]}, "models": ["m"]})
                 refused = page.start({"pulls": {"o/a": [1], "x/b": [2]}, "models": ["m"], "setup": "npm ci", "test": "npx t"})
         self.assertTrue(started["id"].startswith("a-"))
-        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"]])
+        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"], "--judges-checked"])
         self.assertIn("one repository", refused["error"])
 
     def test_the_page_serves_reports_and_traces_but_not_raw_logs(self):
