@@ -30,6 +30,8 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
   const b = run.board!;
   const active = run.phase === "collecting" || run.phase === "checking" || run.phase === "running";
   const judged = run.judged !== false;
+  // PRs that failed the check sink to the bottom, so the attempts stay together at the top.
+  const rows = [...b.rows].sort((x, y) => Number(x.check.stage === "left-out") - Number(y.check.stage === "left-out"));
   const cell = (row: BoardRow, m: Model) => {
     const c = row.cells.find((x) => x.model === m.key);
     if (!c) return <div className="placeholder-cell h-12" />;
@@ -62,7 +64,7 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
             </tr>
           </thead>
           <tbody>
-            {b.rows.map((row) => (
+            {rows.map((row) => (
               <tr key={row.id} className={cn("border-b border-frame last:border-0", row.check.stage === "left-out" && "opacity-55")}>
                 <td className="px-3 py-2"><PullTitle row={row} /></td>
                 <td className="px-1 py-1.5"><CheckCell row={row} now={now} active={active} /></td>
@@ -73,7 +75,7 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
         </table>
       </div>
       <ul className="grid gap-px bg-frame shadow-[0_0_0_1px_var(--frame)] md:hidden" aria-label="Board">
-        {b.rows.map((row) => (
+        {rows.map((row) => (
           <li key={row.id} className={cn("grid gap-2 bg-surface p-3", row.check.stage === "left-out" && "opacity-55")}>
             <PullTitle row={row} />
             {row.check.stage !== "passed" && <CheckCell row={row} now={now} active={active} />}
@@ -142,7 +144,7 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
       </div>
     );
   } else if (c.stage === "solved" || c.stage === "failed") {
-    const line = [failReason(c), c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ");
+    const line = [c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ");
     sub = <div className="mt-0.5 truncate font-mono text-[11px] opacity-80" title={line}>{line}</div>;
   } else if (c.stage === "invalid") {
     sub = <div className="mt-0.5 truncate text-[11px] opacity-80" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
@@ -151,7 +153,7 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
   const cell = (
     <div key={c.stage} className={cn("flex h-12 animate-fade flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
-        <span className="label-mono truncate text-[10.5px]">{glyph}{info.label}</span>
+        <span className="label-mono truncate text-[10.5px]">{glyph}{failReason(c) ?? info.label}</span>
         {live && c.started_at && <span className="num font-mono text-[11px]">{clock(secondsSince(c.started_at, now))}</span>}
       </div>
       {sub}
