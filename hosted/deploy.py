@@ -16,20 +16,16 @@ runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy
     Secrets  read on this Mac (Keychain, `gh auth token`) and handed to the page's process
              environment only; never written to the volume, the image or this repository
 
-Keys come from the Keychain, else from the environment:
-    BASETEN_API_KEY         Keychain pr-eval-host-baseten-api-key (Baseten workspace key pr-eval-host:
-                            open models and the Kimi K3 judge)
-    ANTHROPIC_API_KEY       Keychain pr-eval-host-anthropic-api-key (company key self-serve-eval-sandbox:
-                            Claude models and the Opus judge)
-    OPENAI_API_KEY          Keychain baseten-openai-api-key (the GPT-6.1 Sol judge)
-    BL_API_KEY              Keychain pr-eval-host-blaxel-api-key (service account pr-eval-host)
+Keys come from the Keychain items in SECRETS below, else from the environment:
+    BASETEN_API_KEY         open models and the Kimi K3 judge
+    ANTHROPIC_API_KEY       Claude models and the Opus judge
+    OPENAI_API_KEY          the GPT-6.1 Sol judge
+    BL_API_KEY              a Blaxel service account in the trial workspace
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
 
 People sign in with GitHub through the GitHub App "Baseten Eval Sandbox" (device flow; read-only
-Contents, Pull requests and Metadata; owned by SystemSculpt until it moves to basetenlabs). Its client
-id is public and the page needs nothing else: its client secret and private key stay in this Mac's
-Keychain (pr-eval-github-app-client-secret, pr-eval-github-app-private-key). Their tokens stay in the
-page's memory.
+Contents, Pull requests and Metadata). Its client id is public and the page needs nothing else: the
+app's client secret and private key never reach it. Their tokens stay in the page's memory.
 """
 from __future__ import annotations
 
@@ -60,7 +56,7 @@ PORT = 3000
 PAGE_PORT = 8765
 PREFIX = "eval"
 APP = "/data/app"
-LABELS = {"app": "pr-eval-host", "owner": "mstolarz"}
+LABELS = {"app": "pr-eval-host"}
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # One workspace and one set of keys serve everyone: runs going at once, in all and per person, and what runs
@@ -99,7 +95,7 @@ def keychain(service: str) -> str | None:
 
 
 def secrets() -> dict[str, str]:
-    # The page's own Keychain items come first, so a personal key exported in the shell never reaches it.
+    # The page's own Keychain items come first, so a key exported in the shell for local runs never reaches it.
     found = {name: keychain(service) or os.environ.get(name) for name, service in SECRETS.items()}
     found["GH_TOKEN"] = os.environ.get("GH_TOKEN") or subprocess.run(
         ["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
