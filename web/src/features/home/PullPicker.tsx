@@ -95,10 +95,12 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
         </span>
         <span className="flex gap-1">
           {chosen.length > 0 && <Button type="button" size="sm" variant="ghost" onClick={() => onChange([])}>Clear</Button>}
-          <Button type="button" size="sm" variant={chosen.length ? "ghost" : "outline"} disabled={!newest.length || tookNewest}
-            onClick={() => onChange(newest)}>
-            {reading ? `Newest ${NEWEST}` : tookNewest ? `Newest ${newest.length} chosen` : `Choose newest ${newest.length || NEWEST}`}
-          </Button>
+          {!needle && (
+            <Button type="button" size="sm" variant={chosen.length ? "ghost" : "outline"} disabled={!newest.length || tookNewest}
+              onClick={() => onChange(newest)}>
+              {reading ? `Newest ${NEWEST}` : tookNewest ? `Newest ${newest.length} chosen` : `Choose newest ${newest.length || NEWEST}`}
+            </Button>
+          )}
         </span>
       </div>
       {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
@@ -238,7 +240,7 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
             );
             const isSaved = favorites.some((f) => samePull(f, { repo, number: n }));
             const star = <Star saved={isSaved} number={n} onClick={() => onFavorite({ repo, number: n, title: row?.title }, !isSaved)} />;
-            return row ? <PullItem key={n} row={row} trailing={<>{star}{remove}</>} />
+            return row ? <PullItem key={n} row={row} trailing={<>{row.why ? <span className="size-7 shrink-0" /> : star}{remove}</>} />
               : <SkeletonRow key={n} at={n} number={n} trailing={remove} />;
           })}
         </ul>
