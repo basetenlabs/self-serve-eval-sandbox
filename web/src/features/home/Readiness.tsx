@@ -1,4 +1,4 @@
-import { CheckIcon, ClockIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, ClockIcon, XIcon } from "lucide-react";
 import { Column } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import type { AppState } from "@/lib/types";
@@ -23,33 +23,53 @@ export function readiness(state: AppState): Item[] {
   ];
 }
 
+/** What this page needs to run, folded away once it's all there. */
 export function Readiness({ state }: { state: AppState }) {
   const items = readiness(state);
   const missing = items.filter((i) => i.ok === false).length;
+  if (!missing) {
+    return (
+      <Column heading="Environment" aside={<Badge variant="solid">All set</Badge>}>
+        <details className="group">
+          <summary className="label-mono flex cursor-pointer list-none items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+            <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
+            Workspace, keys and judges are ready
+          </summary>
+          <div className="mt-3"><Checks items={items} /></div>
+        </details>
+      </Column>
+    );
+  }
   return (
-    <Column heading="Environment" aside={missing ? <Badge variant="danger">{missing} to fix</Badge> : <Badge variant="solid">All set</Badge>}>
-      <ul className="grid gap-px bg-frame">
-        {items.map((i) => (
-          <li key={i.label} className="flex gap-3 bg-background py-3">
-            <span
-              className={cn(
-                "mt-0.5 grid size-5 shrink-0 place-items-center",
-                i.ok === true ? "bg-primary text-primary-foreground" : i.ok === null ? "placeholder-cell text-muted-foreground" : "bg-[#AC0EB2] text-white dark:bg-[#FFA9FD] dark:text-black",
-              )}
-              aria-label={i.ok === true ? "Ready" : i.ok === null ? "Pending" : "Missing"}
-            >
-              {i.ok === true ? <CheckIcon className="size-3.5" strokeWidth={3} /> : i.ok === null ? <ClockIcon className="size-3" /> : <XIcon className="size-3.5" strokeWidth={3} />}
-            </span>
-            <span className="min-w-0 text-[14px] leading-5">
-              {i.label}
-              {i.ok !== true && <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{i.fix}</span>}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <Column heading="Environment" aside={<Badge variant="danger">{missing} to fix</Badge>}>
+      <Checks items={items} />
       <p className="mt-5 text-[12.5px] leading-snug text-muted-foreground">
         Runs use their own Blaxel workspace, never a shared one. Keys are read from the environment, never saved to a file.
       </p>
     </Column>
+  );
+}
+
+function Checks({ items }: { items: Item[] }) {
+  return (
+    <ul className="grid gap-px bg-frame">
+      {items.map((i) => (
+        <li key={i.label} className="flex gap-3 bg-background py-3">
+          <span
+            className={cn(
+              "mt-0.5 grid size-5 shrink-0 place-items-center",
+              i.ok === true ? "bg-primary text-primary-foreground" : i.ok === null ? "placeholder-cell text-muted-foreground" : "bg-[#AC0EB2] text-white dark:bg-[#FFA9FD] dark:text-black",
+            )}
+            aria-label={i.ok === true ? "Ready" : i.ok === null ? "Pending" : "Missing"}
+          >
+            {i.ok === true ? <CheckIcon className="size-3.5" strokeWidth={3} /> : i.ok === null ? <ClockIcon className="size-3" /> : <XIcon className="size-3.5" strokeWidth={3} />}
+          </span>
+          <span className="min-w-0 text-[14px] leading-5">
+            {i.label}
+            {i.ok !== true && <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{i.fix}</span>}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
