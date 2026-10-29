@@ -3,6 +3,7 @@
     .venv/bin/python hosted/deploy.py                  create or update, then check the signed-out answers
     .venv/bin/python hosted/deploy.py --seed jobs/x    also copy finished runs' reports and traces to the hosted page
     .venv/bin/python hosted/deploy.py --delete         remove the sandbox (add --volume to drop its data too)
+    .venv/bin/python hosted/deploy.py --name pr-eval-staging    a copy beside the live page, to try a release on first
 
 Where it runs: the dedicated trial workspace, so the page can start trials there. It is set like local
 runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy stops if neither is.
@@ -300,12 +301,19 @@ def workspace() -> str:
 
 
 def main() -> int:
-    global WORKSPACE
+    global WORKSPACE, SANDBOX, VOLUME, PREFIX
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=Path, nargs="*", default=[], help="finished runs to show on the hosted page")
     parser.add_argument("--delete", action="store_true", help="remove the hosted sandbox")
     parser.add_argument("--volume", action="store_true", help="with --delete, also remove its data")
+    parser.add_argument("--name", default=SANDBOX, help="another copy, pr-eval-<something>: its own sandbox, "
+                        "volume (<name>-data), sign-in and preview (<something>-<workspace>.preview.bl.run)")
     args = parser.parse_args()
+    if args.name != SANDBOX:
+        if not re.fullmatch(r"pr-eval-[a-z0-9]+(-[a-z0-9]+)*", args.name) or args.name.startswith("pr-eval-host"):
+            raise SystemExit("--name is pr-eval-<something>, in lower-case letters, digits and dashes")
+        SANDBOX, VOLUME, PREFIX = args.name, f"{args.name}-data", args.name.removeprefix("pr-eval-")
+        LABELS["app"] = args.name
     WORKSPACE = workspace()
     if args.delete:
         delete(args.volume)
