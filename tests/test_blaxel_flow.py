@@ -6,6 +6,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -197,6 +198,28 @@ class BlaxelFlowTest(unittest.TestCase):
         self.assertFalse(checks["bl_cli"])
         self.assertFalse(checks["image"])
         image_exists.assert_not_called()
+
+    def test_page_answers_from_the_last_check_while_it_checks_again(self):
+        judge = config.Panel([config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")])
+        with tempfile.TemporaryDirectory() as root:
+            page = app.App(Path(root))
+            page.checked = (0.0, {"blaxel": True, "blaxel_problem": None, "bl_cli": True, "gh": True,
+                                  "gh_login": "before", "image": True, "judge": None})  # long out of date
+            go = threading.Event()
+
+            def slow(_judge):
+                go.wait(5)
+                page.checked = (app.time.monotonic(), {**page.checked[1], "gh_login": "after"})
+                return page.checked[1]
+
+            with mock.patch.object(page, "check", side_effect=slow) as check:
+                self.assertEqual(page.checks(judge)["gh_login"], "before")  # no waiting on GitHub or Blaxel
+                self.assertEqual(page.checks(judge)["gh_login"], "before")  # and one check at a time
+                go.set()
+                with page.checking:  # the check in the background has finished
+                    pass
+                self.assertEqual(page.checks(judge)["gh_login"], "after")
+            self.assertEqual(check.call_count, 1)
 
     def test_page_blocks_first_build_without_cli(self):
         with tempfile.TemporaryDirectory() as root:

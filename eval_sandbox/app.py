@@ -94,6 +94,7 @@ class App:
         self.children: dict[str, subprocess.Popen] = {}  # runs started here, so finished ones are reaped
         self.lock = threading.RLock()  # one start or resume at a time, so two tabs can't start two runs
         self.checked: tuple[float, dict] = (0.0, {})
+        self.checking = threading.Lock()  # one refresh of the remote checks at a time
         self.task_info: dict[Path, dict] = {}
         self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
         self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
@@ -163,27 +164,41 @@ class App:
                 "spent_total": spent}
 
     def checks(self, judge: config.Panel) -> dict:
-        """Dedicated Blaxel workspace, build CLI and GitHub; cache remote checks briefly."""
+        """Dedicated Blaxel workspace, build CLI and GitHub. The remote checks take seconds, so only the
+        first waits for them: after that the page gets the last answer, and one older than 15 seconds
+        is checked again in the background."""
         when, cached = self.checked
-        if time.monotonic() - when > 15:
-            problem = None
-            image = False
-            bl_cli = bool(shutil.which("bl"))
-            try:
-                runtime.check_connection()
-                image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
-            except RuntimeError as exc:
-                problem = str(exc)
-            gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
-            try:
-                gh_login = tasks.gh("user").get("login") if gh else None
-            except (RuntimeError, SystemExit, subprocess.SubprocessError):
-                gh_login = None
-            cached = {"blaxel": problem is None, "blaxel_problem": problem,
-                      "bl_cli": bl_cli, "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
-            self.checked = (time.monotonic(), cached)
+        if not cached:
+            with self.checking:
+                cached = self.checked[1] or self.check(judge)
+        elif time.monotonic() - when > 15 and self.checking.acquire(blocking=False):
+            def refresh():
+                try:
+                    self.check(judge)
+                finally:
+                    self.checking.release()
+            threading.Thread(target=refresh, daemon=True).start()
         return {**cached, "judge": {"label": judge.label, "chair": judge.chair.name if judge.chair else None,
                                     "effort": judge.judges[0].effort, "ok": not cached["judge"], "problem": cached["judge"]}}
+
+    def check(self, judge: config.Panel) -> dict:
+        problem = None
+        image = False
+        bl_cli = bool(shutil.which("bl"))
+        try:
+            runtime.check_connection()
+            image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
+        except RuntimeError as exc:
+            problem = str(exc)
+        gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
+        try:
+            gh_login = tasks.gh("user").get("login") if gh else None
+        except (RuntimeError, SystemExit, subprocess.SubprocessError):
+            gh_login = None
+        checked = {"blaxel": problem is None, "blaxel_problem": problem,
+                   "bl_cli": bl_cli, "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
+        self.checked = (time.monotonic(), checked)
+        return checked
 
     def describe(self, job_dir: Path) -> dict | None:
         log = job_dir / "log.txt"
@@ -802,7 +817,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
-    handler = type("BoundHandler", (Handler,), {"app": App(jobs_dir)})
+    page = App(jobs_dir)
+    # Check the workspace, the CLIs and the judge while the server starts, so the first visit doesn't wait.
+    threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
+    handler = type("BoundHandler", (Handler,), {"app": page})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"pr-eval at {url} (Ctrl-C to stop the page; runs keep going)")
