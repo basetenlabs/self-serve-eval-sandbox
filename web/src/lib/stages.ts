@@ -79,7 +79,7 @@ export function pipeline(r: Run) {
       count: scored ? (coding ? `${coding} coding now` : plural(scored, "attempt")) : null },
     { key: "grade", title: "Grade", what: r.judged === false ? "Hidden tests" : "Hidden tests, then judges", state: st(done, doing(["tests", "judge"])),
       count: scored ? (grading ? `${grading} grading now` : `${graded} graded`) : null },
-    { key: "report", title: "Report", what: "Solve rate, cost, time", state: st(done && !!r.report, false),
+    { key: "report", title: "Report", what: "Solved, cost, time", state: st(done && !!r.report, false),
       count: scored ? `${finished} of ${scored} in` : null },
   ] as { key: string; title: string; what: string; state: State; count: string | null }[];
 }

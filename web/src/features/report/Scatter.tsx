@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Column } from "@/components/brand";
-import { pct, usd } from "@/lib/format";
+import { usd } from "@/lib/format";
 import type { Swatch } from "@/lib/models";
 import { takeaway } from "@/lib/stats";
 import type { Model, Summary } from "@/lib/types";
@@ -32,7 +32,7 @@ function useWidth(): [(el: HTMLDivElement | null) => void, number] {
   return [setEl, width];
 }
 
-/** Solve rate against cost per solved task, one point per model. Top left is best; the pink chip
+/** Tasks solved against cost per solved task, one point per model. Top left is best; the pink chip
  *  measures how far left the open model sits from the closed comparison. */
 export function Scatter({ models, S, colors }: { models: Model[]; S: Record<string, Summary>; colors: Record<string, Swatch> }) {
   const [hover, setHover] = React.useState<string | null>(null);
@@ -53,14 +53,15 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   const maxX = Math.max(...pts.map((p) => p.s.cost_per_solved!)) * 1.15 || 1;
   const step = niceStep(maxX), xMax = Math.ceil(maxX / step) * step;
   const x = (v: number) => L + (v / xMax) * (W - L - R);
-  const y = (v: number) => T + (1 - v) * (H - T - B);
+  const yStep = Math.max(1, Math.ceil(Math.max(...pts.map((p) => p.s.tasks_solved)) / 4)), yMax = yStep * 4;
+  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
   const fmtX = (v: number) => (v === 0 ? "$0" : step >= 1 ? `$${v.toFixed(0)}` : step >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`);
   const xTicks: number[] = [];
   for (let v = 0; v <= xMax + 1e-9; v += step) xTicks.push(v);
-  const at = (p: (typeof pts)[number]) => ({ cx: x(p.s.cost_per_solved!), cy: y(p.s.pass_at_1!) });
+  const at = (p: (typeof pts)[number]) => ({ cx: x(p.s.cost_per_solved!), cy: y(p.s.tasks_solved) });
 
   // The headline trade-off, drawn: a connector from the closed model across to the open one (an elbow
-  // when their solve rates differ), with the cost difference on its level run.
+  // when they solved different counts), with the cost difference on its level run.
   const t = takeaway(models, S);
   const from = pts.find((p) => p.m.key === t.closed?.key), to = pts.find((p) => p.m.key === t.open?.key);
   let gap: { d: string; head: string; chip: Box; text: string; runs: Box[] } | null = null;
@@ -103,12 +104,12 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   return (
     <Column heading="Quality against cost" aside={<span className="label-mono text-muted-foreground">Up and to the left is better</span>}>
       <div ref={box} className="relative w-full">
-        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block max-w-full" role="img" aria-label="Solve rate against cost per solved task, one point per model">
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block max-w-full" role="img" aria-label="Tasks solved against cost per solved task, one point per model">
           <rect x={L} y={T} width={W - L - R} height={H - T - B} className="fill-white dark:fill-white/[0.03]" />
-          {[0, 0.25, 0.5, 0.75, 1].map((v) => (
+          {[0, 1, 2, 3, 4].map((i) => i * yStep).map((v) => (
             <g key={v}>
               <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="var(--rule)" strokeDasharray="4 4" />
-              <text x={L - 10} y={y(v) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[11px]">{v * 100}%</text>
+              <text x={L - 10} y={y(v) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[11px]">{v}</text>
             </g>
           ))}
           {xTicks.map((v) => (
@@ -119,7 +120,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
           ))}
           <line x1={L} x2={L} y1={T} y2={H - B} stroke="var(--line)" />
           <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="var(--line)" />
-          <text x={0} y={T - 18} className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Solve rate</text>
+          <text x={0} y={T - 18} className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Solved</text>
           <text x={W - R} y={H - 6} textAnchor="end" className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Cost per solved task</text>
           {gap && (
             <g aria-hidden>
@@ -137,7 +138,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
                 key={p.m.key}
                 tabIndex={0}
                 role="img"
-                aria-label={`${p.m.label}: ${pct(p.s.pass_at_1)} solve rate, ${usd(p.s.cost_per_solved)} per solved task`}
+                aria-label={`${p.m.label}: ${p.s.tasks_solved} solved, ${usd(p.s.cost_per_solved)} per solved task`}
                 onPointerEnter={() => setHover(p.m.key)}
                 onPointerLeave={() => setHover(null)}
                 onFocus={() => setHover(p.m.key)}
@@ -162,7 +163,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
             style={{ left: at(active).cx, top: at(active).cy - 14 }}
           >
             <div className="label-mono mb-1">{active.m.label}</div>
-            {([["Solve rate", pct(active.s.pass_at_1)], ["Cost per solved task", usd(active.s.cost_per_solved)], ["Solved", `${active.s.solved} / ${active.s.valid}`]] as const).map(([k, v]) => (
+            {([["Solved", String(active.s.tasks_solved)], ["Cost per solved task", usd(active.s.cost_per_solved)]] as const).map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4"><span className="opacity-75">{k}</span><b className="num font-medium">{v}</b></div>
             ))}
           </div>

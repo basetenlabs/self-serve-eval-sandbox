@@ -1,7 +1,7 @@
 import { ChevronRightIcon, LockIcon } from "lucide-react";
 import { isActive, PhaseBadge, Swatch } from "@/components/brand";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { pct, plural, usd, when } from "@/lib/format";
+import { plural, usd, when } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import { ordered, palette } from "@/lib/models";
 import type { Run } from "@/lib/types";
@@ -16,7 +16,7 @@ export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) 
           <TR>
             <TH className="pl-4">Run</TH>
             <TH>Status</TH>
-            <TH className="w-[46%]">Solve rate · cost per solved task</TH>
+            <TH className="w-[46%]">Solved · cost per solved task</TH>
             <TH>Started</TH>
             <TH className="w-10"><span className="sr-only">Open</span></TH>
           </TR>
@@ -86,7 +86,7 @@ function Status({ run }: { run: Run }) {
   return run.phase === "done" ? <span className="text-[13px] text-muted-foreground">Done</span> : <PhaseBadge phase={run.phase} />;
 }
 
-/** Each model's solve rate as a bar, with its cost per solved task; or how far a live run has got. */
+/** What each model solved, with its cost per solved task; or how far a live run has got. */
 function Results({ run }: { run: Run }) {
   const colors = palette(run.models);
   const results = ordered(run.models).filter((m) => run.summary[m.key]?.valid);
@@ -110,12 +110,9 @@ function Results({ run }: { run: Run }) {
       {results.map((m) => {
         const s = run.summary[m.key];
         return (
-          <span key={m.key} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-3 text-[13px]">
+          <span key={m.key} className="grid grid-cols-[minmax(0,12rem)_1fr] items-center gap-3 text-[13px]">
             <span className="flex min-w-0 items-center gap-2"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
-            <span className="h-2 bg-node" aria-hidden>
-              <span className="block h-full" style={{ width: `${100 * (s.pass_at_1 ?? 0)}%`, background: colors[m.key].fill }} />
-            </span>
-            <span className="num whitespace-nowrap"><b className="font-medium">{pct(s.pass_at_1)}</b> <span className="text-muted-foreground">· {usd(s.cost_per_solved)}</span></span>
+            <span className="num whitespace-nowrap"><b className="font-medium">{s.tasks_solved ?? s.solved} solved</b> <span className="text-muted-foreground">· {usd(s.cost_per_solved)} per solved task</span></span>
           </span>
         );
       })}

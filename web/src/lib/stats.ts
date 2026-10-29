@@ -11,10 +11,10 @@ export function wilson(k: number, n: number): [number, number] | null {
   return [Math.max(0, c - h), Math.min(1, c + h)];
 }
 
-/** Best first: solve rate, then cost per solved task, then time per task. */
+/** Best first: tasks solved, then cost per solved task, then time per task. */
 export function rank<T extends Model>(models: T[], S: Record<string, Summary | undefined>): T[] {
   return [...models].sort((a, b) =>
-    (S[b.key]?.pass_at_1 ?? -1) - (S[a.key]?.pass_at_1 ?? -1) ||
+    (S[b.key]?.valid ? S[b.key]!.tasks_solved : -1) - (S[a.key]?.valid ? S[a.key]!.tasks_solved : -1) ||
     (S[a.key]?.cost_per_solved ?? Infinity) - (S[b.key]?.cost_per_solved ?? Infinity) ||
     (S[a.key]?.median_seconds ?? Infinity) - (S[b.key]?.median_seconds ?? Infinity));
 }
@@ -125,7 +125,7 @@ export function takeaway(models: Model[], S: Record<string, Summary | undefined>
   const opens = valid.filter(isOpen);
   if (!closed || !opens.length) {
     const top = rank(valid, S)[0];
-    return { sentence: top ? `${top.label} solved ${pct(S[top.key]!.pass_at_1)} of attempts.` : "No finished attempts yet." };
+    return { sentence: top ? `${top.label} solved ${plural(S[top.key]!.tasks_solved, "PR")}.` : "No finished attempts yet." };
   }
   const s = (m: Model) => S[m.key]!;
   const strongest = [...opens].sort((a, b) => (s(b).pass_at_1 ?? 0) - (s(a).pass_at_1 ?? 0) ||
