@@ -1,5 +1,5 @@
 import { CheckIcon } from "lucide-react";
-import { LiveDot } from "@/components/brand";
+import { isActive, LiveDot } from "@/components/brand";
 import { pipeline } from "@/lib/stages";
 import type { Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
  */
 export function Pipeline({ run }: { run: Run }) {
   const steps = pipeline(run);
+  // A run that failed or stopped won't reach its remaining steps, so they read "–", not "Not yet".
+  const active = isActive(run.phase);
   return (
     <ol className="grid gap-x-1 sm:grid-cols-3 sm:gap-y-4 lg:grid-cols-5" aria-label="Run steps">
       {steps.map((s, i) => (
@@ -33,7 +35,7 @@ export function Pipeline({ run }: { run: Run }) {
           </div>
           <div className="mt-1.5 text-[13px] leading-snug text-muted-foreground max-sm:hidden">{s.what}</div>
           <div className={cn("num text-[15px] leading-6 sm:mt-3 sm:text-[18px]", s.state === "todo" && !s.count && "text-muted-foreground")}>
-            {s.count ?? (s.state === "todo" ? "Not yet" : "–")}
+            {s.count ?? (s.state === "todo" && (active || run.phase === "done") ? "Not yet" : "–")}
           </div>
         </li>
       ))}
