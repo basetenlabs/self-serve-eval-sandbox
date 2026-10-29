@@ -1169,7 +1169,7 @@ class AppTest(unittest.TestCase):
                 self.assertEqual(get("/r2/report.json")[0], 404)
                 self.assertEqual(get("/r2/report.json", {"x-forwarded-email": "b@x.co"})[0], 404)
                 self.assertEqual(get("/r2/report.json", {"x-forwarded-email": "a@x.co"})[0], 200)
-                # The old gateway's header is just another header now: sending it names no one.
+                # Any other identity header names no one.
                 self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "a@x.co"})[0], 404)
                 self.assertEqual(get("/r1/trials/t__m__1/agent.jsonl")[0], 404)
                 self.assertEqual(get("/r1/run.json")[0], 404)

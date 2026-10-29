@@ -1,15 +1,15 @@
 # Hosted eval page
 
-The deployment behind our hosted copy of the eval page: the same page as `pr-eval serve`, on a
-Blaxel sandbox, behind a sign-in, for people who don't want to install anything. Who may sign in
-is set in `site.config.mjs`. You don't need any of this to run pr-eval yourself.
+The deployment behind Baseten's hosted copy of the eval page: the same page as `pr-eval serve`, on
+a Blaxel sandbox, behind a sign-in, for people who don't want to install anything. You don't need
+any of this to run pr-eval yourself. Its sign-in package, `@blaxel/sign-in`, isn't public, so this
+folder can't be deployed outside Baseten as it is.
 
-- **Sign-in:** `server.mjs` is the only public door: the `@blaxel/sign-in` package ("Sign in with
-  Blaxel", OpenID Connect with PKCE; settings in `site.config.mjs`) in front of `pr-eval serve` on
-  127.0.0.1. The page learns who is asking only from `X-Forwarded-Email`, which the sign-in sets
-  after dropping whatever the browser sent. A request that starts or stops a run must come from
-  the site itself, and the page logs who sent it. Upgrade the package with npm (read its
-  changelog); never copy or edit its files.
+- **Sign-in:** `server.mjs` is the only public door: "Sign in with Blaxel" in front of
+  `pr-eval serve` on 127.0.0.1. Who may sign in is set in `site.config.mjs`. The page learns who is
+  asking only from `X-Forwarded-Email`, which the sign-in server sets after dropping whatever the
+  browser sent. A request that starts or stops a run must come from the site itself, and the page
+  logs who sent it.
 - **Keys:** the page's process gets the judges', models', GitHub and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
 - **GitHub:** the page's own GitHub login, shared by everyone, reads public repositories only
@@ -48,13 +48,12 @@ installed package, so the sandbox needs no token.
 
 To try a release before the live page gets it, deploy a copy beside it:
 `.venv/bin/python hosted/deploy.py --name pr-eval-staging` has its own sandbox, volume, sign-in and
-preview (`staging-<workspace>.preview.bl.run`); `--name pr-eval-staging --delete --volume` removes it.
+preview; `--name pr-eval-staging --delete --volume` removes it.
 
 `deploy.py` reads the keys from the macOS Keychain or the environment (the list is at the top of
 the file), creates the volume, sandbox and public preview when they don't exist yet, uploads the
 app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
-401). Sessions, the session key and the OAuth client live in `/data/sign-in` on the volume.
-`--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
+401). `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
 trial's result.json and condensed, redacted trace, all scanned for credentials first); full
 transcripts stay on your Mac. A sandbox keeps the image it was created from: after a new
 image, `deploy.py --delete` and deploy again (runs and sign-in state stay on the volume).

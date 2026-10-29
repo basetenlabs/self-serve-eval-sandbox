@@ -1,10 +1,8 @@
-// Who may sign in to the hosted eval page and how its sign-in page reads. Every option is typed
-// in node_modules/@blaxel/sign-in/types.d.ts; environment variables override them.
+// Who may sign in to the hosted eval page and how its sign-in page reads.
 
 /** @type {import('@blaxel/sign-in/types').SiteConfig} */
 export default {
-  // Blaxel accounts with a verified email at exactly these domains. Baseten people sign in to
-  // Blaxel with "Continue with Baseten".
+  // Blaxel accounts with a verified email at exactly these domains.
   access: { domains: ['baseten.co', 'blaxel.ai'] },
   brand: {
     name: 'Eval Sandbox',
