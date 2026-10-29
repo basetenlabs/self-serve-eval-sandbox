@@ -41,7 +41,15 @@ export function ReportHeader({ report }: { report: Report }) {
   );
 }
 
-export function Banners({ report }: { report: Report }) {
+/** How far one PR moves a solve rate on a run this small; null once the sample is big enough. */
+export function smallSample(tasks: number, pointer = true): string | null {
+  if (tasks >= 30) return null;
+  return tasks <= 3 ? `${plural(tasks, "task")}: read it as an example, not a score.`
+    : `${plural(tasks, "task")}, so each one moves a solve rate by about ${Math.round(100 / tasks)} points.${pointer ? " Open a model's row for its 95% range." : ""}`;
+}
+
+/** Notes that change how to read the run. `sample: false` leaves the small-sample note to the head-to-head's details. */
+export function Banners({ report, sample = true }: { report: Report; sample?: boolean }) {
   const { run, tasks, trials } = report;
   const expected = (run.tasks ?? []).length * report.models.length * (run.attempts || 1);
   const items: [string, string][] = [];
@@ -50,10 +58,8 @@ export function Banners({ report }: { report: Report }) {
   }
   if (run.note) items.push(["Note", run.note]);
   if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed."]);
-  if (tasks.length < 30) {
-    items.push(["Small sample", tasks.length <= 3 ? `${plural(tasks.length, "task")}: read it as an example, not a score.`
-      : `${plural(tasks.length, "task")}, so each one moves a solve rate by about ${Math.round(100 / tasks.length)} points. Open a model's row for its 95% range.`]);
-  }
+  const small = sample ? smallSample(tasks.length) : null;
+  if (small) items.push(["Small sample", small]);
   if (!items.length) return null;
   return (
     <div className="grid gap-px bg-frame">
@@ -77,10 +83,13 @@ export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: 
       ? <Empty title="No attempts ran">No model attempted a task in this run, so there's nothing to compare.</Empty>
       : <Empty title="No results yet">Results appear here as attempts finish.</Empty>;
   }
+  // With a head-to-head, the small-sample note sits in its details, next to the solve rates it qualifies.
+  const inDetails = !!t.pairs?.n;
   return (
     <div className="grid gap-14">
-      <Banners report={report} />
-      <HeadToHead t={t} S={S} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen} />
+      <Banners report={report} sample={!inDetails} />
+      <HeadToHead t={t} S={S} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen}
+        sample={inDetails ? smallSample(report.tasks.length, false) : null} />
       <Leaderboard report={report} ranked={ranked} colors={colors} />
       <Scatter models={ranked} S={S} colors={colors} />
     </div>
