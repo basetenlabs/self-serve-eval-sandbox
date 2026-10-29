@@ -706,6 +706,33 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual((meta["tasks"], meta["left_out"], meta["checked"]), (["a"], {"b": "reference-fails"}, True))
         self.assertEqual(meta["status"]["phase"], "running")
 
+    def test_the_claude_code_version_never_holds_up_the_first_check(self):
+        go = threading.Event()
+
+        def ask(*_):
+            go.wait(5)
+            return "2.1.0"
+
+        def job(d, name, image):
+            with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
+                made = pipeline.new_job(pipeline.Request(), [baseten_model()], None, name=name,
+                                        jobs_dir=Path(d) / "jobs", image=image, tasks_dir=Path(d) / "tasks")
+            return made, runner.Settings(image=image)  # as prepare_image leaves them: the image's exact tag
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(pipeline, "image_claude_version", side_effect=ask) as probe:
+            first, settings = job(d, "first", "img:abc")
+            asking = pipeline.note_harness_version(first, settings)
+            self.assertIsNone(first.meta["harness_version"])  # the run goes on while a sandbox asks the image
+            go.set()
+            asking.join(5)
+            first.save()
+            later, settings = job(d, "later", "img:abc")
+            self.assertIsNone(pipeline.note_harness_version(later, settings))  # an earlier run on the image knows it
+            other, settings = job(d, "other", "img:new")
+            pipeline.note_harness_version(other, settings).join(5)
+        self.assertEqual([j.meta["harness_version"] for j in (first, later, other)], ["2.1.0"] * 3)
+        self.assertEqual(probe.call_count, 2)
+
     def test_resume_runs_again_the_attempts_lost_to_infrastructure(self):
         model, task = baseten_model(), SimpleNamespace(id="t")
         reasons = {1: "sandbox-error", 2: "verifier-setup-timeout", 3: "provider-error", 4: "runner-error: boom",
