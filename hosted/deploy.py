@@ -10,9 +10,8 @@ runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy
 
     Sandbox  pr-eval-host, from the image in hosted/Dockerfile (bl push -d hosted, once)
     Preview  public HTTPS; hosted/server.mjs (@blaxel/sign-in) signs people in and is the only public door
-    Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/),
-             the sign-in state (/data/sign-in: OAuth client, session key, sessions). /data/auth is the
-             earlier gateway's; its OAuth client is imported once, so nobody is asked to consent again.
+    Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/) and the
+             sign-in state (/data/sign-in)
     Secrets  read on this Mac (Keychain, `gh auth token`) and handed to the page's process
              environment only; never written to the volume, the image or this repository
 
@@ -112,9 +111,8 @@ def sdk():
     return SyncSandboxInstance, SyncVolumeInstance
 
 
-def run(sandbox, command: str, timeout: int = 300, env: dict | None = None, cwd: str | None = None) -> str:
-    result = sandbox.process.exec({"command": f"set -eu\n{command}", "env": env or {}, "waitForCompletion": True,
-                                   "timeout": timeout, **({"workingDir": cwd} if cwd else {})})
+def run(sandbox, command: str, timeout: int = 300) -> str:
+    result = sandbox.process.exec({"command": f"set -eu\n{command}", "waitForCompletion": True, "timeout": timeout})
     if result.exit_code:
         raise SystemExit(f"sandbox command failed ({result.exit_code}): {(result.stderr or result.stdout or '')[-2000:]}")
     return result.stdout or ""
@@ -221,7 +219,7 @@ def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
 
 def start(sandbox, origin: str, keys: dict[str, str]) -> None:
     for process in sandbox.process.list() or []:
-        if (process.name or "").startswith(("pr-eval-page", "pr-eval-gateway", "pr-eval-sign-in")) and process.status in ("running", "starting"):
+        if (process.name or "").startswith(("pr-eval-page", "pr-eval-sign-in")) and process.status in ("running", "starting"):
             sandbox.process.kill(process.name)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
@@ -230,10 +228,6 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
-    # Once: adopt the earlier gateway's OAuth client for this origin, so nobody is asked to consent again.
-    run(sandbox, f"if [ -f /data/auth/oauth-client.json ] && ! ls {AUTH}/oauth-client-*.json >/dev/null 2>&1; then "
-                 "node node_modules/@blaxel/sign-in/server.mjs --import-client /data/auth/oauth-client.json --config site.config.mjs; fi",
-        env=sign_in_env, cwd=f"{APP}/hosted")
     # No `timeout`: on Blaxel it can end a long-lived process once it elapses.
     sandbox.process.exec({"name": f"pr-eval-page-{stamp}", "workingDir": APP, "env": page_env,
                           "command": f"mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs",

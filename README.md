@@ -121,4 +121,4 @@ npm run dev        # live reload at http://localhost:5173, against `pr-eval serv
 npm run build      # rebuilds the two HTML files; commit them with the source change
 ```
 
-`hosted/` is the deployment behind our hosted copy of the page. You don't need it to run pr-eval.
+`hosted/` deploys Baseten's hosted copy of the page. It depends on a sign-in package that isn't public, and you don't need it to run pr-eval.
