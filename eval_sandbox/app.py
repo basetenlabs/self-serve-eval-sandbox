@@ -428,10 +428,12 @@ class App:
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
             return {"error": "Choose at least one model."}
-        try:
-            pipeline.preflight(keys, "default", self.models_config)
+        try:  # the judges were checked with the page's other checks, a few seconds ago: asking them again took seconds
+            pipeline.preflight(keys, "none", self.models_config)
         except SystemExit as exc:
             return {"error": str(exc.code)}
+        if checks["judge"]["problem"]:
+            return {"error": checks["judge"]["problem"]}
         try:
             limit = int(form.get("limit") or pipeline.DEFAULT_LIMIT)
         except ValueError:
