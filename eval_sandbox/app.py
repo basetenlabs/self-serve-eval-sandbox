@@ -57,7 +57,8 @@ SPEND_TOTAL = float(os.environ.get("PR_EVAL_SPEND_TOTAL") or 0) or None
 SPEND_PER_PERSON = float(os.environ.get("PR_EVAL_SPEND_PER_PERSON") or 0) or None
 SPEND_WINDOW = timedelta(days=1)
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
-# beside it, then the verifier alone once the agent's sandbox is deleted.
+# beside it, then the verifier alone once the agent's sandbox is deleted. One set up while
+# its task is still checked holds only its own: the verifier comes once the check passes.
 SANDBOXES = {"sandboxes": 2, "setup": 2, "agent": 2, "tests": 1}
 CHECK_STAGES = ("sandboxes", "setup", "base", "reference")
 
@@ -299,7 +300,7 @@ class App:
                     elif task_id in left:
                         cells.append({"model": key, "attempt": attempt, "stage": "left-out"})
                     elif (live := read_json(trial / "stage.json")) and active:
-                        sandboxes += SANDBOXES.get(live["stage"], 0)
+                        sandboxes += SANDBOXES.get(live["stage"], 0) if task_id in kept else 1
                         cells.append({"model": key, "attempt": attempt, **live})
                     else:
                         cells.append({"model": key, "attempt": attempt,
