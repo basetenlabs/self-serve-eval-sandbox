@@ -16,8 +16,8 @@ const GREEN = "#19E76E", BLUE = "#3DA6FF";
  * one row per metric in the brand's head-to-head form: the metric and its pink delta chip on the
  * left, the Baseten bar directly above the comparison bar on the right, scaled within the metric.
  */
-export function HeadToHead({ t, S, judged, attempts, onOpen }: {
-  t: Takeaway; S: Record<string, Summary>; judged: boolean; attempts: number; onOpen?: (taskId: string) => void;
+export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
+  t: Takeaway; S: Record<string, Summary>; judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   if (!t.open || !t.closed) return null;
   const grid = !!t.pairs?.n;
@@ -38,7 +38,7 @@ export function HeadToHead({ t, S, judged, attempts, onOpen }: {
       }
     >
       <div>
-        {grid && <Solved p={t.pairs!} open={t.open} closed={t.closed} S={S} judged={judged} attempts={attempts} onOpen={onOpen} />}
+        {grid && <Solved p={t.pairs!} open={t.open} closed={t.closed} S={S} judged={judged} attempts={attempts} onOpen={onOpen} sample={sample} />}
         {metrics.map((metric) => {
           const values = sides.map((s) => S[s.m.key]?.[metric.key] ?? null);
           const max = metric.max ?? (Math.max(...values.map((v) => v ?? 0)) || 1);
@@ -85,9 +85,14 @@ const ROW = "grid items-center gap-x-8 gap-y-3 border-t border-rule py-6 first:b
 
 /** What each model solved, big, with its cost per solved task. The solve rate, its 95% range and
  *  each PR's result stay in a details row under it. */
-function Solved({ p, open, closed, S, judged, attempts, onOpen }: {
-  p: Paired; open: Model; closed: Model; S: Record<string, Summary>; judged: boolean; attempts: number; onOpen?: (taskId: string) => void;
+function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
+  p: Paired; open: Model; closed: Model; S: Record<string, Summary>; judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
+  // How to read the rates, said only once someone opens them.
+  const notes: [string, string][] = [
+    ["Single pass", "Read these rates as a floor. Each attempt is one pass with no second try and no human review, and the agent never sees the PR's tests or reaches GitHub or package registries. In real work a developer reviews the change, runs the tests and sends the agent back for another pass."],
+    ...(sample ? [["Small sample", sample] as [string, string]] : []),
+  ];
   const sides = [
     { m: open, fill: GREEN, n: p.both.length + p.open.length, has: new Set([...p.both, ...p.open]) },
     { m: closed, fill: BLUE, n: p.both.length + p.closed.length, has: new Set([...p.both, ...p.closed]) },
@@ -126,6 +131,14 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen }: {
             <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />Solve rate, 95% range and each PR
           </summary>
           <div className="mt-3 grid gap-3">
+            <div className="grid gap-px bg-frame">
+              {notes.map(([label, text]) => (
+                <div key={label} className="flex flex-col gap-1 bg-background py-2.5 sm:flex-row sm:gap-4">
+                  <span className="label-mono w-28 shrink-0 pt-0.5 text-[10.5px] text-foreground">{label}</span>
+                  <span className="text-[13px] leading-5 text-muted-foreground">{text}</span>
+                </div>
+              ))}
+            </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px] text-muted-foreground">
               {sides.map((s) => {
                 const r = S[s.m.key];
