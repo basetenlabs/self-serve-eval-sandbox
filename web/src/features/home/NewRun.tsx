@@ -111,7 +111,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const priced = models.length > 0 && models.every((m) => m.cost_per_attempt != null);
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
-  const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(5, Math.round((slowest * attempts) / 4 / 60 / 5) * 5);
+  // A run takes at least its slowest attempt, however many go at once.
+  const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(5, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60 / 5) * 5);
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
