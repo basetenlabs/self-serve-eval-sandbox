@@ -251,7 +251,8 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
                 <SavedPulls favorites={mode === "pasted" ? favorites.filter((f) => !inBox(f)) : favorites} picked={inBox} onPick={pickSaved} onFavorite={onFavorite} />
               )}
 
-              {mode === "repo" && !info?.error && (
+              {/* Only once the lookup has read the repository, so a private one doesn't flash a chooser. */}
+              {mode === "repo" && !!info?.repo && (
                 <div className="grid grid-cols-1 gap-4">
                   <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
                     <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
