@@ -623,6 +623,7 @@ class QueueTest(unittest.TestCase):
                 mock.patch.object(runner, "needs_check", side_effect=lambda t, _: t.id != "known"), \
                 mock.patch.object(runner, "validation_status", return_value="valid"), \
                 mock.patch.object(runner, "validate_task", side_effect=validate), \
+                mock.patch.object(runner, "prepare_trial", return_value=None), \
                 mock.patch.object(runner, "run_trial", side_effect=trial):
             runner.check_and_run(candidates, [baseten_model()], 1, Path(d), runner.Settings(concurrency=2), "r",
                                  on_checked=lambda t, status, left: seen.append((t.id, status, left)))
