@@ -4,7 +4,7 @@ import type { Takeaway } from "@/lib/stats";
 import type { Summary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: string; units: string; format: (x: number | null) => string; delta?: string };
+type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: string; units: string; format: (x: number | null) => string; delta?: string; max?: number };
 
 // The brand's head-to-head: Baseten's bar is always Green, the comparison always Blue.
 const GREEN = "#19E76E", BLUE = "#3DA6FF";
@@ -12,12 +12,12 @@ const GREEN = "#19E76E", BLUE = "#3DA6FF";
 /**
  * Baseten's open model against the closed comparison, one row per metric in the brand's head-to-head
  * form: the metric and its pink delta chip on the left, the Baseten bar directly above the
- * comparison bar on the right, scaled within the metric.
+ * comparison bar on the right. A solve rate is drawn out of 100%; the others are scaled within the metric.
  */
 export function HeadToHead({ t, S }: { t: Takeaway; S: Record<string, Summary> }) {
   if (!t.open || !t.closed) return null;
   const metrics: Metric[] = [
-    { key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x) => pct(x), delta: t.solve?.text },
+    { key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x) => pct(x), delta: t.solve?.text, max: 1 },
     { key: "cost_per_solved", name: "Cost per solved task", units: "USD · lower is better", format: usd, delta: t.cost?.text },
     { key: "median_seconds", name: "Time per task", units: "Median per attempt · lower is better", format: dur, delta: t.time?.text },
   ];
@@ -35,7 +35,7 @@ export function HeadToHead({ t, S }: { t: Takeaway; S: Record<string, Summary> }
       <div>
         {metrics.map((metric) => {
           const values = sides.map((s) => S[s.m.key]?.[metric.key] ?? null);
-          const max = Math.max(...values.map((v) => v ?? 0)) || 1;
+          const max = metric.max ?? (Math.max(...values.map((v) => v ?? 0)) || 1);
           return (
             <div key={metric.key} className="grid items-center gap-x-8 gap-y-3 border-t border-rule py-6 first:border-t-0 first:pt-2 md:grid-cols-[300px_minmax(0,1fr)]">
               <div>
@@ -70,7 +70,7 @@ export function HeadToHead({ t, S }: { t: Takeaway; S: Record<string, Summary> }
           );
         })}
       </div>
-      <div className="label-mono border-t border-rule pt-3 text-[10.5px] text-muted-foreground">Bars scaled within each metric</div>
+      <div className="label-mono border-t border-rule pt-3 text-[10.5px] text-muted-foreground">Solve rate out of 100%; cost and time scaled within each metric</div>
     </Column>
   );
 }
