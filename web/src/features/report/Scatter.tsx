@@ -17,26 +17,27 @@ function niceStep(span: number) {
 type Box = { x0: number; x1: number; y0: number; y1: number };
 const hits = (a: Box, b: Box) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
 
-/** The width the chart has to fill, so it is drawn at its real size instead of scaled. */
-function useWidth(ref: React.RefObject<HTMLDivElement | null>) {
+/** The width the chart has to fill, so it is drawn at its real size instead of scaled. A callback
+ *  ref, so it starts measuring whenever the chart appears (a live run shows the empty state first). */
+function useWidth(): [(el: HTMLDivElement | null) => void, number] {
+  const [el, setEl] = React.useState<HTMLDivElement | null>(null);
   const [width, setWidth] = React.useState(0);
   React.useLayoutEffect(() => {
-    const el = ref.current;
     if (!el) return;
     setWidth(el.clientWidth);
     const ro = new ResizeObserver(([e]) => setWidth(Math.round(e.contentRect.width)));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [ref]);
-  return width;
+  }, [el]);
+  return [setEl, width];
 }
 
 /** Solve rate against cost per solved task, one point per model. Top left is best; the pink chip
  *  measures how far left the open model sits from the closed comparison. */
 export function Scatter({ models, S, colors }: { models: Model[]; S: Record<string, Summary>; colors: Record<string, Swatch> }) {
   const [hover, setHover] = React.useState<string | null>(null);
-  const box = React.useRef<HTMLDivElement>(null);
-  const W = Math.max(useWidth(box), 480);
+  const [box, width] = useWidth();
+  const W = Math.max(width, 480);
   const pts = models
     .map((m) => ({ m, s: S[m.key] }))
     .filter((p) => p.s?.pass_at_1 != null && p.s.cost_per_solved != null);
