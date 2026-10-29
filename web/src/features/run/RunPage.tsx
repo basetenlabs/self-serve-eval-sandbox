@@ -1,6 +1,6 @@
 import { ArrowLeftIcon, ArrowUpRightIcon, ChevronRightIcon, RepeatIcon, RotateCwIcon, SquareIcon } from "lucide-react";
 import * as React from "react";
-import { Empty, Eyebrow, isActive, PhaseBadge } from "@/components/brand";
+import { Empty, Eyebrow, isActive, LiveDot, PhaseBadge } from "@/components/brand";
 import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -12,6 +12,7 @@ import { post, useReport } from "@/lib/api";
 import { plural, when } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import { ordered, palette } from "@/lib/models";
+import { pipeline } from "@/lib/stages";
 import { takeaway } from "@/lib/stats";
 import type { AppState, Run } from "@/lib/types";
 import { LivePanel } from "./LivePanel";
@@ -110,7 +111,12 @@ function RunHeader({ run, state, sentence, hurry, go }: {
             <h1 className="text-[36px] leading-tight font-normal tracking-[-0.03em] sm:text-[44px]">{run.title}</h1>
             <PhaseBadge phase={run.phase} className="mt-1" />
           </div>
-          {sentence && <p className="mt-4 max-w-[46ch] text-[22px] leading-snug tracking-[-0.01em] text-balance">{sentence}</p>}
+          {active ? (
+            <p className="mt-4 flex max-w-[60ch] items-baseline gap-3 text-[20px] leading-snug tracking-[-0.01em] text-balance" aria-live="polite">
+              <LiveDot className="size-2 shrink-0 -translate-y-0.5" />
+              <span>{now(run)}</span>
+            </p>
+          ) : sentence && <p className="mt-4 max-w-[46ch] text-[22px] leading-snug tracking-[-0.01em] text-balance">{sentence}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {active && (
@@ -139,6 +145,18 @@ function RunHeader({ run, state, sentence, hurry, go }: {
       </div>
     </section>
   );
+}
+
+/** What a live run is doing right now, in one sentence. */
+function now(run: Run): string {
+  const step = pipeline(run).find((s) => s.state === "now")?.key;
+  const { done, total } = run.progress;
+  const sofar = total ? ` ${done} of ${total} attempts finished.` : "";
+  if (step === "find") return "Finding merged pull requests that came with tests.";
+  if (step === "check") return "Checking that each pull request's tests fail before the fix and pass after.";
+  if (step === "code") return `Models coding, each attempt in its own Blaxel sandbox.${sofar}`;
+  if (step === "grade") return `Grading with the hidden tests${run.judged === false ? "" : ", then the judges"}.${sofar}`;
+  return `${run.detail ? run.detail.replace(/\.?$/, ".") : "Starting."}${sofar}`;
 }
 
 /** Why a run stopped, what was left out and the log's tail when something broke. */
