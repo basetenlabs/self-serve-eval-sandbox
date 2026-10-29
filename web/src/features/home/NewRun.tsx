@@ -27,7 +27,7 @@ const QUICK_MINUTES = 8; // every quick-sample attempt starts at once; the slowe
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
-export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) => void; hurry: () => void }) {
+export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: Route) => void; hurry: () => void; aside?: React.ReactNode }) {
   const toast = useToast();
   const [stored, setSource] = useStored<string>("pr-eval-source", "quick");
   const source: Source = stored === "repo" || stored === "suite" ? stored : "quick";
@@ -111,7 +111,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const lookupError = lookups.find((l) => l.error)?.error;
   const needsCommands = lookups.find((l) => l.repo && !l.error && l.defaults === false);
   const prs = mode === "quick" ? state.quick.tasks : mode === "suite" ? pullCount(suitePulls) : mode === "pasted" ? pullCount(pastedPulls)
-    : mode === "repo" ? (pick === "choose" ? chosen.length : limit) : 0;
+    : mode === "repo" && !info?.error ? (pick === "choose" ? chosen.length : limit) : 0;
 
   // Price from a run over the same repositories when there is one: a large repository costs far more per attempt.
   const scope = mode === "quick" ? "quick"
@@ -130,6 +130,16 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const over = left != null && cost != null && prs > 0 && cost > left;
   const blocked = !!state.blocked || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
+
+  const hint = state.blocked ? state.blocked
+    : over ? `This run would cost about ${usd(cost)}, and you have ${usd(left)} left of your ${usd(state.spend!.cap)} for the last 24 hours. Choose fewer pull requests or models.`
+    : !models.length ? "Choose at least one model."
+    : checking ? "Checking the pull requests on GitHub."
+    : lookupError ? "Pick a repository the page can read."
+    : needsCommands && !commandsGiven ? `Give the install and test commands for ${needsCommands.language}.`
+    : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request."
+      : mode === "suite" ? "Star or tick at least one pull request." : "Name a repository or paste pull request links.")
+    : "Runs keep going if you close this page.";
 
   const toggleModel = (key: string, on: boolean) => {
     setError(null);
@@ -179,163 +189,172 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const savedHere = repo ? favorites.filter((f) => f.repo.toLowerCase() === repo.toLowerCase()).length : 0;
 
   return (
-    <form ref={form} onSubmit={start} onInput={() => setError(null)} className="grid grid-cols-1 gap-10" aria-label="New run">
-      <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
-        <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
-          <SourceTile value="quick" title="Quick sample" figure={`${state.quick.tasks} PRs`} tag="Fast"
-            text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
-          <SourceTile value="repo" title="Your pull requests" figure="Any repo"
-            text="Paste pull request links, or pick from a repository's latest merges." />
-          <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
-            text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
-        </RadioGroup.Root>
+    <form ref={form} onSubmit={start} onInput={() => setError(null)} aria-label="New run"
+      className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-0">
+      <div className="grid min-w-0 grid-cols-1 content-start gap-10 lg:pr-8">
+        <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
+          <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
+            <SourceTile value="quick" title="Quick sample" figure={`${state.quick.tasks} PRs`} tag="Fast"
+              text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
+            <SourceTile value="repo" title="Your pull requests" figure="Any repo"
+              text="Paste pull request links, or pick from a repository's latest merges." />
+            <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
+              text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
+          </RadioGroup.Root>
 
-        {source === "suite" && (
-          <div className="mt-4 grid animate-enter grid-cols-1 gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
-            <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
-              <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
-            </div>
-            {favorites.length ? (
-              <>
-                <SavedPulls favorites={suite} picked={inSuite} onPick={pickSuite} onFavorite={onFavorite} />
+          {source === "suite" && (
+            <div className="mt-4 grid animate-enter grid-cols-1 gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+              <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
+                <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
+              </div>
+              {favorites.length ? (
+                <>
+                  <SavedPulls favorites={suite} picked={inSuite} onPick={pickSuite} onFavorite={onFavorite} />
+                  <p className="text-[13px] text-muted-foreground">
+                    {favorites.length > suite.length ? `The newest ${suite.length} run; unstar some to make room for others. ` : ""}
+                    Star more under <b className="font-medium text-foreground">Your pull requests</b>. Repositories that aren't Go or Python need their own install and test commands: run those from there.
+                  </p>
+                </>
+              ) : (
                 <p className="text-[13px] text-muted-foreground">
-                  {favorites.length > suite.length ? `The newest ${suite.length} run; unstar some to make room for others. ` : ""}
-                  Star more under <b className="font-medium text-foreground">Your pull requests</b>. Repositories that aren't Go or Python need their own install and test commands: run those from there.
+                  Nothing starred yet. Under <b className="font-medium text-foreground">Your pull requests</b>, star the pull requests that stand for your team's work.
+                  They gather here, from any repository, so the next model gets the same test in one click.
                 </p>
-              </>
-            ) : (
-              <p className="text-[13px] text-muted-foreground">
-                Nothing starred yet. Under <b className="font-medium text-foreground">Your pull requests</b>, star the pull requests that stand for your team's work.
-                They gather here, from any repository, so the next model gets the same test in one click.
+              )}
+            </div>
+          )}
+
+          {source === "repo" && (
+            <div className="mt-4 grid animate-enter grid-cols-1 gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+              <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
+                <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
+              </div>
+              <div className="grid grid-cols-1 gap-1.5">
+                <Label htmlFor="pulls">Repository or pull request links</Label>
+                <div className="relative">
+                  <GitPullRequestIcon className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" />
+                  <textarea
+                    id="pulls" value={text} onChange={(e) => setText(e.target.value)} rows={1} autoComplete="off" spellCheck={false}
+                    placeholder="owner/repo, or paste links to pull requests"
+                    aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
+                    className={cn(
+                      "block max-h-48 min-h-10 w-full resize-none bg-surface py-2.5 pr-3 pl-9 font-mono text-[13px] leading-5 [field-sizing:content]",
+                      "shadow-[inset_0_0_0_1px_var(--rule)] outline-none transition-shadow placeholder:text-muted-foreground/80 hover:shadow-[inset_0_0_0_1px_var(--line)]",
+                      "focus-visible:shadow-[inset_0_0_0_1px_var(--foreground)] aria-invalid:shadow-[inset_0_0_0_1px_var(--danger)]",
+                    )}
+                  />
+                </div>
+                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} />
+              </div>
+
+              {(mode === "empty" || mode === "pasted") && (
+                <SavedPulls favorites={mode === "pasted" ? favorites.filter((f) => !inBox(f)) : favorites} picked={inBox} onPick={pickSaved} onFavorite={onFavorite} />
+              )}
+
+              {mode === "repo" && !info?.error && (
+                <div className="grid grid-cols-1 gap-4">
+                  <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+                    <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
+                      options={[{ value: "latest", label: "Latest merged" }, { value: "choose", label: "Choose" }]} />
+                    {pick === "latest" && (
+                      <Segmented label="How many" value={String(limit)} onChange={(v) => setLimit(Number(v))}
+                        options={LIMITS.map((n) => ({ value: String(n), label: String(n) }))} />
+                    )}
+                    {pick === "latest" && savedHere > 0 && (
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setPick("choose")}>
+                        <StarIcon className="fill-current" /> {savedHere} saved here: choose
+                      </Button>
+                    )}
+                  </div>
+                  {pick === "choose" && (
+                    <PullChooser key={`${repo}|${github ?? ""}`} repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit}
+                      favorites={favorites} onFavorite={onFavorite} />
+                  )}
+                </div>
+              )}
+
+              {mode === "pasted" && (
+                <PastedPulls key={github ?? ""} pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull}
+                  favorites={favorites} onFavorite={onFavorite} />
+              )}
+
+              {(mode === "repo" || mode === "pasted") && (
+                <details className="group" open={!!needsCommands}>
+                  <summary className="label-mono flex cursor-pointer list-none flex-wrap items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+                    <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
+                    Install and test commands {needsCommands ? <Badge variant="warn">Needed for {needsCommands.language}</Badge> : <span className="normal-case tracking-normal">(optional for Go and Python)</span>}
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="setup">Install</Label>
+                      <Input id="setup" value={setup} onChange={(e) => setSetup(e.target.value)} placeholder="npm ci" className="font-mono text-[13px]" spellCheck={false} />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="test">Run the PR's tests</Label>
+                      <Input id="test" value={test} onChange={(e) => setTest(e.target.value)} placeholder="npx vitest run {test_files}" className="font-mono text-[13px]" spellCheck={false} />
+                    </div>
+                  </div>
+                  {mode === "pasted" && Object.keys(pastedPulls).length > 1 && (
+                    <p className="mt-2 text-[12.5px] text-muted-foreground">Commands apply to one repository: paste pull requests from one at a time to use them.</p>
+                  )}
+                </details>
+              )}
+            </div>
+          )}
+        </Column>
+
+        <Column heading="2. Models" aside={<span className="label-mono text-muted-foreground">{models.length} chosen</span>}>
+          <ModelPicker models={catalog} chosen={chosenModels} onToggle={toggleModel} />
+        </Column>
+
+      </div>
+
+      <div className="min-w-0 lg:border-l lg:border-dashed lg:border-rule lg:pl-8">
+        <div className="grid gap-10 lg:sticky lg:top-20">
+          <Column heading="3. Start" aside={attempts > 0 && <span className="label-mono text-muted-foreground">{plural(attempts, "attempt")}</span>}>
+            <div className="grid grid-cols-2 bg-surface shadow-[inset_0_0_0_1px_var(--frame)]">
+              <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
+                tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
+                  : "No earlier run to estimate from yet."} />
+              <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
+                tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
+            </div>
+            <dl className="mt-4 grid gap-2 text-[14px]">
+              <PlanRow label="Pull requests">{prs || "–"}</PlanRow>
+              <PlanRow label="Models">
+                {models.length ? [...models.filter(isOpen), ...models.filter((m) => !isOpen(m))].map((m) => (
+                  <span key={m.key} className="flex min-w-0 items-center justify-end gap-2">
+                    <span aria-hidden className={cn("size-2.5 shrink-0", isOpen(m) ? "bg-baseten" : "bg-rival")} />
+                    <span className="truncate">{m.label}</span>
+                  </span>
+                )) : "–"}
+              </PlanRow>
+              <PlanRow label="Sandboxes at once" tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests.">
+                {!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
+              </PlanRow>
+            </dl>
+            {error && (
+              <div role="alert" className="mt-4 flex animate-enter items-start gap-2 bg-danger-surface px-3 py-2.5 text-[14px]">
+                <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-[#AC0EB2] dark:text-[#FFA9FD]" />
+                <span>{error}</span>
+              </div>
+            )}
+            <Button type="submit" size="lg" disabled={!!blocked || starting} className="group mt-5 w-full">
+              {starting ? <LoaderIcon className="animate-spin" /> : null}
+              {starting ? "Starting" : "Start run"}
+              {!starting && <ChevronRightIcon className="transition-transform group-hover:translate-x-0.5" />}
+              <Kbd className="ml-1 hidden sm:inline-flex">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
+            </Button>
+            <p className="mt-3 text-[13px] leading-snug text-muted-foreground" aria-live="polite">{hint}</p>
+            {state.spend && (
+              <p className="label-mono mt-3 text-muted-foreground">
+                Your runs, last 24 hours: {money(state.spend.spent)} of your {money(state.spend.cap)}
               </p>
             )}
-          </div>
-        )}
-
-        {source === "repo" && (
-          <div className="mt-4 grid animate-enter grid-cols-1 gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
-            <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
-              <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
-            </div>
-            <div className="grid grid-cols-1 gap-1.5">
-              <Label htmlFor="pulls">Repository or pull request links</Label>
-              <div className="relative">
-                <GitPullRequestIcon className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" />
-                <textarea
-                  id="pulls" value={text} onChange={(e) => setText(e.target.value)} rows={1} autoComplete="off" spellCheck={false}
-                  placeholder="owner/repo, or paste links to pull requests"
-                  aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
-                  className={cn(
-                    "block max-h-48 min-h-10 w-full resize-none bg-surface py-2.5 pr-3 pl-9 font-mono text-[13px] leading-5 [field-sizing:content]",
-                    "shadow-[inset_0_0_0_1px_var(--rule)] outline-none transition-shadow placeholder:text-muted-foreground/80 hover:shadow-[inset_0_0_0_1px_var(--line)]",
-                    "focus-visible:shadow-[inset_0_0_0_1px_var(--foreground)] aria-invalid:shadow-[inset_0_0_0_1px_var(--danger)]",
-                  )}
-                />
-              </div>
-              <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} />
-            </div>
-
-            {(mode === "empty" || mode === "pasted") && (
-              <SavedPulls favorites={mode === "pasted" ? favorites.filter((f) => !inBox(f)) : favorites} picked={inBox} onPick={pickSaved} onFavorite={onFavorite} />
-            )}
-
-            {mode === "repo" && !info?.error && (
-              <div className="grid grid-cols-1 gap-4">
-                <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-                  <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
-                    options={[{ value: "latest", label: "Latest merged" }, { value: "choose", label: "Choose" }]} />
-                  {pick === "latest" && (
-                    <Segmented label="How many" value={String(limit)} onChange={(v) => setLimit(Number(v))}
-                      options={LIMITS.map((n) => ({ value: String(n), label: String(n) }))} />
-                  )}
-                  {pick === "latest" && savedHere > 0 && (
-                    <Button type="button" size="sm" variant="ghost" onClick={() => setPick("choose")}>
-                      <StarIcon className="fill-current" /> {savedHere} saved here: choose
-                    </Button>
-                  )}
-                </div>
-                {pick === "choose" && (
-                  <PullChooser key={`${repo}|${github ?? ""}`} repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit}
-                    favorites={favorites} onFavorite={onFavorite} />
-                )}
-              </div>
-            )}
-
-            {mode === "pasted" && (
-              <PastedPulls key={github ?? ""} pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull}
-                favorites={favorites} onFavorite={onFavorite} />
-            )}
-
-            {(mode === "repo" || mode === "pasted") && (
-              <details className="group" open={!!needsCommands}>
-                <summary className="label-mono flex cursor-pointer list-none flex-wrap items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-                  <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-                  Install and test commands {needsCommands ? <Badge variant="warn">Needed for {needsCommands.language}</Badge> : <span className="normal-case tracking-normal">(optional for Go and Python)</span>}
-                </summary>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="setup">Install</Label>
-                    <Input id="setup" value={setup} onChange={(e) => setSetup(e.target.value)} placeholder="npm ci" className="font-mono text-[13px]" spellCheck={false} />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="test">Run the PR's tests</Label>
-                    <Input id="test" value={test} onChange={(e) => setTest(e.target.value)} placeholder="npx vitest run {test_files}" className="font-mono text-[13px]" spellCheck={false} />
-                  </div>
-                </div>
-                {mode === "pasted" && Object.keys(pastedPulls).length > 1 && (
-                  <p className="mt-2 text-[12.5px] text-muted-foreground">Commands apply to one repository: paste pull requests from one at a time to use them.</p>
-                )}
-              </details>
-            )}
-          </div>
-        )}
-      </Column>
-
-      <Column heading="2. Models" aside={<span className="label-mono text-muted-foreground">{models.length} chosen</span>}>
-        <ModelPicker models={catalog} chosen={chosenModels} onToggle={toggleModel} />
-      </Column>
-
-      <Column heading="3. Start">
-        <div className="grid grid-cols-2 bg-surface shadow-[inset_0_0_0_1px_var(--frame)] sm:grid-cols-5">
-          <PlanStat label="Pull requests" value={prs || "–"} />
-          <PlanStat label="Attempts" value={attempts || "–"} />
-          <PlanStat label="Sandboxes at once" value={!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
-            tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests." />
-          <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
-            tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
-              : "No earlier run to estimate from yet."} />
-          <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
-            tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
+          </Column>
+          {aside}
         </div>
-        {error && (
-          <div role="alert" className="mt-3 flex animate-enter items-start gap-2 bg-danger-surface px-3 py-2.5 text-[14px]">
-            <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-[#AC0EB2] dark:text-[#FFA9FD]" />
-            <span>{error}</span>
-          </div>
-        )}
-        <div className="mt-4 flex flex-wrap items-center gap-4">
-          <Button type="submit" size="lg" disabled={!!blocked || starting} className="group min-w-48">
-            {starting ? <LoaderIcon className="animate-spin" /> : null}
-            {starting ? "Starting" : "Start run"}
-            {!starting && <ChevronRightIcon className="transition-transform group-hover:translate-x-0.5" />}
-            <Kbd className="ml-1 hidden sm:inline-flex">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
-          </Button>
-          <span className="text-[13px] text-muted-foreground">
-            {state.blocked ? state.blocked
-              : over ? `This run would cost about ${usd(cost)}, and you have ${usd(left)} left of your ${usd(state.spend!.cap)} for the last 24 hours. Choose fewer pull requests or models.`
-              : !models.length ? "Choose at least one model."
-                : checking ? "Checking the pull requests on GitHub."
-                : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request."
-                  : mode === "suite" ? "Star or tick at least one pull request." : "Name a repository or paste pull request links.")
-                  : "Runs keep going if you close this page. Sandboxes are deleted as each attempt ends."}
-          </span>
-        </div>
-        {state.spend && (
-          <p className="label-mono mt-3 text-muted-foreground">
-            Your runs, last 24 hours: {money(state.spend.spent)} of your {money(state.spend.cap)}
-          </p>
-        )}
-      </Column>
+      </div>
     </form>
   );
 }
@@ -365,7 +384,7 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
     <RadioGroup.Item
       value={value}
       className={cn(
-        "group relative flex min-h-[132px] flex-col items-start bg-node p-4 text-left transition-[background-color,box-shadow] duration-150 outline-none",
+        "group relative flex min-h-[104px] flex-col items-start bg-node p-4 text-left sm:min-h-[132px] transition-[background-color,box-shadow] duration-150 outline-none",
         "hover:bg-node-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
         "data-[state=checked]:bg-surface data-[state=checked]:shadow-[inset_0_0_0_1px_var(--foreground)]",
       )}
@@ -485,10 +504,21 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
 
 function PlanStat({ label, value, tip }: { label: string; value: React.ReactNode; tip?: string }) {
   const body = (
-    <div className="border-frame px-4 py-3 not-last:border-r max-sm:odd:border-r max-sm:[&:nth-child(-n+4)]:border-b">
+    <div className="border-frame px-4 py-3 first:border-r">
       <div className="label-mono text-[10.5px] text-muted-foreground">{label}</div>
-      <div className="num mt-1 text-[22px] leading-7 tracking-[-0.01em]">{value}</div>
+      <div className="num mt-1 text-[26px] leading-8 tracking-[-0.02em]">{value}</div>
     </div>
   );
   return tip ? <Tip content={tip}>{body}</Tip> : body;
+}
+
+/** One line of the plan: a mono label on the left, its value on the right. */
+function PlanRow({ label, tip, children }: { label: string; tip?: string; children: React.ReactNode }) {
+  const row = (
+    <div className="flex items-start justify-between gap-4 border-b border-frame pb-2">
+      <dt className="label-mono shrink-0 pt-0.5 text-muted-foreground">{label}</dt>
+      <dd className="num grid min-w-0 gap-1 text-right">{children}</dd>
+    </div>
+  );
+  return tip ? <Tip content={tip}>{row}</Tip> : row;
 }

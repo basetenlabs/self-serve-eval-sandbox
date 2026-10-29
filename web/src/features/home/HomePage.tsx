@@ -11,10 +11,10 @@ import { Readiness } from "./Readiness";
 import { RunsList } from "./RunsList";
 
 const STEPS = [
-  { n: "01", title: "Pick PRs", text: "Paste pull request links, or take a repository's latest merges that came with tests." },
-  { n: "02", title: "Check", text: "Keep a PR only if its tests fail before the change and pass after." },
-  { n: "03", title: "Models code", text: "Each model gets the PR's request in its own sandbox, without the answer." },
-  { n: "04", title: "Grade", text: "Hidden tests run in a fresh sandbox, then a panel of AI judges reviews the change." },
+  { n: "01", title: "Pick PRs", text: "Merged pull requests that came with tests." },
+  { n: "02", title: "Check", text: "A PR's tests must fail before its change and pass after." },
+  { n: "03", title: "Models code", text: "Each model gets only the request, in its own sandbox." },
+  { n: "04", title: "Grade", text: "Hidden tests in a fresh sandbox, then AI judges." },
 ];
 
 // Back from adding repositories to the GitHub App, in a tab GitHub opened: install, update, or request
@@ -34,23 +34,23 @@ export function HomePage({ state, error, go, hurry }: {
   return (
     <>
       {installed && <InstalledNote action={installed} onClose={() => setInstalled(null)} />}
-      <section className="px-4 pt-12 pb-10 sm:px-6 md:px-8 md:pt-16">
+      <section className="px-4 pt-8 pb-8 sm:px-6 md:px-8 md:pt-12">
         <Eyebrow parts={["Baseten", "Open-model coding eval"]} />
-        <h1 className="mt-5 max-w-[17ch] text-[40px] leading-[1.05] font-normal tracking-[-0.035em] text-balance sm:text-[56px]">
+        <h1 className="mt-4 max-w-[24ch] text-[32px] leading-[1.08] font-normal tracking-[-0.03em] text-balance sm:text-[44px]">
           Can an open model do your team's coding work?
         </h1>
-        <p className="mt-5 max-w-[60ch] text-[17px] leading-relaxed text-muted-foreground">
-          Replay real merged pull requests against open models on Baseten and a closed model side by side.
-          Every attempt runs in its own Blaxel sandbox; you get solve rate, cost and time per task, and every step each agent took.
+        <p className="mt-4 max-w-[62ch] text-[16px] leading-relaxed text-muted-foreground">
+          Replay your team's merged pull requests with open models on Baseten and a closed model, side by side, each attempt in its own Blaxel sandbox.
+          See what each one solves, what it costs and how long it takes.
         </p>
-        <ol className="mt-10 grid gap-x-6 gap-y-8 sm:grid-cols-2 lg:grid-cols-4" aria-label="How a run works">
+        <ol className="mt-8 grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4" aria-label="How a run works">
           {STEPS.map((s, i) => (
-            <li key={s.n} className="relative column-rule pt-3">
+            <li key={s.n} className="relative column-rule pt-2.5">
               <div className="flex items-center justify-between">
                 <span className="label-mono text-foreground">{s.n} · {s.title}</span>
                 {i < STEPS.length - 1 && <ArrowRightIcon className="hidden size-4 text-line lg:block" aria-hidden />}
               </div>
-              <p className="mt-2 text-[14px] leading-snug text-muted-foreground">{s.text}</p>
+              <p className="mt-1.5 text-[13px] leading-snug text-muted-foreground max-sm:hidden">{s.text}</p>
             </li>
           ))}
         </ol>
@@ -58,7 +58,7 @@ export function HomePage({ state, error, go, hurry }: {
 
       {live && <LiveBanner run={live} />}
 
-      <section className="grid border-t border-dashed border-rule lg:grid-cols-[minmax(0,1fr)_340px]">
+      <section className="border-t border-dashed border-rule">
         <div id="new-run" className="min-w-0 scroll-mt-20 px-4 py-10 sm:px-6 md:px-8">
           <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
@@ -73,13 +73,8 @@ export function HomePage({ state, error, go, hurry }: {
               </Tip>
             )}
           </div>
-          {state ? <NewRun key={form} state={state} go={go} hurry={hurry} /> : <ComposerSkeleton error={error} />}
+          {state ? <NewRun key={form} state={state} go={go} hurry={hurry} aside={<Readiness state={state} />} /> : <ComposerSkeleton error={error} />}
         </div>
-        <aside className="border-t border-dashed border-rule px-4 py-10 sm:px-6 md:px-8 lg:border-t-0 lg:border-l">
-          <div className="lg:sticky lg:top-24">
-            {state ? <Readiness state={state} /> : <div className="h-72 animate-pulse bg-node" />}
-          </div>
-        </aside>
       </section>
 
       <section className="border-t border-dashed border-rule px-4 py-10 sm:px-6 md:px-8" aria-labelledby="runs-heading">
@@ -167,10 +162,15 @@ function ComposerSkeleton({ error }: { error: string | null }) {
     );
   }
   return (
-    <div className="grid gap-10" aria-busy>
-      {[132, 120, 96].map((h, i) => (
-        <div key={i} className="column-rule pt-14"><div className="animate-pulse bg-node" style={{ height: h }} /></div>
-      ))}
+    <div className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-0" aria-busy>
+      <div className="grid gap-10 lg:pr-8">
+        {[132, 280].map((h, i) => (
+          <div key={i} className="column-rule pt-14"><div className="animate-pulse bg-node" style={{ height: h }} /></div>
+        ))}
+      </div>
+      <div className="lg:border-l lg:border-dashed lg:border-rule lg:pl-8">
+        <div className="column-rule pt-14"><div className="h-56 animate-pulse bg-node" /></div>
+      </div>
     </div>
   );
 }
