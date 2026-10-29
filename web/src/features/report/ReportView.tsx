@@ -7,7 +7,6 @@ import type { Report } from "@/lib/types";
 import { HeadToHead } from "./HeadToHead";
 import { Leaderboard } from "./Leaderboard";
 import { Scatter } from "./Scatter";
-import { Slices } from "./Slices";
 import { TaskSheet } from "./TaskSheet";
 import { TasksTable, useTrialsFor } from "./TasksTable";
 
@@ -68,7 +67,7 @@ export function Banners({ report }: { report: Report }) {
   );
 }
 
-/** Results: the head-to-head, every model, quality against cost and the breakdown by task type.
+/** Results: the head-to-head, every model, and quality against cost.
  *  `onOpen` opens a PR's attempts from the head-to-head. */
 export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: string) => void }) {
   const { S, colors, ranked, t } = useReportModel(report);
@@ -84,7 +83,6 @@ export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: 
       <HeadToHead t={t} S={S} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen} />
       <Leaderboard report={report} ranked={ranked} colors={colors} />
       <Scatter models={ranked} S={S} colors={colors} />
-      <Slices slices={report.slices} ranked={ranked} colors={colors} />
     </div>
   );
 }
