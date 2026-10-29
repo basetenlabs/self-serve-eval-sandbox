@@ -1,10 +1,9 @@
-# Vendored from basetenlabs/harness-evals proxy/proxy.py at 6fb9b61 (MIT, see that repo's LICENSE).
-# Keep in sync by copying; local changes belong upstream first.
+# Vendored: change it upstream first, then copy it here.
 """Translating proxy: whatever shape a coding CLI speaks -> Baseten Chat Completions.
 
 Chat Completions is the only Baseten endpoint that honors reasoning effort, so every request is converted to that
 shape, the forced effort is set on it, and the answer is converted back. One place owns effort instead of three
-per-CLI ceilings. See the root CLAUDE.md for the evidence behind that.
+per-CLI ceilings.
 
 Runs as a compose sidecar in every trial (proxy/compose.yaml). Stdlib only: the container is a stock
 python:3.12-slim with no pip step, and the source arrives as one base64 env var. Flags and env vars are
