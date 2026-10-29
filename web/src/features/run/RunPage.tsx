@@ -97,7 +97,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
     go({ page: "home" });
     requestAnimationFrame(() => document.getElementById("new-run")?.scrollIntoView());
   };
-  const vs = run.models.map((m) => m.label).join(" vs ");
+  const vs = ordered(run.models).map((m) => m.label).join(" vs ");
   const reportUrl = run.report ? `/${run.report.replace(/^\//, "")}` : null;
   return (
     <section className="px-4 pt-10 pb-8 sm:px-6 md:px-8">
