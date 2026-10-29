@@ -11,8 +11,11 @@ type Poll = { pending?: boolean; interval?: number; login?: string | null; error
 
 const link = "font-medium underline decoration-rule underline-offset-4 transition-colors hover:decoration-foreground";
 
-/** Whose GitHub reads your repositories. Hosted, you sign in with GitHub's device code; locally, the `gh` CLI's login. */
-export function GitHubAccount({ github, checks, onChange }: { github: Account; checks: Checks; onChange: () => void }) {
+/** Whose GitHub reads your repositories. Hosted, you sign in with GitHub's device code; locally, the `gh` CLI's login.
+ * `ref` lets a button elsewhere on the form start the same sign-in. */
+export function GitHubAccount({ github, checks, onChange, ref }: {
+  github: Account; checks: Checks; onChange: () => void; ref?: React.Ref<{ signIn: () => void }>;
+}) {
   const toast = useToast();
   const [device, setDevice] = React.useState<Device | null>(github.device ?? null); // a reload picks the code back up
   const [busy, setBusy] = React.useState(false);
@@ -49,6 +52,7 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
   }, [device, toast]);
 
   async function signIn() {
+    if (device) return;
     setBusy(true);
     setError(null);
     const res = await post<Device & { error?: string }>("/api/github/device");
@@ -69,6 +73,8 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
     void post("/api/github/sign-out"); // drops the waiting code too, so a reload doesn't bring it back
   }
 
+  React.useImperativeHandle(ref, () => ({ signIn: () => void signIn() }));
+
   const copy = () => {
     if (!device) return;
     void navigator.clipboard?.writeText(device.user_code).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); });
@@ -83,18 +89,20 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
   } else if (login !== null) {
     body = (
       <>
-        <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
-          <CheckIcon className="size-3.5 shrink-0" />
-          <span className="truncate">
-            Signed in{login ? <> as <b className="font-medium">@{login}</b></> : ""}
-            <span className="text-muted-foreground"> · your private repositories and their runs stay yours</span>
+        <span className="grid min-w-0 flex-1 gap-0.5">
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-[15px]">
+            <CheckIcon className="size-4 shrink-0" />
+            <span className="truncate">Signed in with GitHub{login ? <> as <b className="font-medium">@{login}</b></> : ""}</span>
+          </span>
+          <span className="text-muted-foreground">
+            {github.install ? "Add your private repos to Baseten Eval Sandbox on GitHub so the eval can read them. " : ""}Only you see runs on your private repos.
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-4">
           {github.install && (
-            <a className={cn(link, "inline-flex items-center gap-1")} href={github.install} target="_blank" rel="noreferrer">
-              Repository access <ExternalLinkIcon className="size-3.5" />
-            </a>
+            <Button asChild variant="outline">
+              <a href={github.install} target="_blank" rel="noreferrer">Add repos on GitHub <ExternalLinkIcon /></a>
+            </Button>
           )}
           <button type="button" className={cn(link, "text-muted-foreground hover:text-foreground")} onClick={signOut}>Sign out</button>
         </span>
@@ -132,10 +140,11 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
   } else {
     body = (
       <>
-        <span className="min-w-0 flex-1">
-          Private repository? <span className="text-muted-foreground">Sign in so the page can read it. Public ones work without it.</span>
+        <span className="grid min-w-0 flex-1 gap-0.5">
+          <span className="text-[15px] font-medium">Your own repos: sign in with GitHub so the eval can read them.</span>
+          <span className="text-muted-foreground">Public repos work without it. Only you see runs on your private repos.</span>
         </span>
-        <Button type="button" size="sm" variant="outline" onClick={signIn} disabled={busy}>
+        <Button type="button" onClick={signIn} disabled={busy}>
           {busy ? <LoaderIcon className="animate-spin" /> : <GitHubMark />} {busy ? "Asking GitHub" : "Sign in with GitHub"}
         </Button>
       </>
@@ -143,8 +152,8 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
   }
   return (
     <div className="grid gap-2">
-      <div className={cn("flex min-h-9 flex-wrap gap-x-3 gap-y-2 text-[13px]", device ? "items-start py-1" : "items-center")}>
-        <GitHubMark className={cn("size-4 shrink-0", device && "mt-0.5")} />
+      <div className={cn("flex min-h-9 flex-wrap gap-x-3 gap-y-2 text-[13px]", device ? "items-start py-1" : "items-center", github.sign_in && !device && "py-2")}>
+        <GitHubMark className={cn("shrink-0", github.sign_in && !device ? "size-5" : "size-4", device && "mt-0.5")} />
         {body}
       </div>
       {error && <p role="alert" className="pl-7 text-[12.5px] text-[#AC0EB2] dark:text-[#FFA9FD]">{error}</p>}
@@ -152,7 +161,7 @@ export function GitHubAccount({ github, checks, onChange }: { github: Account; c
   );
 }
 
-function GitHubMark({ className }: { className?: string }) {
+export function GitHubMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 16 16" aria-hidden className={className} fill="currentColor">
       <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />

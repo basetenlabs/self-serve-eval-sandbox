@@ -15,7 +15,7 @@ import { type Route, useFocusCount, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
 import type { Again, AppState, CatalogModel, Favorite, PullList, RepoInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { GitHubAccount } from "./GitHubAccount";
+import { GitHubAccount, GitHubMark } from "./GitHubAccount";
 import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPicker";
 
 type Source = "quick" | "repo" | "suite";
@@ -49,6 +49,8 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const form = React.useRef<HTMLFormElement>(null);
+  const gitHubSignIn = React.useRef<{ signIn: () => void }>(null);
+  const signedOut = state.github.sign_in && !state.github.login;
   const [favorites, save] = useFavorites(state.favorites);
   const onFavorite: OnFavorite = (pull, saved) => {
     void save(pull, saved).then((problem) => problem && toast("Couldn't save it", { body: problem, tone: "danger" }));
@@ -197,7 +199,8 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="Fast"
               text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
-              text="Paste pull request links, or pick from a repository's latest merges." />
+              text={signedOut ? "Public repos work as they are. Your private repos need Sign in with GitHub."
+                : "Paste pull request links, or pick from a repository's latest merges."} />
             <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
               text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
           </RadioGroup.Root>
@@ -227,7 +230,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
           {source === "repo" && (
             <div className="mt-4 grid animate-enter grid-cols-1 gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
               <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
-                <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
+                <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
               </div>
               <div className="grid grid-cols-1 gap-1.5">
                 <Label htmlFor="pulls">Repository or pull request links</Label>
@@ -244,7 +247,8 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
                     )}
                   />
                 </div>
-                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} />
+                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in}
+                  onSignIn={signedOut ? () => gitHubSignIn.current?.signIn() : undefined} />
               </div>
 
               {(mode === "empty" || mode === "pasted") && (
@@ -402,8 +406,9 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
 }
 
 /** What the box understood: a repository and whether it's ready, or how many pull requests. */
-function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn }: {
+function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, onSignIn }: {
   id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
+  onSignIn?: () => void;
 }) {
   const danger = "text-[#AC0EB2] dark:text-[#FFA9FD]";
   let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{signIn ? "" : " Private ones work when your GitHub login can read them."}</span>;
@@ -421,6 +426,13 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn }: 
     );
   } else if (mode === "repo") {
     if (looking) body = <span className="inline-flex items-center gap-1.5 text-muted-foreground"><LoaderIcon className="size-3.5 animate-spin" /> Looking it up</span>;
+    // Signed out, a repository the page can't read is most likely private: say so, with the sign-in right here.
+    else if (info?.error && info.repo && onSignIn) body = (
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className={danger}>Can't read <span className="font-mono text-[12px]">{info.repo}</span> without GitHub access. If it's one of your private repos, sign in with GitHub so the eval can read it.</span>
+        <Button type="button" size="sm" variant="outline" onClick={onSignIn}><GitHubMark />Sign in with GitHub</Button>
+      </span>
+    );
     else if (info?.error) body = (
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <span className={danger}>{info.error}</span>
