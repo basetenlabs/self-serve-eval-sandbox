@@ -46,6 +46,10 @@ and npm pointed at it once per machine, never written into a file:
 `npm config set '//npm.pkg.github.com/:_authToken' '${NODE_AUTH_TOKEN}'`. The release carries the
 installed package, so the sandbox needs no token.
 
+To try a release before the live page gets it, deploy a copy beside it:
+`.venv/bin/python hosted/deploy.py --name pr-eval-staging` has its own sandbox, volume, sign-in and
+preview (`staging-<workspace>.preview.bl.run`); `--name pr-eval-staging --delete --volume` removes it.
+
 `deploy.py` reads the keys from the macOS Keychain or the environment (the list is at the top of
 the file), creates the volume, sandbox and public preview when they don't exist yet, uploads the
 app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
