@@ -44,6 +44,8 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   // An open task lives in the address, so a link can point straight at one attempt's trace.
   const open = (taskId: string | null) => go({ page: "run", id, tab: current, task: taskId ?? undefined }, true);
   const finished = report ? new Set(report.trials.map((t) => t.task_id)) : null;
+  const board = <TabsTrigger value="board">{active ? "Live" : "Board"}</TabsTrigger>;
+  const results = <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>;
   return (
     <>
       <RunHeader run={run} state={state} sentence={report ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} go={go} />
@@ -54,8 +56,8 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
       <section className="border-t border-dashed border-rule px-4 pt-2 pb-16 sm:px-6 md:px-8">
         <Tabs value={current} onValueChange={(v) => go({ page: "run", id, tab: v }, true)}>
           <TabsList aria-label="Run views" className="mb-10">
-            <TabsTrigger value="board">{active ? "Live" : "Board"}</TabsTrigger>
-            <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>
+            {/* A finished run opens on its results, so they come first; a live run leads with the board. */}
+            {run.report ? <>{results}{board}</> : <>{board}{results}</>}
             <TabsTrigger value="tasks" disabled={!run.report}>Tasks{report ? <span className="text-muted-foreground">{report.tasks.length}</span> : null}</TabsTrigger>
           </TabsList>
           <TabsContent value="board">
