@@ -837,6 +837,8 @@ class AppTest(unittest.TestCase):
                 {"outcome": "solved", "started_at": "2026-10-23T18:00:00+00:00", "finished_at": "2026-10-23T18:02:05+00:00",
                  "agent": {"cost_usd": 0.5}, "tests": {"passed": True}, "judge": {"verdict": "pass"}}))
             (tasks_dir / "o__r-3" / "validation" / "stage.json").write_text(json.dumps({"stage": "base", "run_id": "quick-1"}))
+            (job / "trials" / "o__r-3__m__1").mkdir(parents=True)  # set up while its task is checked
+            (job / "trials" / "o__r-3__m__1" / "stage.json").write_text(json.dumps({"stage": "setup", "at": "x"}))
             (job / "run.json").write_text(json.dumps({
                 "run_id": "quick-1", "request": {"quick": True}, "candidates": ["o__r-1", "o__r-2", "o__r-3"],
                 "tasks": ["o__r-1", "o__r-2"], "tasks_dir": str(tasks_dir), "models": [{"key": "m", "label": "M"}],
@@ -851,8 +853,9 @@ class AppTest(unittest.TestCase):
         self.assertEqual(rows["o__r-1"]["title"], "Fix 1")
         self.assertEqual(rows["o__r-1"]["cells"][0]["stage"], "agent")
         self.assertEqual((rows["o__r-2"]["cells"][0]["stage"], rows["o__r-2"]["cells"][0]["seconds"]), ("solved", 125))
-        self.assertEqual((rows["o__r-3"]["check"]["stage"], rows["o__r-3"]["cells"][0]["stage"]), ("base", "waiting"))
-        self.assertEqual(board["sandboxes"], app.SANDBOXES["agent"] + 1)  # the agent's two, and the check's one
+        self.assertEqual((rows["o__r-3"]["check"]["stage"], rows["o__r-3"]["cells"][0]["stage"]), ("base", "setup"))
+        # the agent's two, the check's one, and the one set up beside the check with no verifier yet
+        self.assertEqual(board["sandboxes"], app.SANDBOXES["agent"] + 1 + 1)
 
     def test_run_again_brings_back_the_same_prs_models_and_commands(self):
         models = [{"key": "a", "label": "A", "model": "org/A-1017"}, {"key": "b", "label": "B"}]
