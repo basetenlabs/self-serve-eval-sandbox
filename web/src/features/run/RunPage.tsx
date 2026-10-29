@@ -50,7 +50,7 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   const results = <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>;
   return (
     <>
-      <RunHeader run={run} state={state} sentence={report ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} go={go} />
+      <RunHeader run={run} state={state} sentence={report?.trials.length ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} go={go} />
       <section className="border-t border-dashed border-rule px-4 py-8 sm:px-6 md:px-8">
         <Pipeline run={run} />
         <RunNotes run={run} />

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Eyebrow } from "@/components/brand";
+import { Empty, Eyebrow } from "@/components/brand";
 import { day, plural } from "@/lib/format";
 import { ordered, palette } from "@/lib/models";
 import { rank, takeaway } from "@/lib/stats";
@@ -70,6 +70,12 @@ export function Banners({ report }: { report: Report }) {
 /** Results: the head-to-head, every model, quality against cost and the breakdown by task type. */
 export function Results({ report }: { report: Report }) {
   const { S, colors, ranked, t } = useReportModel(report);
+  // Nothing to compare until an attempt finishes, e.g. a run where no PR passed the check.
+  if (!report.trials.length) {
+    return report.complete
+      ? <Empty title="No attempts ran">No model attempted a task in this run, so there's nothing to compare.</Empty>
+      : <Empty title="No results yet">Results appear here as attempts finish.</Empty>;
+  }
   return (
     <div className="grid gap-14">
       <Banners report={report} />
