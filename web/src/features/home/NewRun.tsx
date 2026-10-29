@@ -194,7 +194,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
       <div className="grid min-w-0 grid-cols-1 content-start gap-10 lg:pr-8">
         <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
           <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
-            <SourceTile value="quick" title="Quick sample" figure={`${state.quick.tasks} PRs`} tag="Fast"
+            <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="Fast"
               text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
               text="Paste pull request links, or pick from a repository's latest merges." />

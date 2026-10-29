@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Column, LiveDot } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
-import { clock, usd } from "@/lib/format";
+import { clock, plural, usd } from "@/lib/format";
 import type { Swatch } from "@/lib/models";
 import { CHECK, failReason, isLive, prName, STAGE, type Tone } from "@/lib/stages";
 import type { Run } from "@/lib/types";
@@ -49,7 +49,7 @@ export function useActivity(run: Run, labels: Record<string, string>) {
     }
     if (!primed.current) {
       const going = b.rows.flatMap((row) => row.cells).filter((c) => isLive(c.stage)).length;
-      events.push({ id: next++, at: now, tone: "idle", who: "Watching", text: `${b.rows.length} PRs, ${going} attempts in flight` });
+      events.push({ id: next++, at: now, tone: "idle", who: "Watching", text: `${plural(b.rows.length, "PR")}, ${plural(going, "attempt")} in flight` });
       primed.current = true;
     }
     if (events.length) setFeed((f) => [...events.reverse(), ...f].slice(0, 80));
