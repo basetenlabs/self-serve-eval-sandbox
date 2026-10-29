@@ -91,9 +91,28 @@ export function HomePage({ state, error, go, hurry }: {
           {state && state.runs.length > 0 && <span className="label-mono text-muted-foreground">{plural(state.runs.length, "run")}</span>}
         </div>
         {!state ? <div className="h-40 animate-pulse bg-node" />
-          : state.runs.length ? <RunsList runs={state.runs} go={go} />
+          : state.runs.length ? <History runs={state.runs} go={go} />
             : <Empty title="No runs yet">Start the quick sample above. Results land in a few minutes.</Empty>}
       </section>
+    </>
+  );
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Every run, with the ones that failed or stopped more than a day ago folded away. */
+function History({ runs, go }: { runs: Run[]; go: (r: Route) => void }) {
+  const [all, setAll] = React.useState(false);
+  const old = (r: Run) => (r.phase === "failed" || r.phase === "stopped") && !!r.started && Date.now() - Date.parse(r.started) > DAY;
+  const hidden = runs.filter(old).length;
+  return (
+    <>
+      <RunsList runs={all ? runs : runs.filter((r) => !old(r))} go={go} />
+      {hidden > 0 && (
+        <Button type="button" variant="ghost" size="sm" className="mt-2" onClick={() => setAll(!all)}>
+          {all ? "Hide" : "Show"} {plural(hidden, "older failed or stopped run")}
+        </Button>
+      )}
     </>
   );
 }

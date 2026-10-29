@@ -21,6 +21,7 @@ import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPic
 type Source = "quick" | "repo" | "suite";
 type Pick = "latest" | "choose";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
+type Commands = { setup: string; test: string };
 const LIMITS = [5, 10, 20, 40];
 const QUICK_MINUTES = 8; // every quick-sample attempt starts at once; the slowest attempt sets the end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -72,6 +73,17 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const mode = source === "quick" ? "quick" : source === "suite" ? "suite" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
   const repo = mode === "repo" ? pasted.repos[0] : null;
 
+  // The install and test commands last started with each repository come back with it.
+  const [kept, setKept] = useStored<Record<string, Commands>>("pr-eval-commands", {});
+  const commandsFor = (repo ?? (mode === "pasted" && pastedRepos.length === 1 ? pastedRepos[0] : "")).toLowerCase();
+  const first = React.useRef(true);
+  React.useEffect(() => {
+    const handedNow = first.current && !!(handed.setup || handed.test);
+    first.current = false;
+    const k = commandsFor && kept[commandsFor];
+    if (k && !handedNow) { setSetup(k.setup); setTest(k.test); }
+  }, [commandsFor]);
+
   // Look the repository up as it's typed: language, whether it has default commands, access. If it
   // couldn't be read, look again on coming back to this tab (say, from adding it to the GitHub App).
   const refocused = useFocusCount(!!info?.install);
@@ -112,7 +124,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
   // A run takes at least its slowest attempt, however many go at once.
-  const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(5, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60 / 5) * 5);
+  const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(1, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60));
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
@@ -139,6 +151,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
       setError(res.error ?? "The run didn't start.");
       return;
     }
+    if (commandsFor && mode !== "suite" && (setup.trim() || test.trim())) setKept({ ...kept, [commandsFor]: { setup, test } });
     toast("Run started", { body: `${attempts} attempts on ${plural(prs, "pull request")}.` });
     hurry();
     go({ page: "run", id: res.id });
@@ -226,7 +239,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               <SavedPulls favorites={mode === "pasted" ? favorites.filter((f) => !inBox(f)) : favorites} picked={inBox} onPick={pickSaved} onFavorite={onFavorite} />
             )}
 
-            {mode === "repo" && (
+            {mode === "repo" && !info?.error && (
               <div className="grid grid-cols-1 gap-4">
                 <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
                   <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
@@ -338,7 +351,7 @@ export function fillAgain(again: Again) {
   } catch { /* private window: the form stays as it was */ }
 }
 
-function takeCommands(): { setup: string; test: string } {
+function takeCommands(): Commands {
   try {
     const got = JSON.parse(sessionStorage.getItem(COMMANDS) ?? "{}");
     return { setup: String(got.setup ?? ""), test: String(got.test ?? "") };
@@ -373,7 +386,7 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn }: 
   id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
 }) {
   const danger = "text-[#AC0EB2] dark:text-[#FFA9FD]";
-  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you find and choose. {signIn ? "Private repositories need your GitHub sign-in above." : "Private ones work when your GitHub login can read them."}</span>;
+  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{signIn ? "" : " Private ones work when your GitHub login can read them."}</span>;
   if (mode === "many") body = <span className={danger}>One repository at a time, or paste links to pull requests.</span>;
   else if (mode === "pasted") {
     const n = pullCount(pasted.pulls);
