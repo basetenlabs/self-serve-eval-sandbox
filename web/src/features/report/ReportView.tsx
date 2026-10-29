@@ -49,8 +49,8 @@ export function Banners({ report }: { report: Report }) {
     items.push(["In progress", `${trials.length} of ${expected || "?"} attempts had finished at ${new Date(report.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Results update as attempts finish.`]);
   }
   if (run.note) items.push(["Note", run.note]);
-  if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed. Running pr-eval rejudge on it adds the judge later."]);
-  if (tasks.length < 30) items.push(["Small sample", `${plural(tasks.length, "task")}. Differences of a few points are noise at this size; open a model's row for its 95% range.`]);
+  if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed."]);
+  if (tasks.length < 30) items.push(["Small sample", `${plural(tasks.length, "task")}, so a few points either way is noise. Open a model's row for its 95% range.`]);
   if (!items.length) return null;
   return (
     <div className="grid gap-px bg-frame">
