@@ -32,11 +32,21 @@ export function useRoute(): [Route, (r: Route, replace?: boolean) => void] {
   return [route, go];
 }
 
-// ---------- theme: light is the brand default; dark is remembered per browser ----------
+// ---------- theme: follows the system, like the sign-in page, until someone picks one here ----------
 
 export function useTheme(): ["light" | "dark", () => void] {
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     document.documentElement.classList.contains("dark") ? "dark" : "light");
+  useEffect(() => {
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const follow = () => {
+      try { if (localStorage.getItem("pr-eval-theme")) return; } catch { /* private window */ }
+      document.documentElement.classList.toggle("dark", media.matches);
+      setTheme(media.matches ? "dark" : "light");
+    };
+    media.addEventListener("change", follow);
+    return () => media.removeEventListener("change", follow);
+  }, []);
   const toggle = useCallback(() => {
     setTheme((t) => {
       const next = t === "dark" ? "light" : "dark";
