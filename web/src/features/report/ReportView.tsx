@@ -16,7 +16,7 @@ export function useReportModel(report: Report) {
   return React.useMemo(() => {
     const S = report.summary;
     const models = ordered(report.models);
-    return { S, models, colors: palette(models), ranked: rank(models, S), t: takeaway(models, S) };
+    return { S, models, colors: palette(models), ranked: rank(models, S), t: takeaway(models, S, report) };
   }, [report]);
 }
 
@@ -36,7 +36,8 @@ export function ReportHeader({ report }: { report: Report }) {
   return (
     <header>
       <Eyebrow parts={reportFacts(report)} />
-      <h1 className="mt-5 max-w-[24ch] text-[34px] leading-[1.1] font-normal tracking-[-0.03em] text-balance sm:text-[46px]">{t.sentence}</h1>
+      <h1 className="mt-5 max-w-[24ch] text-[34px] leading-[1.1] font-normal tracking-[-0.03em] text-balance sm:text-[46px]">{t.verdict?.head ?? t.sentence}</h1>
+      {t.verdict?.cost && <p className="mt-4 max-w-[46ch] text-[22px] leading-snug tracking-[-0.01em] text-balance text-muted-foreground">{t.verdict.cost}</p>}
     </header>
   );
 }
@@ -67,8 +68,9 @@ export function Banners({ report }: { report: Report }) {
   );
 }
 
-/** Results: the head-to-head, every model, quality against cost and the breakdown by task type. */
-export function Results({ report }: { report: Report }) {
+/** Results: the head-to-head, every model, quality against cost and the breakdown by task type.
+ *  `onOpen` opens a PR's attempts from the head-to-head. */
+export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: string) => void }) {
   const { S, colors, ranked, t } = useReportModel(report);
   // Nothing to compare until an attempt finishes, e.g. a run where no PR passed the check.
   if (!report.trials.length) {
@@ -79,7 +81,7 @@ export function Results({ report }: { report: Report }) {
   return (
     <div className="grid gap-14">
       <Banners report={report} />
-      <HeadToHead t={t} S={S} />
+      <HeadToHead t={t} S={S} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen} />
       <Leaderboard report={report} ranked={ranked} colors={colors} />
       <Scatter models={ranked} S={S} colors={colors} />
       <Slices slices={report.slices} ranked={ranked} colors={colors} />

@@ -4,7 +4,7 @@ import { Column, Swatch } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { compact, dur, elapsed, pct, usd } from "@/lib/format";
+import { compact, dur, elapsed, pct, plural, usd } from "@/lib/format";
 import { isOpen, type Swatch as SwatchT } from "@/lib/models";
 import { wilson } from "@/lib/stats";
 import type { Model, Report, Summary } from "@/lib/types";
@@ -87,7 +87,7 @@ function Row({ m, rank, s, swatch, leads, judged }: {
           <span className="label-mono mt-1 block text-[10.5px] text-muted-foreground">{isOpen(m) ? "Open · served on Baseten" : "Closed · comparison"}</span>
         </span>
         <ChevronDownIcon className={cn("size-4 justify-self-end text-muted-foreground transition-transform md:order-last", open && "rotate-180")} />
-        <Figure label="Solve rate" lead={leads.rate} value={pct(s.pass_at_1)} note={`${s.solved} / ${s.valid} attempts`}
+        <Figure label="Solve rate" lead={leads.rate} value={pct(s.pass_at_1)} note={`${plural(s.solved, "attempt")} solved`}
           bar={s.pass_at_1 ?? 0} fill={swatch?.fill} />
         <Figure label="Cost per solved" lead={leads.cost} value={usd(s.cost_per_solved)} note={`${usd(s.cost_per_attempt)} per attempt`} />
         <Figure label="Time per task" lead={leads.time} value={dur(s.median_seconds)} note="Median, agent time" />

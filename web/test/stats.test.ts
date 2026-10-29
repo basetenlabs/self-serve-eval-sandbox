@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { palette } from "../src/lib/models";
 import { rank, takeaway, wilson } from "../src/lib/stats";
-import type { Model, Summary } from "../src/lib/types";
+import type { Model, Summary, Task, Trial } from "../src/lib/types";
 
 const s = (pass: number, solved: number, valid: number, cost: number | null, seconds: number | null): Summary => ({
   attempts: valid, valid, invalid: 0, solved, pass_at_1: pass, tasks: valid, tasks_solved: solved, cost_usd: null,
@@ -48,5 +48,50 @@ describe("stats", () => {
     expect(colors.glm.fill).toBe("#19E76E");
     expect(colors.kimi.fill).toBe("#009735");
     expect(colors.sonnet.fill).toBe("#3DA6FF");
+  });
+
+  describe("paired verdict", () => {
+    const tasks: Task[] = Array.from({ length: 10 }, (_, i) => ({ id: `t${i}`, repo: "o/r", pr: i + 1, title: `PR ${i + 1}` }));
+    // Who solved each PR, as [glm, sonnet]: "b" both, "g" only GLM, "s" only Sonnet, "-" neither.
+    const run = (who: string): { tasks: Task[]; trials: Trial[] } => ({
+      tasks,
+      trials: [...who].flatMap((w, i) => [
+        { trial: `g${i}`, task_id: `t${i}`, model: "glm", attempt: 1, outcome: w === "b" || w === "g" ? "solved" : "failed" },
+        { trial: `s${i}`, task_id: `t${i}`, model: "sonnet", attempt: 1, outcome: w === "b" || w === "s" ? "solved" : "failed" },
+      ] as Trial[]),
+    });
+
+    it("says both solved the same PRs and leads with the cost", () => {
+      const S = { glm: s(0.6, 6, 10, 0.1, 100), sonnet: s(0.6, 6, 10, 0.69, 80) };
+      const t = takeaway([glm, sonnet], S, run("bbbbbb----"));
+      expect(t.pairs?.both.length).toBe(6);
+      expect(t.verdict).toEqual({ head: "Both models solved the same 6 PRs.", cost: "GLM 4.6 costs 6.9× less per solved task." });
+      expect(t.sentence).toBe("Both models solved the same 6 PRs. GLM 4.6 costs 6.9× less per solved task.");
+    });
+
+    it("says both solved as many when they solved different PRs", () => {
+      const S = { glm: s(0.6, 6, 10, 0.1, 100), sonnet: s(0.6, 6, 10, 0.1, 80) };
+      const t = takeaway([glm, sonnet], S, run("bbbbbgs---"));
+      expect(t.verdict).toEqual({ head: "Both models solved 6 PRs.", cost: "Both cost about the same per solved task." });
+    });
+
+    it("keeps a small lead too close to call", () => {
+      const S = { glm: s(0.4, 4, 10, 0.1, 100), sonnet: s(0.6, 6, 10, 0.5, 80) };
+      expect(takeaway([glm, sonnet], S, run("bbbbss----")).verdict?.head).toBe("Too close to call: Claude Sonnet solved 6 PRs, GLM 4.6 solved 4.");
+    });
+
+    it("names a clear lead", () => {
+      const S = { glm: s(0, 0, 10, null, 100), sonnet: s(0.6, 6, 10, 0.5, 80) };
+      const t = takeaway([glm, sonnet], S, run("ssssss----"));
+      expect(t.verdict).toEqual({ head: "Claude Sonnet solved 6 PRs, GLM 4.6 solved 0." });
+    });
+
+    it("leaves out PRs without a scored attempt from both", () => {
+      const r = run("bbg-");
+      r.tasks = tasks.slice(0, 4);
+      r.trials = r.trials.map((x) => (x.task_id === "t3" && x.model === "glm" ? { ...x, outcome: "invalid" } : x));
+      const p = takeaway([glm, sonnet], { glm: s(0.7, 2, 3, 0.1, 1), sonnet: s(0.5, 2, 4, 0.1, 1) }, r).pairs!;
+      expect([p.n, p.both.length, p.open.length, p.unscored]).toEqual([3, 2, 1, 1]);
+    });
   });
 });
