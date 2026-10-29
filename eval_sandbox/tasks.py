@@ -482,7 +482,8 @@ def browse(repo: str, numbers: list[int] | None = None, count: int = 30, token: 
                 "lines": sum(f["lines"] for f in files), "tests": sum(f["role"] == "test" for f in files),
                 "why": why, "maintenance": bool(MAINTENANCE.search(title))}
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # Each answer takes GitHub about half a second: 30 pull requests' files take 1.0 s 16 at a time, 2.0 s 8 at a time.
+    with ThreadPoolExecutor(max_workers=16) as pool:
         if numbers:
             prs = list(pool.map(fetch, numbers))
         else:
