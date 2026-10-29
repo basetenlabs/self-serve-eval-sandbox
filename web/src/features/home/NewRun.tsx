@@ -248,7 +248,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             )}
 
             {mode === "pasted" && (
-              <PastedPulls pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull}
+              <PastedPulls key={github ?? ""} pulls={pasted.pulls} onChecked={(r, list) => setChecked((c) => (c[r] === list ? c : { ...c, [r]: list }))} onRemove={removePull}
                 favorites={favorites} onFavorite={onFavorite} />
             )}
 
