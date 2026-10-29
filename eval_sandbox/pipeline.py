@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -160,11 +161,13 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
     attempts = job.meta.get("attempts", 1)
+    asking = None
     try:
         restore_execution(job.meta, settings)
         if job.meta.get("tasks") and job.meta.get("checked", True):  # resumed after the check: keep the same tasks
             selected = tasks.discover(tasks_dir, job.meta["tasks"])
             settings.image = prepare_image(job, settings.image)
+            asking = note_harness_version(job, settings)
             if not skip_check and len(check(job, selected, settings)) != len(selected):
                 raise SystemExit("The original task set no longer passes validation; start a new run.")
             start_running(job, models, settings)
@@ -180,12 +183,16 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
                     raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
                 job.meta["candidates"] = [t.id for t in candidates]
             settings.image = prepare_image(job, settings.image)
+            asking = note_harness_version(job, settings)
             if skip_check:
                 job.meta.update(tasks=[t.id for t in candidates], checked=True)
                 start_running(job, models, settings)
                 runner.run(candidates, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
             else:
                 check_and_run(job, candidates, models, settings)
+        if asking:
+            asking.join(120)
+            job.save()
         path = report.build(job.path)
         lost = runner.lost_trials(job.path)
         job.status("done", f"Finished. Report: {path}" + (
@@ -204,25 +211,48 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     except Exception as exc:
         job.status("failed", f"{type(exc).__name__}: {exc}")
         raise
+    finally:
+        if asking:  # it deletes its sandbox when it's done, however the run ended
+            asking.join(120)
 
 
 def start_running(job: Job, models: list[config.Model], settings: runner.Settings) -> None:
-    note_harness_version(job, settings)
     attempts = job.meta.get("attempts", 1)
     job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models"
                           + (f" x {attempts} attempts" if attempts > 1 else ""))
     report.build(job.path)
 
 
-def note_harness_version(job: Job, settings: runner.Settings) -> None:
-    job.meta["harness_version"] = (job.meta.get("harness_version")
-                                   or image_claude_version(settings.image, settings.region, job.id))
+def note_harness_version(job: Job, settings: runner.Settings) -> threading.Thread | None:
+    """The image's Claude Code version, for the report. An image's tag names its contents, so an earlier
+    run on it knows the version; otherwise a sandbox asks the image beside the run's own work, so the
+    first check doesn't wait for one. Join the thread this returns before building the final report."""
+    if job.meta.get("harness_version"):
+        return None
+    if known := earlier_harness_version(job.path.parent, settings.image):
+        job.meta["harness_version"] = known
+        return None
+    job.meta.setdefault("harness_version", None)  # saving meanwhile never sees the keys change
+    asking = threading.Thread(target=lambda: job.meta.update(
+        harness_version=image_claude_version(settings.image, settings.region, job.id)), daemon=True)
+    asking.start()
+    return asking
+
+
+def earlier_harness_version(jobs_dir: Path, image: str) -> str | None:
+    for path in jobs_dir.glob("*/run.json"):
+        try:
+            meta = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if meta.get("image") == image and meta.get("harness_version"):
+            return meta["harness_version"]
+    return None
 
 
 def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Model],
                   settings: runner.Settings) -> None:
     """Check the pull requests, and run the models on each one as soon as it passes."""
-    note_harness_version(job, settings)
     job.meta["checked"] = False
     job.meta.setdefault("tasks", [])
     job.status("checking", f"Checking {len(candidates)} pull requests: each PR's tests have to fail "

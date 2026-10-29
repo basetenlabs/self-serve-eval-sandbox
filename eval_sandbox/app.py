@@ -94,8 +94,10 @@ class App:
         self.children: dict[str, subprocess.Popen] = {}  # runs started here, so finished ones are reaped
         self.lock = threading.RLock()  # one start or resume at a time, so two tabs can't start two runs
         self.checked: tuple[float, dict] = (0.0, {})
+        self.checking = threading.Lock()  # one refresh of the remote checks at a time
         self.task_info: dict[Path, dict] = {}
         self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
+        self.repos: dict[str, tuple[float, dict]] = {}  # GitHub's answer about each repository, kept a minute
         self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
         self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
         self.claims: dict[str, set[str] | None] = {}  # repositories of each run started here, before its run.json
@@ -163,27 +165,41 @@ class App:
                 "spent_total": spent}
 
     def checks(self, judge: config.Panel) -> dict:
-        """Dedicated Blaxel workspace, build CLI and GitHub; cache remote checks briefly."""
+        """Dedicated Blaxel workspace, build CLI and GitHub. The remote checks take seconds, so only the
+        first waits for them: after that the page gets the last answer, and one older than 15 seconds
+        is checked again in the background."""
         when, cached = self.checked
-        if time.monotonic() - when > 15:
-            problem = None
-            image = False
-            bl_cli = bool(shutil.which("bl"))
-            try:
-                runtime.check_connection()
-                image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
-            except RuntimeError as exc:
-                problem = str(exc)
-            gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
-            try:
-                gh_login = tasks.gh("user").get("login") if gh else None
-            except (RuntimeError, SystemExit, subprocess.SubprocessError):
-                gh_login = None
-            cached = {"blaxel": problem is None, "blaxel_problem": problem,
-                      "bl_cli": bl_cli, "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
-            self.checked = (time.monotonic(), cached)
+        if not cached:
+            with self.checking:
+                cached = self.checked[1] or self.check(judge)
+        elif time.monotonic() - when > 15 and self.checking.acquire(blocking=False):
+            def refresh():
+                try:
+                    self.check(judge)
+                finally:
+                    self.checking.release()
+            threading.Thread(target=refresh, daemon=True).start()
         return {**cached, "judge": {"label": judge.label, "chair": judge.chair.name if judge.chair else None,
                                     "effort": judge.judges[0].effort, "ok": not cached["judge"], "problem": cached["judge"]}}
+
+    def check(self, judge: config.Panel) -> dict:
+        problem = None
+        image = False
+        bl_cli = bool(shutil.which("bl"))
+        try:
+            runtime.check_connection()
+            image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
+        except RuntimeError as exc:
+            problem = str(exc)
+        gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
+        try:
+            gh_login = tasks.gh("user").get("login") if gh else None
+        except (RuntimeError, SystemExit, subprocess.SubprocessError):
+            gh_login = None
+        checked = {"blaxel": problem is None, "blaxel_problem": problem,
+                   "bl_cli": bl_cli, "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
+        self.checked = (time.monotonic(), checked)
+        return checked
 
     def describe(self, job_dir: Path) -> dict | None:
         log = job_dir / "log.txt"
@@ -323,16 +339,23 @@ class App:
         if not repo:
             return {"error": "Use owner/repo or a GitHub link."}
         token = self.token(user)
-        try:
-            data = tasks.gh(f"repos/{repo}", token)
-        except (RuntimeError, SystemExit) as exc:
-            if token and "HTTP 401" in str(exc):  # their sign-in ran out, or they revoked it on GitHub
-                self.github.pop(user, None)
-                return {"repo": repo, "error": "Your GitHub sign-in ran out. Sign in with GitHub again."}
-            if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
-                return {"repo": repo, "install": install_url(),
-                        "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
-            return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
+        # The page asks about a repository several times as it's picked (its pull requests, the saved
+        # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept: after
+        # adding the repository to the GitHub App, the person comes back and the page looks again.
+        key = f"{user if token else ''}|{repo.lower()}"
+        when, data = self.repos.get(key, (0.0, None))
+        if not data or time.monotonic() - when > 60:
+            try:
+                data = tasks.gh(f"repos/{repo}", token)
+            except (RuntimeError, SystemExit) as exc:
+                if token and "HTTP 401" in str(exc):  # their sign-in ran out, or they revoked it on GitHub
+                    self.github.pop(user, None)
+                    return {"repo": repo, "error": "Your GitHub sign-in ran out. Sign in with GitHub again."}
+                if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
+                    return {"repo": repo, "install": install_url(),
+                            "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
+                return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
+            self.repos[key] = (time.monotonic(), data)
         # The hosted page's own GitHub login is shared by everyone signed in: it never reads
         # private code. A private repository needs the visitor's own GitHub sign-in.
         if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") and not token:
@@ -349,16 +372,16 @@ class App:
     def pulls(self, text: str, numbers: str = "", count: str = "", words: str = "", user: str | None = None) -> dict:
         """Pull requests in a repository and which can be tasks: these numbers, the merged ones GitHub
         finds for these words, or the latest `count` merged."""
-        info = self.repo_info(text, user)
-        if info.get("error"):
-            return info
-        repo, wanted = info["repo"], [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
+        repo, wanted = parse_repo(text), [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
         latest = min(max(int(count) if count.isdigit() else PICK_COUNT, 1), MAX_PICK_COUNT)
         token = self.token(user)
         key = f"{user if token else ''}|{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
         when, found = self.browsed.get(key, (0.0, None))
-        if found and time.monotonic() - when < 300:
+        if found and time.monotonic() - when < 300:  # a listing found a moment ago: GitHub isn't asked at all
             return found
+        info = self.repo_info(text, user)
+        if info.get("error"):
+            return info
         try:
             if words.strip() and not wanted:
                 wanted = tasks.search(repo, words, token)
@@ -802,7 +825,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
-    handler = type("BoundHandler", (Handler,), {"app": App(jobs_dir)})
+    page = App(jobs_dir)
+    # Check the workspace, the CLIs and the judge while the server starts, so the first visit doesn't wait.
+    threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
+    handler = type("BoundHandler", (Handler,), {"app": page})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"pr-eval at {url} (Ctrl-C to stop the page; runs keep going)")
