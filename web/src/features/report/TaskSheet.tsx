@@ -74,7 +74,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   const a = r.agent ?? {};
   const [view, setView] = React.useState("diff");
   const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") : "";
-  const setAside = r.tests?.set_aside ?? [];
+  const setAside = (r.tests?.set_aside ?? []).filter((f) => !CACHE.test(f));
   const patch = React.useMemo(() => withoutCaches(r.patch), [r.patch]);
   const views = [
     { key: "diff", label: "Agent's diff", text: patch.text },
@@ -86,7 +86,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   const rows: [string, React.ReactNode][] = [];
   if (r.outcome === "invalid") rows.push(["Why not scored", r.invalid_reason || "unknown"]);
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
-  if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · run without the agent's own changes to ${setAside.length} test ${setAside.length === 1 ? "file" : "files"}` : ""}`} />]);
+  if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · on the agent's code alone, its edits to ${plural(setAside.length, "test file")} set aside` : ""}`} />]);
   if (r.judge) rows.push([(r.judge.panel?.length ?? 1) > 1 ? "Judges" : "Judge", r.judge.error ? `Error: ${r.judge.error}` : <Verdicts judge={r.judge} />]);
   // The file count of an older run's diff counts its cache files too, so it's left out there.
   if (r.diff) rows.push(["Change", `${patch.hidden ? "" : `${plural(r.diff.files, "file")}, `}+${r.diff.added} −${r.diff.removed}${tools ? ` · tools: ${tools}` : ""}`]);
@@ -163,7 +163,7 @@ function Lead({ word, rest }: { word: string; rest: string }) {
 }
 
 // Runs from before the runner left caches out of the agent's diff carry every .pyc its test runs
-// wrote (runner.CACHES), burying the change under binary patches.
+// wrote (runner.CACHES), burying the change under binary patches and inflating the set-aside tests.
 const CACHE = /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)\/|\.py[co]$/;
 
 /** The agent's diff without cache files, and how many files that took out. */
