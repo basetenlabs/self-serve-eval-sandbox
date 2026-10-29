@@ -1,16 +1,14 @@
-# Vendored: change it upstream first, then copy it here.
 """Translating proxy: whatever shape a coding CLI speaks -> Baseten Chat Completions.
 
 Chat Completions is the only Baseten endpoint that honors reasoning effort, so every request is converted to that
 shape, the forced effort is set on it, and the answer is converted back. One place owns effort instead of three
 per-CLI ceilings.
 
-Runs as a compose sidecar in every trial (proxy/compose.yaml). Stdlib only: the container is a stock
-python:3.12-slim with no pip step, and the source arrives as one base64 env var. Flags and env vars are
-interchangeable; the sidecar uses the env because compose can only inject that.
+Runs inside each trial's sandbox beside the agent, for models on Baseten (the image has it at /opt/eval/proxy.py).
+Stdlib only. Flags and env vars are interchangeable.
 
-    PROXY_UPSTREAM_URL=https://inference.baseten.co/v1 PROXY_EFFORT=max python proxy/proxy.py
-    python proxy/proxy.py --upstream https://inference.baseten.co/v1 --effort max
+    PROXY_UPSTREAM_URL=https://inference.baseten.co/v1 PROXY_EFFORT=max python3 proxy.py
+    python3 proxy.py --upstream https://inference.baseten.co/v1 --effort max
 """
 
 import argparse
@@ -82,7 +80,7 @@ class Answer:
 
 
 # -----------------------------------------------------------------------------------------------------------------
-# Config: flags, with the env as defaults, because compose can only inject env
+# Config: flags, with the env as defaults
 # -----------------------------------------------------------------------------------------------------------------
 
 def parse_config(argv: list[str] | None = None) -> Config:
@@ -104,7 +102,7 @@ def parse_config(argv: list[str] | None = None) -> Config:
     return Config(upstream=args.upstream.rstrip("/"), effort=args.effort, port=args.port, log_file=args.log_file)
 
 
-# Read at import so the sidecar and the tests both work off the env; main() replaces it with the parsed flags.
+# Read at import so the tests work off the env; main() replaces it with the parsed flags.
 CONFIG = parse_config([])
 
 _lock = threading.Lock()
@@ -591,7 +589,7 @@ def upstream_url(path: str) -> str:
 def upstream_headers(headers: Any) -> dict[str, str]:
     """Rewrite client headers for the upstream: bearer auth from whichever header it used, plus JSON.
 
-    The proxy holds no credential of its own. The CLI already has one, so nothing lands in the sidecar env or any
+    The proxy holds no credential of its own. The CLI already has one, so nothing lands in the proxy's env or any
     host-side job artifact.
     """
     key = headers.get("x-api-key") or ""
