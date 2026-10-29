@@ -5,7 +5,8 @@ creation-time proxy firewall limits egress to the selected model provider.
 The agent's patch is saved and its entire sandbox deleted. A second sandbox,
 set up the same way while the agent works, then gets the patch and the hidden
 tests. The reference patch is used only by separate validation sandboxes and
-the host-side judge.
+the host-side judge. On a task still being checked, an attempt's own sandbox is
+set up alongside the check, and its agent starts only once the check passes.
 """
 from __future__ import annotations
 
@@ -444,18 +445,67 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
             "seconds": round(time.monotonic() - started, 1), "summary": test_summary(out), "output": out}
 
 
-def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: str, settings: Settings) -> dict:
+def fresh_folder(trial_dir: Path) -> str | None:
+    """Empty an attempt's folder. Returns why its last try was invalid, if it was."""
     # An attempt starts in a clean folder: one cut short or lost to infrastructure leaves files behind.
     earlier = trial_dir / "result.json"
     rerun_after = json.loads(earlier.read_text()).get("invalid_reason") if earlier.is_file() else None
     shutil.rmtree(trial_dir, ignore_errors=True)
     trial_dir.mkdir(parents=True)
-    container = container_name(run_id)
+    return rerun_after
+
+
+@dataclass
+class Ready:
+    """An attempt's own sandbox, created and set up before its agent may start."""
+    container: str
+    rerun_after: str | None
+    started_at: str
+    reason: str | None = None          # prepare_workspace's
+    setup: dict | None = None
+    error: Exception | None = None     # run_trial raises it again, so it is recorded as before
+
+
+def prepare_trial(task: Task, trial_dir: Path, run_id: str, settings: Settings) -> Ready:
+    """Create and set up an attempt's sandbox while its task is still being checked.
+
+    Only the starting code and its dependencies, exactly as run_trial would set it up. The
+    caller waits for the check: run_trial gets the sandbox if it passes, discard otherwise.
+    Never raises; the sandbox may exist even when `error` is set.
+    """
+    ready = Ready(container_name(run_id), fresh_folder(trial_dir), now())
+    live = trial_dir / "stage.json"
+    try:
+        memory = sandbox_memory(task, settings)
+        stage(live, "sandboxes", started_at=ready.started_at)
+        start_container(ready.container, run_id, settings, memory)
+        stage(live, "setup", started_at=ready.started_at)
+        ready.reason, ready.setup = prepare_workspace(ready.container, task, trial_dir)
+    except Exception as exc:  # noqa: BLE001 - an attempt's errors are run_trial's to record
+        ready.error = exc
+    return ready
+
+
+def discard(ready: Ready, trial_dir: Path) -> None:
+    """Delete an attempt set up for a check that didn't pass, or a run that stopped: no result."""
+    try:
+        runtime.delete(ready.container)
+    except runtime.RuntimeError:
+        pass  # nothing to record it in; `pr-eval cleanup` removes the sandbox
+    shutil.rmtree(trial_dir, ignore_errors=True)
+
+
+def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: str, settings: Settings,
+              ready: Ready | None = None) -> dict:
+    """One attempt, in a sandbox `ready` from prepare_trial or one of its own."""
+    rerun_after = ready.rerun_after if ready else fresh_folder(trial_dir)
+    container = ready.container if ready else container_name(run_id)
     verifier = container_name(run_id)
     verify_dir = trial_dir / "verification"
     verify_dir.mkdir(exist_ok=True)
     result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
-              "model_id": model.model, "attempt": attempt, "started_at": now(), "outcome": None,
+              "model_id": model.model, "attempt": attempt, "started_at": ready.started_at if ready else now(),
+              "outcome": None,
               "invalid_reason": None, **environment_identity(settings),
               "agent_sandbox": container, "verifier_sandbox": verifier}
     if rerun_after:
@@ -487,11 +537,17 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
     try:
         secrets_env = credential_env(model)
-        stage(live, "sandboxes", started_at=result["started_at"])
+        if ready and ready.error:
+            raise ready.error
+        if not ready:
+            stage(live, "sandboxes", started_at=result["started_at"])
         verifier_ready = helper.submit(ready_verifier)
-        start_container(container, run_id, settings, memory)
-        stage(live, "setup", started_at=result["started_at"])
-        reason, result["setup"] = prepare_workspace(container, task, trial_dir)
+        if ready:
+            reason, result["setup"] = ready.reason, ready.setup
+        else:
+            start_container(container, run_id, settings, memory)
+            stage(live, "setup", started_at=result["started_at"])
+            reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
         block_lookups(container, ["api.anthropic.com"] if model.provider == "anthropic"
@@ -718,11 +774,11 @@ def trial_runner(models: list[Model], settings: Settings, run_id: str):
     """Runs one pending trial within its model's own limit. A broken trial is saved, never raised."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
 
-    def trial(job) -> dict:
+    def trial(job, ready: Ready | None = None) -> dict:
         task, model, attempt, path = job
         try:
             with limits[model.key]:
-                return run_trial(task, model, attempt, path, run_id, settings)
+                return run_trial(task, model, attempt, path, run_id, settings, ready)
         except Exception as exc:  # noqa: BLE001 - one broken trial must not stop the run
             result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
                       "attempt": attempt, "outcome": "invalid", "invalid_reason": f"runner-error: {exc}"}
@@ -741,17 +797,38 @@ def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, se
                 settings.concurrency, run_id, on_result)
 
 
+class Verdict:
+    """A task's check status, which the attempts set up alongside the check wait for."""
+
+    def __init__(self):
+        self.status, self.known = None, threading.Event()
+
+    def set(self, status: str | None) -> None:
+        self.status = status
+        self.known.set()
+
+    def wait(self) -> str | None:
+        """The status once the check is done, or None if the run stops first."""
+        while not self.known.wait(1):
+            if STOPPING.is_set():
+                return None
+        return None if STOPPING.is_set() else self.status
+
+
 def check_and_run(candidates: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
                   run_id: str, on_checked=None, on_result=None) -> None:
     """Check the tasks and run the models on each one as soon as its own check passes.
 
     Checks and trials share the run's sandboxes, checks first, so a slow check holds up
-    only its own task. `on_checked(task, status, unchecked)` follows every task, those
-    checked before first; `on_result(result, done, total)` every trial, where total
-    counts the trials of tasks that have passed so far.
+    only its own task. An attempt on a task still being checked sets its sandbox up
+    alongside the check, then waits: its agent starts the moment the check passes, and
+    a check that doesn't pass deletes it and leaves no result. `on_checked(task, status,
+    unchecked)` follows every task, those checked before first; `on_result(result, done,
+    total)` every trial, where total counts the trials of tasks that have passed so far.
     """
     todo = [t for t in candidates if needs_check(t, settings)]
     trial = trial_runner(models, settings, run_id)
+    verdicts = {t.id: Verdict() for t in todo}
     unchecked, trials_done, trials_total = len(candidates), 0, 0
 
     def checked(task: Task, status: str) -> list:
@@ -763,30 +840,58 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
             return []
         trials = pending_trials([task], models, attempts, job_dir)
         trials_total += len(trials)
-        return [("trial", t) for t in trials]
+        return trials
 
     jobs = [("check", t) for t in todo]
     for task in candidates:
         if task not in todo:
-            jobs += checked(task, validation_status(task, settings))
+            jobs += [("trial", t) for t in checked(task, validation_status(task, settings))]
+    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir)]
 
-    def work(job) -> dict:
+    def check(task: Task) -> dict:
+        status = None
+        try:
+            record = validate_task(task, settings, run_id)
+            status = record["status"]
+            return record
+        finally:  # here, not in `then`, so the attempts waiting on it never outlive the run
+            verdicts[task.id].set(status)
+
+    def early(job) -> dict | None:
+        task, path, verdict = job[0], job[3], verdicts[job[0].id]
+        ready = None if verdict.known.is_set() else prepare_trial(task, path, run_id, settings)
+        if verdict.wait() == "valid":
+            return trial(job, ready)
+        if ready:
+            discard(ready, path)
+        return None
+
+    def work(job) -> dict | None:
         kind, item = job
-        return validate_task(item, settings, run_id) if kind == "check" else trial(item)
+        return check(item) if kind == "check" else early(item) if kind == "early" else trial(item)
 
-    def then(job, result: dict) -> list:
+    def then(job, result: dict | None) -> list:
         nonlocal trials_done
         kind, item = job
         if kind == "check":
-            return checked(item, result["status"])
+            trials = checked(item, result["status"])
+            return [] if item.id in verdicts else [("trial", t) for t in trials]
+        if result is None:  # an early attempt on a task that didn't pass its check
+            return []
         trials_done += 1
         if on_result:
             on_result(result, trials_done, trials_total)
         return []
 
+    def order(job) -> int:
+        kind, item = job
+        if kind == "check":
+            return 0
+        # An attempt still waiting on its check takes only a worker nothing that can run now wants.
+        return item[2] + (attempts if kind == "early" and not verdicts[item[0].id].known.is_set() else 0)
+
     # Checks first, then trials attempt by attempt, so a stopped run is left balanced.
-    in_parallel(jobs, work, settings.concurrency, run_id, then=then,
-                order=lambda job: 0 if job[0] == "check" else job[1][2])
+    in_parallel(jobs, work, settings.concurrency, run_id, then=then, order=order)
 
 
 def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, then=None, order=None) -> None:
