@@ -27,6 +27,10 @@ from .config import Judge, Panel
 from .tasks import Task
 
 MAX_PATCH_CHARS = 60_000
+# A judge answers in seconds (its slowest real answers take about 2 minutes). A request that hangs
+# is cut off and asked again rather than holding the run for 5 or 10 minutes.
+CHAT_TIMEOUT = 120  # seconds to wait for one Chat Completions request
+CLAUDE_TIMEOUT = 180  # seconds for one Claude Code run, which retries the API itself
 
 PROMPT_VERSION = 3
 SYSTEM = """You review code changes for a benchmark of coding agents. You are given a change
@@ -185,9 +189,10 @@ def ask_claude(judge: Judge, system: str, user: str) -> dict:
         with tempfile.TemporaryDirectory(prefix="pr-eval-judge-") as home:
             env = {"PATH": os.environ.get("PATH", ""), "HOME": home, "CLAUDE_CONFIG_DIR": home, **CLAUDE_ENV, **credential}
             try:
-                done = subprocess.run(command, input=user, capture_output=True, text=True, cwd=home, env=env, timeout=600)
+                done = subprocess.run(command, input=user, capture_output=True, text=True, cwd=home, env=env,
+                                      timeout=CLAUDE_TIMEOUT)
             except subprocess.TimeoutExpired:
-                last_error = "Claude Code took over 10 minutes"
+                last_error = f"Claude Code took over {CLAUDE_TIMEOUT} seconds"
                 continue
             try:
                 data = json.loads(done.stdout)
@@ -220,7 +225,7 @@ def ask_chat(judge: Judge, system: str, user: str) -> dict:
     for attempt in range(6):
         wait = min(3 * 2 ** attempt, 60)
         try:
-            with urllib.request.urlopen(request, timeout=300) as response:
+            with urllib.request.urlopen(request, timeout=CHAT_TIMEOUT) as response:
                 data = json.loads(response.read())
             verdict = parse(data["choices"][0]["message"].get("content"))
             usage = data.get("usage") or {}
@@ -232,7 +237,7 @@ def ask_chat(judge: Judge, system: str, user: str) -> dict:
                 break
             if exc.code == 429 and (after := exc.headers.get("retry-after", "")).isdigit():
                 wait = min(int(after), 120)
-        except (urllib.error.URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError) as exc:
-            last_error = str(exc)
+        except (OSError, ValueError, KeyError) as exc:  # also a timeout or a dropped connection
+            last_error = str(exc) or type(exc).__name__
         time.sleep(wait)
     return {"error": last_error}
