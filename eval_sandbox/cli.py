@@ -53,7 +53,8 @@ def cmd_run(args) -> int:
         job.save()
     else:
         repos, pulls = wanted(args)
-        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config)
+        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config,
+                                           judges_checked=args.judges_checked)
         if args.quick and (args.repos or args.task):
             sys.exit("--quick is the quick sample; it doesn't take repositories or --task")
         request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
@@ -190,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
     r.add_argument("--judge", default="default", help="'none' to score on tests only, or one judge's model id to grade with it alone")
+    # The page passes it: it checked the judges just before, and asking again held up each start by 1.6-3.5 s.
+    r.add_argument("--judges-checked", action="store_true", help=argparse.SUPPRESS)
     r.add_argument("--concurrency", type=int, default=8, help="attempts and checks at once (default 8)")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
     r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")

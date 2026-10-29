@@ -3,7 +3,7 @@ import { Column, Empty, isActive, Swatch } from "@/components/brand";
 import { useNow } from "@/lib/api";
 import { clock, pct, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
-import { isChecking, isFinal, SANDBOXES, STAGE, type Tone } from "@/lib/stages";
+import { isChecking, isFinal, isLive, SANDBOXES, STAGE, type Tone } from "@/lib/stages";
 import type { Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Activity, useActivity } from "./Activity";
@@ -18,6 +18,10 @@ export function LivePanel({ run, models, colors, onOpen }: { run: Run; models: M
   const b = run.board;
   if (!b) {
     return <Empty title={active ? "Finding pull requests" : "No board for this run"}>{run.detail || "The board fills in as PRs are found and checked."}</Empty>;
+  }
+  // A run that ended before any model started has no fleet, progress or scores to show.
+  if (!active && !b.rows.some((row) => row.cells.some((c) => isFinal(c) || isLive(c.stage)))) {
+    return <Empty title="No attempts ran">{run.phase === "stopped" ? "The run was stopped before any model started." : "The run ended before any model started; the note above says why."}</Empty>;
   }
   return (
     <div className="grid gap-12">
