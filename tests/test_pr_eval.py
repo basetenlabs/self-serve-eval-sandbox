@@ -1299,8 +1299,9 @@ class ReportTest(unittest.TestCase):
 
     def test_report_has_ranked_cards_and_three_way_task_comparison(self):
         template = report.TEMPLATE.read_text()
-        for heading in ("Head to head", "All models", "Quality against cost", "By task type", "Total wall clock"):
+        for heading in ("Head to head", "All models", "Quality against cost", "Total wall clock"):
             self.assertIn(heading, template)
+        self.assertNotIn("By task type", template)
         view = web_source("src/features/report")
         for metric in ("pass_at_1", "cost_per_solved", "median_seconds"):
             self.assertIn(f'"{metric}"', view)
