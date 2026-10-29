@@ -50,7 +50,10 @@ export function Banners({ report }: { report: Report }) {
   }
   if (run.note) items.push(["Note", run.note]);
   if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed."]);
-  if (tasks.length < 30) items.push(["Small sample", `${plural(tasks.length, "task")}, so a few points either way is noise. Open a model's row for its 95% range.`]);
+  if (tasks.length < 30) {
+    items.push(["Small sample", tasks.length <= 3 ? `${plural(tasks.length, "task")}: read it as an example, not a score.`
+      : `${plural(tasks.length, "task")}, so each one moves a solve rate by about ${Math.round(100 / tasks.length)} points. Open a model's row for its 95% range.`]);
+  }
   if (!items.length) return null;
   return (
     <div className="grid gap-px bg-frame">
