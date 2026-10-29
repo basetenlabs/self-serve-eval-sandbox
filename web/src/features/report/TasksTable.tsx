@@ -124,7 +124,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
                 return (
                   <TH key={m.key} className="h-auto py-2 align-bottom">
                     <span className="flex items-center gap-2 text-foreground"><Swatch swatch={colors[m.key]} />{m.label}</span>
-                    <span className="num mt-0.5 block font-sans text-[12px] tracking-normal normal-case">{s ? `${s.solved} of ${s.valid} solved` : "Not run yet"}</span>
+                    <span className="num mt-0.5 block font-sans text-[12px] tracking-normal normal-case">{s ? `${s.solved}/${s.valid} solved` : "Not run yet"}</span>
                   </TH>
                 );
               })}
@@ -139,7 +139,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenId(t.id); } }}
                 className="cursor-pointer hover:bg-muted focus-visible:bg-muted focus-visible:outline-offset-[-2px]"
               >
-                <TD className="max-w-[420px] pl-4">
+                <TD className="max-w-[360px] pl-4">
                   <div className="truncate font-medium" title={t.title}>{t.title}</div>
                   <div className="mt-0.5 font-mono text-[11.5px] text-muted-foreground">{t.repo} #{t.pr ?? ""}</div>
                 </TD>
