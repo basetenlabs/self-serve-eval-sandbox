@@ -487,8 +487,9 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
                     {m.model && <span className="block truncate font-mono text-[11.5px] text-muted-foreground">{m.model}</span>}
                     <span className="label-mono block text-[10.5px] text-muted-foreground">
                       {m.missing ? "Needs its API key"
-                        : [m.cost_per_attempt != null ? `${usd(m.cost_per_attempt)} / try` : "No price yet",
-                           m.seconds_per_attempt != null ? `${dur(m.seconds_per_attempt)} / try` : null].filter(Boolean).join(" · ")}
+                        : [m.cost_per_attempt != null ? usd(m.cost_per_attempt) : "No price yet",
+                           m.seconds_per_attempt != null ? dur(m.seconds_per_attempt) : null].filter(Boolean).join(" · ")
+                          + (m.cost_per_attempt != null || m.seconds_per_attempt != null ? " per attempt" : "")}
                     </span>
                   </span>
                 </label>
