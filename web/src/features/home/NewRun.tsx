@@ -252,7 +252,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
               )}
 
               {/* Only once the lookup has read the repository, so a private one doesn't flash a chooser. */}
-              {mode === "repo" && !!info?.repo && (
+              {mode === "repo" && !!info?.repo && !info.error && (
                 <div className="grid grid-cols-1 gap-4">
                   <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
                     <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
