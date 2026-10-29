@@ -1,4 +1,5 @@
 import { ArrowLeftIcon, MoonIcon, SunIcon } from "lucide-react";
+import * as React from "react";
 import { BasetenLogo } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toast";
@@ -10,6 +11,8 @@ import type { Report } from "@/lib/types";
 /** A run's report as one shareable page: it works from disk, offline, with the data inside it. */
 export function ReportApp({ report }: { report: Report }) {
   const [theme, toggleTheme] = useTheme();
+  // A PR opened from the head-to-head and one opened in the tasks table share one sheet.
+  const [taskId, setTaskId] = React.useState<string | null>(null);
   const served = location.protocol.startsWith("http"); // opened through pr-eval serve, not from disk
   return (
     <TooltipProvider>
@@ -40,10 +43,10 @@ export function ReportApp({ report }: { report: Report }) {
               <ReportHeader report={report} />
             </section>
             <section className="border-t border-dashed border-rule px-4 py-12 sm:px-6 md:px-8">
-              <Results report={report} />
+              <Results report={report} onOpen={setTaskId} />
             </section>
             <section className="border-t border-dashed border-rule px-4 py-12 sm:px-6 md:px-8">
-              <Tasks report={report} />
+              <Tasks report={report} openId={taskId} onOpen={setTaskId} />
             </section>
           </main>
           <footer className="border-t border-dashed border-rule">

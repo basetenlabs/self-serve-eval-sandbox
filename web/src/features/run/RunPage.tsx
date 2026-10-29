@@ -46,11 +46,16 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   // An open task lives in the address, so a link can point straight at one attempt's trace.
   const open = (taskId: string | null) => go({ page: "run", id, tab: current, task: taskId ?? undefined }, true);
   const finished = report ? new Set(report.trials.map((t) => t.task_id)) : null;
+  // The headline: the paired verdict, with its cost line under it.
+  const t = report?.trials.length ? takeaway(ordered(report.models), report.summary, report) : null;
+  const sentence = t?.verdict
+    ? <>{t.verdict.head}{t.verdict.cost && <span className="mt-1 block text-muted-foreground">{t.verdict.cost}</span>}</>
+    : t?.sentence ?? null;
   const board = <TabsTrigger value="board">{active ? "Live" : "Board"}</TabsTrigger>;
   const results = <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>;
   return (
     <>
-      <RunHeader run={run} state={state} sentence={report?.trials.length ? takeaway(ordered(report.models), report.summary).sentence : null} hurry={hurry} go={go} />
+      <RunHeader run={run} state={state} sentence={sentence} hurry={hurry} go={go} />
       <section className="border-t border-dashed border-rule px-4 py-8 sm:px-6 md:px-8">
         <Pipeline run={run} />
         <RunNotes run={run} />
@@ -66,7 +71,10 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
             <LivePanel run={run} models={models} colors={colors} onOpen={finished ? (t) => finished.has(t) && open(t) : undefined} />
             {report && current === "board" && <TaskDrawer report={report} taskId={task ?? null} onClose={() => open(null)} />}
           </TabsContent>
-          <TabsContent value="results">{report ? <Results report={report} /> : <Loading />}</TabsContent>
+          <TabsContent value="results">
+            {report ? <Results report={report} onOpen={open} /> : <Loading />}
+            {report && current === "results" && <TaskDrawer report={report} taskId={task ?? null} onClose={() => open(null)} />}
+          </TabsContent>
           <TabsContent value="tasks">{report ? <Tasks report={report} openId={task ?? null} onOpen={open} /> : <Loading />}</TabsContent>
         </Tabs>
       </section>
@@ -75,7 +83,7 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
 }
 
 function RunHeader({ run, state, sentence, hurry, go }: {
-  run: Run; state: AppState; sentence: string | null; hurry: () => void; go: (r: Route) => void;
+  run: Run; state: AppState; sentence: React.ReactNode; hurry: () => void; go: (r: Route) => void;
 }) {
   const toast = useToast();
   const [stopping, setStopping] = React.useState(false);
