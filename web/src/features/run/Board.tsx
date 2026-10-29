@@ -56,7 +56,7 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
               <th className="label-mono h-10 px-1 text-left font-normal text-muted-foreground">Check</th>
               {models.map((m) => (
                 <th key={m.key} className="h-10 px-1 text-left font-normal">
-                  <span className="label-mono flex min-w-0 items-center gap-2 text-foreground"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
+                  <span className="label-mono flex min-w-0 items-center gap-2 leading-tight text-foreground" title={m.label}><Swatch swatch={colors[m.key]} /><span className="line-clamp-2">{m.label}</span></span>
                 </th>
               ))}
             </tr>
@@ -120,7 +120,7 @@ function CheckCell({ row, now, active }: { row: BoardRow; now: number; active: b
         <span className="label-mono truncate text-[10.5px]">{passed ? "✓ " : ""}{info.label}</span>
         {live && active && row.check.at && <span className="num font-mono text-[11px]">{clock(secondsSince(row.check.at, now))}</span>}
       </div>
-      {row.check.why && <div className="mt-0.5 truncate text-[11px] opacity-80">{row.check.why}</div>}
+      {row.check.why && <div className="mt-0.5 truncate text-[11px] opacity-80" title={row.check.why}>{row.check.why}</div>}
     </div>
   );
   return row.check.why ? <Tip content={row.check.why}>{body}</Tip> : body;
@@ -142,9 +142,10 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
       </div>
     );
   } else if (c.stage === "solved" || c.stage === "failed") {
-    sub = <div className="mt-0.5 truncate font-mono text-[11px] opacity-80">{[failReason(c), c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ")}</div>;
+    const line = [failReason(c), c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ");
+    sub = <div className="mt-0.5 truncate font-mono text-[11px] opacity-80" title={line}>{line}</div>;
   } else if (c.stage === "invalid") {
-    sub = <div className="mt-0.5 truncate text-[11px] opacity-80">{c.reason || "infrastructure"}</div>;
+    sub = <div className="mt-0.5 truncate text-[11px] opacity-80" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
   }
   const glyph = c.stage === "solved" ? "✓ " : c.stage === "failed" ? "✕ " : c.stage === "invalid" ? "! " : "";
   const cell = (
