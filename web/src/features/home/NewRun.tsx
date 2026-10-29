@@ -166,7 +166,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const savedHere = repo ? favorites.filter((f) => f.repo.toLowerCase() === repo.toLowerCase()).length : 0;
 
   return (
-    <form ref={form} onSubmit={start} onInput={() => setError(null)} className="grid gap-10" aria-label="New run">
+    <form ref={form} onSubmit={start} onInput={() => setError(null)} className="grid grid-cols-1 gap-10" aria-label="New run">
       <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
         <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
           <SourceTile value="quick" title="Quick sample" figure={`${state.quick.tasks} PRs`} tag="Fast"
@@ -178,7 +178,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         </RadioGroup.Root>
 
         {source === "suite" && (
-          <div className="mt-4 grid animate-enter gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+          <div className="mt-4 grid animate-enter grid-cols-1 gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
             <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
               <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
             </div>
@@ -200,11 +200,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         )}
 
         {source === "repo" && (
-          <div className="mt-4 grid animate-enter gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
+          <div className="mt-4 grid animate-enter grid-cols-1 gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
             <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
               <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
             </div>
-            <div className="grid gap-1.5">
+            <div className="grid grid-cols-1 gap-1.5">
               <Label htmlFor="pulls">Repository or pull request links</Label>
               <div className="relative">
                 <GitPullRequestIcon className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" />
@@ -227,7 +227,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             )}
 
             {mode === "repo" && (
-              <div className="grid gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
                   <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
                     options={[{ value: "latest", label: "Latest merged" }, { value: "choose", label: "Choose" }]} />
@@ -432,11 +432,11 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
     { title: "Closed models · the comparison", list: models.filter((m) => !isOpen(m)) },
   ].filter((g) => g.list.length);
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {groups.map((g) => (
-        <div key={g.title}>
+        <div key={g.title} className="min-w-0">
           <div className="label-mono mb-2 text-muted-foreground">{g.title}</div>
-          <div className="grid gap-1">
+          <div className="grid grid-cols-1 gap-1">
             {g.list.map((m) => {
               const on = chosen.includes(m.key);
               const row = (

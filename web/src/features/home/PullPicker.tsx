@@ -71,7 +71,7 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
   const firstUsable = groups.flatMap((g) => g.rows).find((r) => !r.why && !chosen.includes(r.number));
 
   return (
-    <div className="grid gap-2">
+    <div className="grid grid-cols-1 gap-2">
       <div className="relative">
         <SearchIcon className="pointer-events-none absolute top-3 left-3 size-3.5 text-muted-foreground" />
         <Input value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} autoComplete="off"
@@ -142,7 +142,7 @@ export function SavedPulls({ favorites, picked, onPick, onFavorite }: {
   const shown = all ? favorites : favorites.slice(0, 6);
   if (!favorites.length) return null;
   return (
-    <div className="grid gap-2">
+    <div className="grid grid-cols-1 gap-2">
       <span className="label-mono flex items-center gap-1.5 text-muted-foreground"><StarIcon className="size-3 fill-current" /> Saved pull requests <span className="opacity-60">{favorites.length}</span></span>
       <ul className="bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-label="Saved pull requests">
         {shown.map((f) => (
@@ -188,7 +188,7 @@ export function PastedPulls({ pulls, onChecked, onRemove, favorites, onFavorite 
   onFavorite: OnFavorite;
 }) {
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       {Object.entries(pulls).map(([repo, numbers]) => (
         <PastedRepo key={repo} repo={repo} numbers={numbers} onChecked={onChecked} onRemove={onRemove} favorites={favorites} onFavorite={onFavorite} />
       ))}
@@ -211,7 +211,7 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
   const rows = new Map((list?.prs ?? []).map((r) => [r.number, r]));
   const usable = numbers.filter((n) => rows.get(n) && !rows.get(n)!.why).length;
   return (
-    <div className="grid gap-2">
+    <div className="grid grid-cols-1 gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-[12px]">{repo}</span>
         <span className="label-mono text-muted-foreground">
