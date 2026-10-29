@@ -15,6 +15,7 @@ import { ordered, palette } from "@/lib/models";
 import { pipeline } from "@/lib/stages";
 import { takeaway } from "@/lib/stats";
 import type { AppState, Run } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { LivePanel } from "./LivePanel";
 import { Pipeline } from "./Pipeline";
 
@@ -58,7 +59,7 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
         <Tabs value={current} onValueChange={(v) => go({ page: "run", id, tab: v }, true)}>
           <TabsList aria-label="Run views" className="mb-10">
             {/* A finished run opens on its results, so they come first; a live run leads with the board. */}
-            {run.report ? <>{results}{board}</> : <>{board}{results}</>}
+            {!active && run.report ? <>{results}{board}</> : <>{board}{results}</>}
             <TabsTrigger value="tasks" disabled={!run.report}>Tasks{report ? <span className="text-muted-foreground">{report.tasks.length}</span> : null}</TabsTrigger>
           </TabsList>
           <TabsContent value="board">
@@ -111,12 +112,15 @@ function RunHeader({ run, state, sentence, hurry, go }: {
             <h1 className="text-[36px] leading-tight font-normal tracking-[-0.03em] sm:text-[44px]">{run.title}</h1>
             <PhaseBadge phase={run.phase} className="mt-1" />
           </div>
-          {active ? (
-            <p className="mt-4 flex max-w-[60ch] items-baseline gap-3 text-[20px] leading-snug tracking-[-0.01em] text-balance" aria-live="polite">
+          {/* A live run says what it's doing; its takeaway so far, once attempts finish, sits under that. */}
+          {active && (
+            <p className={cn("mt-4 flex max-w-[60ch] items-baseline gap-3 leading-snug text-balance",
+              sentence ? "text-[15px] text-muted-foreground" : "text-[20px] tracking-[-0.01em]")} aria-live="polite">
               <LiveDot className="size-2 shrink-0 -translate-y-0.5" />
               <span>{now(run)}</span>
             </p>
-          ) : sentence && <p className="mt-4 max-w-[46ch] text-[22px] leading-snug tracking-[-0.01em] text-balance">{sentence}</p>}
+          )}
+          {sentence && <p className={cn("max-w-[46ch] text-[22px] leading-snug tracking-[-0.01em] text-balance", active ? "mt-2" : "mt-4")}>{sentence}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {active && (

@@ -1,7 +1,7 @@
 import { ChevronRightIcon, LockIcon } from "lucide-react";
 import { isActive, PhaseBadge, Swatch } from "@/components/brand";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { pct, usd, when } from "@/lib/format";
+import { pct, plural, usd, when } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import { ordered, palette } from "@/lib/models";
 import type { Run } from "@/lib/types";
@@ -74,7 +74,7 @@ function Title({ run, link = true }: { run: Run; link?: boolean }) {
         ? <a href={href({ page: "run", id: run.id })} onClick={(e) => e.preventDefault()} className="flex items-center gap-1.5 text-[15px] font-medium">{name}</a>
         : <span className="flex items-center gap-1.5 text-[15px] font-medium">{name}</span>}
       <span className="label-mono text-[10.5px] text-muted-foreground">
-        {[run.tasks ? `${run.tasks} PRs` : null, run.models.length > 2 ? `${run.models.length} models` : null,
+        {[run.tasks ? plural(run.tasks, "PR") : null, run.models.length > 2 ? `${run.models.length} models` : null,
           run.judged === false ? "Tests only" : null].filter(Boolean).join(" · ")}
       </span>
     </span>
