@@ -1,8 +1,8 @@
 # Hosted eval page
 
-The same page as `pr-eval serve`, on a Blaxel sandbox, for people who don't want to install
-anything. Anyone whose Blaxel account has a verified `@baseten.co` or `@blaxel.ai` email can
-sign in, start runs and read reports.
+The deployment behind our hosted copy of the eval page: the same page as `pr-eval serve`, on a
+Blaxel sandbox, behind a sign-in, for people who don't want to install anything. Who may sign in
+is set in `site.config.mjs`. You don't need any of this to run pr-eval yourself.
 
 - **Sign-in:** `server.mjs` is the only public door: the `@blaxel/sign-in` package ("Sign in with
   Blaxel", OpenID Connect with PKCE; settings in `site.config.mjs`) in front of `pr-eval serve` on
@@ -15,10 +15,10 @@ sign in, start runs and read reports.
 - **GitHub:** the page's own GitHub login, shared by everyone, reads public repositories only
   (`PR_EVAL_PUBLIC_REPOS_ONLY`). For private ones, people **Sign in with GitHub** on the page:
   GitHub's device flow through the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
-  (read-only Contents, Pull requests and Metadata; no webhooks; owned by SystemSculpt until it
-  moves to basetenlabs; its client id is in `deploy.py`, and the page needs no secret). It reads
-  only the repositories each person adds to it: a repository it can't read yet shows **Add it on
-  GitHub**, and the page looks again when they come back. Their token lives in the page's memory
+  (read-only Contents, Pull requests and Metadata; no webhooks; its client id is in `deploy.py`,
+  and the page needs no secret). It reads only the repositories each person adds to it: a
+  repository it can't read yet shows **Add it on GitHub**, and the page looks again when they
+  come back. Their token lives in the page's memory
   only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. A
   run on a private repository is seen only by the person who started it (`access.json` in its
   folder). In an organization, an owner installs the app, or approves the person's request to.
@@ -38,7 +38,7 @@ sign in, start runs and read reports.
 ```sh
 bl push -d hosted --name pr-eval-host --type sandbox -w <workspace>        # the image, once and after changing hosted/Dockerfile
 (cd hosted && NODE_AUTH_TOKEN="$(gh auth token)" npm ci)                    # @blaxel/sign-in, from GitHub Packages
-.venv/bin/python hosted/deploy.py --seed jobs/grafana-1021                   # create or update
+.venv/bin/python hosted/deploy.py --seed jobs/<run>                          # create or update
 ```
 
 `npm ci` needs a GitHub token that can read packages (`gh auth refresh -h github.com -s read:packages`)
@@ -68,5 +68,5 @@ Logs: `bl logs sandbox pr-eval-host -w <workspace>`.
 .venv/bin/python hosted/deploy.py --delete --volume   # everything
 ```
 
-Then delete the `pr-eval-host` service account in the workspace's settings, and the
-`pr-eval-host-blaxel-api-key` Keychain item (`security delete-generic-password -s pr-eval-host-blaxel-api-key`).
+Then delete the Blaxel service account the deploy used, in the workspace's settings, and the
+Keychain items `deploy.py` reads its keys from (`SECRETS` in that file).
