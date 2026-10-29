@@ -332,6 +332,11 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
               <PlanRow label="Sandboxes at once" tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests.">
                 {!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
               </PlanRow>
+              {state.spend && (
+                <PlanRow label="Last 24 hours" tip="What your runs started in the last 24 hours cost, out of your limit.">
+                  <span>{money(state.spend.spent)} <span className="text-muted-foreground">of {money(state.spend.cap)}</span></span>
+                </PlanRow>
+              )}
             </dl>
             {error && (
               <div role="alert" className="mt-4 flex animate-enter items-start gap-2 bg-danger-surface px-3 py-2.5 text-[14px]">
@@ -346,11 +351,6 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
               <Kbd className="ml-1 hidden sm:inline-flex">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
             </Button>
             <p className="mt-3 text-[13px] leading-snug text-muted-foreground" aria-live="polite">{hint}</p>
-            {state.spend && (
-              <p className="label-mono mt-3 text-muted-foreground">
-                Your runs, last 24 hours: {money(state.spend.spent)} of your {money(state.spend.cap)}
-              </p>
-            )}
           </Column>
           {aside}
         </div>
