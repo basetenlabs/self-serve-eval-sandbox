@@ -74,7 +74,7 @@ export function pipeline(r: Run) {
       count: b?.rows.length ? `${b.rows.length} found` : r.tasks ? `${r.tasks} found` : null },
     { key: "check", title: "Check", what: "Tests fail before, pass after", state: st(checked, b?.rows.some(isChecking) ?? r.phase === "checking"),
       count: checked && (passed || leftOut) ? `${passed} passed${leftOut ? ` · ${leftOut} left out` : ""}` : null },
-    { key: "code", title: "Models code", what: "One sandbox per attempt", state: st(done || (checked && !doing(["queued", "sandboxes", "setup", "agent"]) && scored > 0), doing(["sandboxes", "setup", "agent"])),
+    { key: "code", title: "Models code", what: "One sandbox per attempt", state: st(done || (checked && !doing(["queued", "sandboxes", "setup", "agent"]) && scored > 0), doing(["queued", "sandboxes", "setup", "agent"])),
       count: scored ? (coding ? `${coding} coding now` : `${scored} attempts`) : null },
     { key: "grade", title: "Grade", what: r.judged === false ? "Hidden tests" : "Hidden tests, then judges", state: st(done, doing(["tests", "judge"])),
       count: scored ? (grading ? `${grading} grading now` : `${graded} graded`) : null },
