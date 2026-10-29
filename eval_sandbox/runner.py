@@ -874,8 +874,8 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
         nonlocal trials_done
         kind, item = job
         if kind == "check":
-            trials = checked(item, result["status"])
-            return [] if item.id in verdicts else [("trial", t) for t in trials]
+            checked(item, result["status"])  # its attempts are already queued, as early ones
+            return []
         if result is None:  # an early attempt on a task that didn't pass its check
             return []
         trials_done += 1

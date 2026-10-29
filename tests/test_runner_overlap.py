@@ -173,8 +173,8 @@ class OverlapTests(unittest.TestCase):
         fake = FakeRuntime()
 
         def check(task):
-            runner.STOPPING.wait(10)  # the stop deletes the check's sandbox, which ends it
-            return {"task_id": task.id, "status": "sandbox-error: stopped"}
+            runner.STOPPING.wait(10)
+            return {"task_id": task.id, "status": "valid"}  # even a check that passes as the run stops
 
         def agent(name):
             if fake.owner.get(name) == "known":
