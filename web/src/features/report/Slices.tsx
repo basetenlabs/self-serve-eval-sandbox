@@ -13,12 +13,19 @@ const METRICS: Record<Key, { label: string; format: (x: number | null) => string
   median_seconds: { label: "Time per task", format: dur, higher: false, hint: "Lower is better. Median agent time per valid attempt. Setup, grading and provider retry waits are left out." },
 };
 
-/** The same comparison within each language, change size and repository. */
+/** The same comparison within each language, change size and repository, as one table whose columns
+ *  line up across the groups. A group with a single value only repeats the overall result, so it's
+ *  left out. When one model leads a row alone, its figure is bold and the others' bars step back. */
 export function Slices({ slices, ranked, colors }: { slices: Slice[]; ranked: Model[]; colors: Record<string, SwatchT> }) {
   const [key, setKey] = React.useState<Key>("pass_at_1");
-  if (!slices.length) return null;
   const metric = METRICS[key];
-  const groups = [...new Set(slices.map((s) => s.dimension))].map((d) => ({ dimension: d, rows: slices.filter((s) => s.dimension === d) }));
+  const groups = [...new Set(slices.map((s) => s.dimension))]
+    .map((d) => ({ dimension: d, rows: slices.filter((s) => s.dimension === d) }))
+    .filter((g) => g.rows.length > 1);
+  if (!groups.length) return null;
+  const all = groups.flatMap((g) => g.rows.flatMap((sl) => ranked.map((m) => (sl.models[m.key]?.valid ? sl.models[m.key][key] : null))))
+    .filter((v): v is number => v != null);
+  const max = key === "pass_at_1" ? 1 : Math.max(...all, 0) || 1;
   return (
     <Column
       heading="By task type"
@@ -30,62 +37,67 @@ export function Slices({ slices, ranked, colors }: { slices: Slice[]; ranked: Mo
         </Tabs>
       }
     >
-      <p className="-mt-1 mb-6 text-[14px] text-muted-foreground" aria-live="polite">{metric.hint}</p>
-      <div className="grid gap-10">
-        {groups.map((g) => {
-          const all = g.rows.flatMap((sl) => ranked.map((m) => (sl.models[m.key]?.valid ? sl.models[m.key][key] : null))).filter((v): v is number => v != null);
-          const max = key === "pass_at_1" ? 1 : Math.max(...all, 0) || 1;
-          return (
-            <div key={g.dimension} className="overflow-x-auto">
-              <table className="w-full min-w-[560px] border-collapse text-[14px]">
-                <thead>
-                  <tr className="border-b border-rule">
-                    <th scope="col" className="label-mono w-[22%] py-2 pr-3 text-left font-normal text-foreground">{g.dimension}</th>
-                    <th scope="col" className="label-mono w-16 py-2 pr-3 text-right font-normal text-muted-foreground">Tasks</th>
-                    {ranked.map((m) => (
-                      <th key={m.key} scope="col" className="py-2 pr-3 text-left font-normal">
-                        <span className="label-mono inline-flex items-center gap-2 text-muted-foreground"><Swatch swatch={colors[m.key]} />{m.label}</span>
-                      </th>
-                    ))}
+      <p className="-mt-1 mb-5 text-[14px] text-muted-foreground" aria-live="polite">{metric.hint}</p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] table-fixed border-collapse text-[14px]">
+          <colgroup>
+            <col className="w-[22%]" />
+            <col className="w-16" />
+            {ranked.map((m) => <col key={m.key} />)}
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col" className="pb-2" />
+              <th scope="col" className="label-mono pr-4 pb-2 text-right font-normal text-muted-foreground">Tasks</th>
+              {ranked.map((m) => (
+                <th key={m.key} scope="col" className="pr-6 pb-2 text-left font-normal">
+                  <span className="label-mono flex min-w-0 items-center gap-2 text-foreground"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          {groups.map((g) => (
+            <tbody key={g.dimension}>
+              <tr>
+                <th scope="colgroup" colSpan={2 + ranked.length} className="label-mono border-b border-rule pt-5 pb-2 text-left font-normal text-muted-foreground">{g.dimension}</th>
+              </tr>
+              {g.rows.map((sl) => {
+                const values = ranked.map((m) => (sl.models[m.key]?.valid ? sl.models[m.key][key] : null));
+                const present = values.filter((v): v is number => v != null);
+                const top = present.length > 1 ? (metric.higher ? Math.max(...present) : Math.min(...present)) : null;
+                const alone = top != null && present.filter((v) => Math.abs(v - top) < 1e-9).length === 1;
+                const label = g.dimension === "Change size" ? sl.value[0].toUpperCase() + sl.value.slice(1) : sl.value;
+                return (
+                  <tr key={sl.value} className="border-b border-frame">
+                    <th scope="row" className="truncate py-2.5 pr-3 text-left font-normal" title={label}>{label}</th>
+                    <td className="num py-2.5 pr-4 text-right text-muted-foreground">{sl.tasks}</td>
+                    {ranked.map((m, i) => {
+                      const s = sl.models[m.key];
+                      const v = values[i];
+                      const lead = alone && v != null && Math.abs(v - top!) < 1e-9;
+                      return (
+                        <td key={m.key} className="py-2.5 pr-6" title={s?.valid ? `${m.label}: ${s.solved} of ${s.valid} attempts solved` : `${m.label}: no valid attempts`}>
+                          <div className="flex items-center gap-3">
+                            <span className={cn("num w-16 shrink-0 text-[15px]", lead && "font-semibold")}>{metric.format(v)}</span>
+                            <div className="h-1.5 min-w-0 flex-1 bg-node" aria-hidden>
+                              {v != null && (
+                                <div
+                                  className={cn("h-full animate-grow", alone && !lead && "opacity-40")}
+                                  style={{ width: `${Math.max(2, (v / max) * 100)}%`, background: colors[m.key]?.fill }}
+                                />
+                              )}
+                            </div>
+                            {key === "pass_at_1" && <span className="num w-10 shrink-0 text-right text-[12px] text-muted-foreground">{s?.valid ? `${s.solved}/${s.valid}` : ""}</span>}
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
-                </thead>
-                <tbody>
-                  {g.rows.map((sl) => {
-                    const values = ranked.map((m) => (sl.models[m.key]?.valid ? sl.models[m.key][key] : null));
-                    const present = values.filter((v): v is number => v != null);
-                    const best = present.length > 1 ? (metric.higher ? Math.max(...present) : Math.min(...present)) : null;
-                    const label = g.dimension === "Change size" ? sl.value[0].toUpperCase() + sl.value.slice(1) : sl.value;
-                    return (
-                      <tr key={sl.value} className="border-b border-frame">
-                        <th scope="row" className="truncate py-3 pr-3 text-left font-normal">{label}</th>
-                        <td className="num py-3 pr-3 text-right text-muted-foreground">{sl.tasks}</td>
-                        {ranked.map((m, i) => {
-                          const s = sl.models[m.key];
-                          const v = values[i];
-                          const lead = v != null && best != null && Math.abs(v - best) < 1e-9;
-                          return (
-                            <td key={m.key} className="py-3 pr-3 align-top">
-                              <div className="flex items-baseline gap-2">
-                                <span className={cn("num text-[16px]", lead && "font-semibold")}>{metric.format(v)}</span>
-                                {lead && <span className="label-mono text-[9.5px] text-muted-foreground">Best</span>}
-                              </div>
-                              <div className="mt-1 h-1.5 bg-node" aria-hidden>
-                                {v != null && <div className="h-full animate-grow" style={{ width: `${Math.max(2, (v / max) * 100)}%`, background: colors[m.key]?.fill }} />}
-                              </div>
-                              <div className="mt-1 text-[11.5px] text-muted-foreground">
-                                {s?.valid ? (key === "pass_at_1" ? `${s.solved} / ${s.valid} solved` : `${pct(s.pass_at_1)} solved · ${s.valid} tries`) : "No valid attempts"}
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          );
-        })}
+                );
+              })}
+            </tbody>
+          ))}
+        </table>
       </div>
     </Column>
   );

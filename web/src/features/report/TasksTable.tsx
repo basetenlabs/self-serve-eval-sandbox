@@ -119,9 +119,15 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
               <TH className="pl-4">Task</TH>
               <TH>Language</TH>
               <TH>Size</TH>
-              {ranked.map((m) => (
-                <TH key={m.key}><span className="inline-flex items-center gap-2"><Swatch swatch={colors[m.key]} />{m.label}</span></TH>
-              ))}
+              {ranked.map((m) => {
+                const s = report.summary[m.key];
+                return (
+                  <TH key={m.key} className="h-auto py-2 align-bottom">
+                    <span className="flex items-center gap-2 text-foreground"><Swatch swatch={colors[m.key]} />{m.label}</span>
+                    <span className="num mt-0.5 block font-sans text-[12px] tracking-normal normal-case">{s ? `${s.solved} of ${s.valid} solved` : "Not run yet"}</span>
+                  </TH>
+                );
+              })}
             </TR>
           </THead>
           <TBody>
