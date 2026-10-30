@@ -7,9 +7,10 @@
   "engines": { "node": ">=24" },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.mjs",
+    "test": "node --test sign-in.test.mjs",
     "check": "node --disable-warning=ExperimentalWarning node_modules/@blaxel/sign-in/server.mjs --check --config site.config.mjs"
   },
   "dependencies": {
-    "@blaxel/sign-in": "npm:@blaxel-ai/sign-in@0.1.0"
+    "@blaxel/sign-in": "npm:@blaxel-ai/sign-in@0.2.0"
   }
 }

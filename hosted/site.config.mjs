@@ -6,6 +6,7 @@ export default {
   access: { domains: ['baseten.co', 'blaxel.ai'] },
   brand: {
     name: 'Eval Sandbox',
+    askForAccess: 'Ask Michael Stolarz on Slack to add you.',
     company: 'Baseten',
     tagline: 'Run coding models on real pull requests and compare what they solve and what it costs.',
     login: { eyebrow: 'Internal preview', title: 'Sign in to Eval Sandbox' },
