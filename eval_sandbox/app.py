@@ -825,6 +825,8 @@ def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     page = App(jobs_dir)
     # Check the workspace, the CLIs and the judge while the server starts, so the first visit doesn't wait.
     threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
+    # Delete the private clones left by runs whose process died, such as when the page last restarted.
+    threading.Thread(target=pipeline.sweep_clones, args=(jobs_dir,), daemon=True).start()
     handler = type("BoundHandler", (Handler,), {"app": page})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"

@@ -121,34 +121,61 @@ def run_repos(meta: dict) -> list[str]:
 
 
 def release_clones(job: Job) -> None:
-    """Delete the bare clones of a finished, failed or stopped run's private repositories.
-
-    Every run on this machine shares data/repos/, whoever started it, so a clone stays while
-    any other run on its repository is going. A repository GitHub won't confirm is public now
-    counts as private: deleting a public clone only costs cloning it again.
-    """
+    """Delete the bare clones of a finished, failed or stopped run's private repositories."""
     try:
-        clones = {repo: tasks.DEFAULT_REPOS / f"{repo.replace('/', '__')}.git" for repo in run_repos(job.meta)}
-        clones = {repo: path for repo, path in clones.items() if path.is_dir()}
-        if not clones:
-            return
-        busy: set[str] = set()
-        for path in job.path.parent.glob("*/run.json"):
-            if path.parent.resolve() == job.path.resolve():
-                continue
-            try:
-                meta = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            status = meta.get("status") or {}
-            if status.get("phase") in ACTIVE and alive(status.get("pid")):
-                busy |= {repo.lower() for repo in run_repos(meta)}
-        for repo, path in clones.items():
-            if repo.lower() not in busy and private(repo):
-                shutil.rmtree(path, ignore_errors=True)
-                print(f"deleted the clone of private repository {repo}", flush=True)
+        delete_private_clones({repo: clone_path(repo) for repo in run_repos(job.meta)}, job.path.parent, job.path)
     except Exception as exc:  # noqa: BLE001 - a cleanup hiccup must not hide how the run ended
         print(f"(clones not cleaned up: {exc})", flush=True)
+
+
+def sweep_clones(jobs_dir: Path) -> None:
+    """Delete every private clone no going run uses, such as one left by a run whose process died
+    (a crash, the page restarting) before it could clean up. `pr-eval serve` and `pr-eval run` sweep
+    as they start; a starting run marks itself going first, so the clones it's about to use stay."""
+    try:
+        clones = {path.name.removesuffix(".git").replace("__", "/", 1): path
+                  for path in tasks.DEFAULT_REPOS.glob("*__*.git")}
+        delete_private_clones(clones, jobs_dir)
+    except Exception as exc:  # noqa: BLE001 - a cleanup hiccup must not stop a run or the page
+        print(f"(clones not cleaned up: {exc})", flush=True)
+
+
+def clone_path(repo: str) -> Path:
+    return tasks.DEFAULT_REPOS / f"{repo.replace('/', '__')}.git"
+
+
+def busy_repos(jobs_dir: Path, skip: Path | None = None) -> set[str]:
+    """The repositories, lowercased, of every run in jobs_dir that's still going, except `skip`'s."""
+    busy: set[str] = set()
+    for path in jobs_dir.glob("*/run.json"):
+        if skip and path.parent.resolve() == skip.resolve():
+            continue
+        try:
+            meta = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        status = meta.get("status") or {}
+        if status.get("phase") in ACTIVE and alive(status.get("pid")):
+            busy |= {repo.lower() for repo in run_repos(meta)}
+    return busy
+
+
+def delete_private_clones(clones: dict[str, Path], jobs_dir: Path, skip: Path | None = None) -> None:
+    """Delete these clones of private repositories, unless a going run uses the repository.
+
+    Every run on this machine shares data/repos/, whoever started it, so a clone stays while
+    any run on its repository is going. A repository GitHub won't confirm is public now
+    counts as private: deleting a public clone only costs cloning it again.
+    """
+    busy = busy_repos(jobs_dir, skip)
+    clones = {repo: path for repo, path in clones.items()
+              if path.is_dir() and repo.lower() not in busy and private(repo)}
+    if clones:  # look again: a run may have started while GitHub answered
+        busy = busy_repos(jobs_dir, skip)
+    for repo, path in clones.items():
+        if repo.lower() not in busy:
+            shutil.rmtree(path, ignore_errors=True)
+            print(f"deleted the clone of private repository {repo}", flush=True)
 
 
 def private(repo: str) -> bool:
