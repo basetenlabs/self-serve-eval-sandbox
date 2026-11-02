@@ -21,6 +21,9 @@ Keys come from the Keychain items in SECRETS below, else from the environment:
     OPENAI_API_KEY          the GPT-6.1 Sol judge
     BL_API_KEY              a Blaxel service account in the trial workspace
     GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
+    PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the
+                            refused sign-in page offers "Request access", which emails the admins; it reaches
+                            the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
 
 People sign in with GitHub through the GitHub App "Baseten Eval Sandbox" (device flow; read-only
 Contents, Pull requests and Metadata). Its client id is public and the page needs nothing else: the
@@ -78,6 +81,9 @@ SECRETS = {
     "OPENAI_API_KEY": "baseten-openai-api-key",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
+# Optional, and for the sign-in process only: without it the refused page has no "Request access".
+MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
+MAIL_FROM = os.environ.get("PR_EVAL_MAIL_FROM", "Eval Sandbox <eval-sandbox@blaxel.ai>")
 LEAK = trace.SECRET
 
 
@@ -217,6 +223,11 @@ def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
     return out
 
 
+def mail_key() -> str | None:
+    name, service = MAIL_KEY
+    return keychain(service) or os.environ.get(name)
+
+
 def start(sandbox, origin: str, keys: dict[str, str]) -> None:
     for process in sandbox.process.list() or []:
         if (process.name or "").startswith(("pr-eval-page", "pr-eval-sign-in")) and process.status in ("running", "starting"):
@@ -228,6 +239,9 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
+    if key := mail_key():
+        sign_in_env |= {MAIL_KEY[0]: key, "PR_EVAL_MAIL_FROM": MAIL_FROM}
+    print(f'"Request access": {"on" if key else "off (no " + MAIL_KEY[1] + ")"}')
     # No `timeout`: on Blaxel it can end a long-lived process once it elapses.
     sandbox.process.exec({"name": f"pr-eval-page-{stamp}", "workingDir": APP, "env": page_env,
                           "command": f"mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs",

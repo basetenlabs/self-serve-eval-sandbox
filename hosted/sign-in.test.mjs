@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPolicy, loadBrand, renderLogin } from '@blaxel/sign-in'
 import { adminApi, SEED, seedAccess } from './access.mjs'
+import { resendMailer } from './mailer.mjs'
 import { accessRequests, inviteLink } from './requests.mjs'
 import config from './site.config.mjs'
 
@@ -148,4 +149,18 @@ test('an access request fails, so the person can ask again, only when no admin w
   await assert.rejects(hook({ email: 'x@gmail.com' }), /access file can't be read/)
   writeFileSync(file, JSON.stringify({ admins: [], emails: ['x@y.io'] }))
   await assert.rejects(hook({ email: 'x@gmail.com' }), /no admin/)
+})
+
+test('the Resend mailer sends one plain-text message per admin, and a refusal throws', async () => {
+  const calls = []
+  let status = 200
+  const fetcher = async (url, init) => { calls.push({ url, init }); return { ok: status < 300, status } }
+  const mailer = resendMailer({ key: 'test-key', from: 'Eval Sandbox <eval@example.com>', fetcher })
+  await mailer.send({ to: 'boss@baseten.co', subject: 's', text: 't' })
+  assert.equal(calls[0].url, 'https://api.resend.com/emails')
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer test-key')
+  assert.deepEqual(JSON.parse(calls[0].init.body), { from: 'Eval Sandbox <eval@example.com>', to: ['boss@baseten.co'], subject: 's', text: 't' })
+  status = 403
+  await assert.rejects(mailer.send({ to: 'boss@baseten.co', subject: 's', text: 't' }), /Resend answered 403/)
+  assert.throws(() => resendMailer({ from: 'x@y.io' }), /needs a key/)
 })
