@@ -100,7 +100,7 @@ export interface Run {
   log?: string | null;
   lost: number;
   resumable: boolean;
-  /** On a private repository: only the person who started it sees it. */
+  /** On a private repository. */
   private?: boolean;
   /** What Run again puts back in the form; null when it can't. */
   again?: Again | null;

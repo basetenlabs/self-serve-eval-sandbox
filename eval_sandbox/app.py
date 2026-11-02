@@ -37,8 +37,8 @@ PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, 
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
 # Hosted, people can sign in with GitHub (device flow: a GitHub App's client id, no secret). The app
 # reads only Contents, Pull requests and Metadata, and only on the repositories each person installs
-# it on. Their token, kept in memory only, reads and clones those private repositories for them, and
-# a run on a private repository is theirs alone to see. The sign-in server in front of the hosted
+# it on. Their token, kept in memory only, reads and clones those private repositories for them.
+# Hosted, every run is its starter's alone to see, whatever the repository. The sign-in server in front of the hosted
 # page (@blaxel/sign-in) names who is asking in USER_HEADER, after dropping any value the browser
 # sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
@@ -46,7 +46,7 @@ GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the pag
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
-ACCESS = "access.json"  # in a run's folder started by someone signed in: its owner, and whether only they see it
+ACCESS = "access.json"  # in a run's folder started by someone signed in: its owner, the only one who sees it hosted
 MAX_FAVORITES = 200
 # Hosted, everyone shares one Blaxel workspace and one set of model keys: how many runs may go at once,
 # in all and for one person, and how much runs started in the last day may cost (the agents' cost, as
@@ -469,7 +469,7 @@ class App:
         argv += ["--models", ",".join(keys), "--name", run_id, "--judges-checked"]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
-        if user:  # whose run it is, for their limits; on a private repository, only they see it
+        if user:  # whose run it is: only they see it, and it counts toward their limits
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
             (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
         self.claims[run_id] = claim
@@ -566,9 +566,13 @@ class App:
         return self.describe(path) if RUN_ID.fullmatch(run_id) and path.is_dir() and self.visible(path, user) else None
 
     def visible(self, job_dir: Path, user: str | None) -> bool:
-        """Whether this person may see the run: everyone may, unless someone else started it on a private repository."""
+        """Whether this person may see the run. Signed in (hosted): only a run they started, whatever its
+        repository; a run with no owner recorded is no one's. Locally (no sign-in): any run, except one
+        someone started signed in on a private repository."""
         access = read_json(job_dir / ACCESS)
-        return not access.get("private") or access.get("owner") == user
+        if user:
+            return access.get("owner") == user
+        return not access.get("private")
 
     def spawn(self, run_id: str, argv: list[str], github_token: str | None = None) -> None:
         """`pr-eval run` in a process of its own, so it outlives the page and the server.

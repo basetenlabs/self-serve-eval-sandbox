@@ -964,12 +964,50 @@ class AppTest(unittest.TestCase):
             with mock.patch.object(page, "checks", return_value={"blaxel": True}), \
                     mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
                 seen = {u: sorted(r["id"] for r in page.state(user=u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
-            self.assertEqual(seen, {"a@x.co": ["mine", "open"], "b@x.co": ["open"], None: ["open"]})
+            # Signed in: only their own runs; "open" has no owner recorded, so it is no one's. Locally: all but theirs.
+            self.assertEqual(seen, {"a@x.co": ["mine"], "b@x.co": [], None: ["open"]})
             self.assertIsNone(page.find("mine", "b@x.co"))
             self.assertEqual(page.stop("mine", "b@x.co"), page.stop("nope", "b@x.co"))  # as if it weren't there
             (jobs / "mine" / "trials" / "t__m__1").mkdir(parents=True)
             self.assertNotIn("no trace", page.trace("mine", "t__m__1", "b@x.co")["error"])  # no such attempt, for them
             self.assertIn("no trace", page.trace("mine", "t__m__1", "a@x.co")["error"])  # there, not yet traced
+
+    def test_hosted_a_public_repository_run_is_only_its_starters(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d)
+            self.add_run(jobs, "a-run", "a@x.co", phase="interrupted")  # both on public repositories
+            self.add_run(jobs, "b-run", "b@x.co", phase="interrupted")
+            page = app.App(jobs)
+            seen = {u: sorted(r["id"] for r in self.hosted_state(page, u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
+            self.assertEqual(seen, {"a@x.co": ["a-run"], "b@x.co": ["b-run"], None: ["a-run", "b-run"]})
+            self.assertIsNone(page.find("b-run", "a@x.co"))
+            self.assertEqual(page.find("a-run", "a@x.co")["id"], "a-run")
+            gone = page.stop("nope", "a@x.co")
+            with mock.patch.object(app, "alive", return_value=True), mock.patch.object(app.os, "kill") as kill, \
+                    mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(page, "describe", side_effect=lambda p: {"id": p.name, "phase": "running", "resumable": True}):
+                self.assertEqual(page.stop("b-run", "a@x.co"), gone)  # as if it weren't there
+                self.assertEqual(page.resume("b-run", "a@x.co"), {"error": "That run can't be resumed."})
+                kill.assert_not_called()
+                spawn.assert_not_called()
+                self.assertEqual(page.stop("b-run", "b@x.co"), {"ok": True})  # its starter still can
+            (jobs / "b-run" / "trials" / "t__m__1").mkdir(parents=True)
+            self.assertEqual(page.trace("b-run", "t__m__1", "a@x.co"), {"error": "No such attempt."})
+            handler = type("H", (app.Handler,), {"app": page})
+            server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+
+            def get(path, user):
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+                conn.request("GET", path, headers={"x-forwarded-email": user})
+                return conn.getresponse().status
+            try:
+                self.assertEqual(get("/b-run/report.json", "a@x.co"), 404)
+                self.assertEqual(get("/a-run/report.json", "a@x.co"), 200)
+                self.assertEqual(get("/b-run/report.json", "b@x.co"), 200)
+            finally:
+                server.shutdown()
 
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1080,7 +1118,7 @@ class AppTest(unittest.TestCase):
                 page.state.return_value = {**ready, "blocked": "Your run is still going."}
                 refused = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
             access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
-        self.assertEqual(access, {"owner": "a@x.co", "private": False})  # everyone sees it; it counts as theirs
+        self.assertEqual(access, {"owner": "a@x.co", "private": False})  # only they see it; it counts as theirs
         self.assertEqual(refused, {"error": "Your run is still going."})
 
     def test_runs_started_in_the_same_second_get_their_own_folders(self):
