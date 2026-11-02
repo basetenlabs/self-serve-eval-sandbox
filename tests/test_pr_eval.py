@@ -740,11 +740,24 @@ class PipelineTest(unittest.TestCase):
                 return {"private": path != "repos/o/public"}
             with mock.patch.object(tasks, "DEFAULT_REPOS", repos), mock.patch.object(tasks, "DEFAULT_TASKS", task_dir), \
                     mock.patch.object(tasks, "gh", side_effect=gh), \
+                    mock.patch.object(pipeline, "public_to_anyone", return_value=False), \
                     mock.patch.object(pipeline, "alive", side_effect=lambda pid: pid == 222), \
                     contextlib.redirect_stdout(io.StringIO()):
                 pipeline.sweep_private(jobs)
             self.assertEqual(sorted(p.name for p in repos.iterdir()), ["o__inuse.git", "o__public.git"])
             self.assertEqual(sorted(p.name for p in task_dir.iterdir()), ["o__inuse-2", "o__public-3"])
+
+    def test_without_a_github_login_a_public_repository_still_reads_as_public(self):
+        """The hosted page has no GitHub login of its own: GitHub tells anyone a repository is public."""
+        def answer(body: dict):
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(body).encode()
+            return response
+        with mock.patch.object(tasks, "gh", side_effect=RuntimeError("gh: not logged in")):
+            with mock.patch.object(pipeline.urllib.request, "urlopen", return_value=answer({"private": False})):
+                self.assertFalse(pipeline.private("pallets/click"))
+            with mock.patch.object(pipeline.urllib.request, "urlopen", side_effect=OSError("HTTP Error 404")):
+                self.assertTrue(pipeline.private("o/secret"))
 
     def test_a_resumed_run_collects_the_tasks_its_end_deleted_again(self):
         with tempfile.TemporaryDirectory() as d:

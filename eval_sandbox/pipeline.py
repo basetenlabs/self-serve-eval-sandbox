@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -232,7 +233,19 @@ def private(repo: str) -> bool:
     try:
         return tasks.gh(f"repos/{repo}").get("private") is not False
     except (RuntimeError, SystemExit, ValueError):
-        return True
+        # The hosted page has no GitHub login: GitHub answers anyone for a public repository.
+        return not public_to_anyone(repo)
+
+
+def public_to_anyone(repo: str) -> bool:
+    """Whether GitHub shows the repository to someone not signed in; any doubt reads as no."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(
+                f"https://api.github.com/repos/{repo}", headers={"Accept": "application/vnd.github+json"}),
+                timeout=20) as answer:
+            return json.loads(answer.read()).get("private") is False
+    except (OSError, ValueError):
+        return False
 
 
 def preflight(model_keys: list[str], judge_choice: str = "default",
