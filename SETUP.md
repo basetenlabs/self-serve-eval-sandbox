@@ -48,11 +48,12 @@ Check: it says you are logged in. If `gh` is missing, install it (`brew install 
 
 Runs create and delete many sandboxes, so they get a workspace of their own. pr-eval refuses `main` and never falls back to whichever workspace the CLI happens to have selected.
 
-1. The person creates a workspace in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. Give it a name such as `pr-eval`. Make sure it can run 40 sandboxes at once: the quick sample starts all 20 of its attempts together, each with a sandbox for the agent and one for grading. Other runs use up to 16.
+1. The person creates a workspace in the [Blaxel console](https://app.blaxel.ai): click the workspace name at the bottom left, then **Switch** > **+**. Give it a name such as `pr-eval`. Make sure it can run 40 sandboxes at once: the quick sample starts all 20 of its attempts together, each with a sandbox for the agent and one for grading. Other runs use up to 16. If the workspace allows fewer, run from a terminal with `--concurrency` set to half its limit (step 7).
 2. Install the Blaxel CLI and sign in to that workspace (the person may need to finish the sign-in in a browser):
 
 ```bash
 curl -fsSL https://blaxel.ai/install.sh | BL_INSTALL_SETUP=false sh
+export PATH="$HOME/.local/bin:$PATH"   # the installer adds this to new shells only
 bl login pr-eval                  # the new workspace's name
 mkdir -p ~/.config/pr-eval
 printf '%s\n' '{"workspace":"pr-eval"}' > ~/.config/pr-eval/blaxel.json
@@ -70,7 +71,7 @@ Ask the person for these. Keep them in the environment of the shell that starts 
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | Claude models, and the Claude Opus 5.5 judge | Anthropic Console, or `claude setup-token` (the person runs it) |
 | `OPENAI_API_KEY` | the GPT-6.1 Sol judge | OpenAI platform: API keys |
 
-The Claude judge runs through Claude Code, so install it too: `npm install -g @anthropic-ai/claude-code`. On a Mac, the Claude token can live in the Keychain instead of the environment: `security add-generic-password -a "$USER" -s pr-eval-claude-code-oauth-token -w`.
+The Claude judge runs through Claude Code, so install it too: `curl -fsSL https://claude.ai/install.sh | bash` (no Node needed), or `npm install -g @anthropic-ai/claude-code`. Check: `claude --version` prints a version. On a Mac, the Claude token can live in the Keychain instead of the environment: `security add-generic-password -a "$USER" -s pr-eval-claude-code-oauth-token -w`.
 
 ## 6. Start the page and read its checklist
 
@@ -127,7 +128,9 @@ Go and Python repositories need nothing more. For other languages, give the inst
 ## Remove it
 
 ```bash
+kill $(lsof -ti tcp:8765)                       # stops the page, if it is still running
 .venv/bin/pr-eval cleanup --workspace pr-eval   # deletes sandboxes a killed run left behind
+cd ..
 rm -rf self-serve-eval-sandbox                  # the clone, its virtualenv, run results and repository clones
 rm -f ~/.config/pr-eval/blaxel.json
 security delete-generic-password -s pr-eval-claude-code-oauth-token   # only if you stored the token on a Mac
