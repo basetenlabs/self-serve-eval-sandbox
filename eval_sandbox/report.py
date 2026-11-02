@@ -16,6 +16,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .config import redact_known
 from .runner import ANSI
 from .tasks import DEFAULT_TASKS
 from .tasks import load as load_task
@@ -191,9 +192,10 @@ def build_data(job_dir: Path) -> dict:
 
 def build(job_dir: Path) -> Path:
     data = build_data(job_dir)
-    write_atomic(job_dir / "report.json", json.dumps(data, indent=1))
+    # No credential is ever in a run's files; masking by value makes sure none reaches a reader.
+    write_atomic(job_dir / "report.json", redact_known(json.dumps(data, indent=1)))
     html = TEMPLATE.read_text()
-    payload = json.dumps(data).replace("</", "<\\/")  # never close the script tag early
+    payload = redact_known(json.dumps(data)).replace("</", "<\\/")  # never close the script tag early
     html = html.replace("__REPORT_DATA__", payload).replace("__REPORT_TITLE__", f"Eval Sandbox · {data['run']['run_id']}")
     target = job_dir / "report.html"
     write_atomic(target, html)

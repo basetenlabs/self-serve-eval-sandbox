@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -200,12 +202,16 @@ CLAUDE_CREDENTIAL_HELP = ("set ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN fro
                           f"{KEYCHAIN_SERVICE} -w).")
 
 
+FROM_KEYCHAIN: set[str] = set()
+
+
 def claude_credential() -> dict[str, str]:
     """What Claude Code signs in with, for the Claude models and the Claude judge: {variable: value}, or {}."""
     for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
         if os.environ.get(name):
             return {name: os.environ[name]}
     if token := keychain(KEYCHAIN_SERVICE):
+        FROM_KEYCHAIN.add(token)  # not in the environment, so redact_known has to be told
         return {"CLAUDE_CODE_OAUTH_TOKEN": token}
     return {}
 
@@ -217,6 +223,57 @@ def credential_env(model: Model) -> dict[str, str]:
     if model.provider == "anthropic" and (credential := claude_credential()):
         return credential
     raise SystemExit(missing_credential(model))
+
+
+# The agent's sandbox never holds a model key. It signs in with a placeholder made for the
+# attempt, and Blaxel's egress proxy, outside the sandbox, puts the real key on each request
+# to the provider. The key travels only in the sandbox's network rule, as a write-only secret.
+# Which header carries each credential, and how.
+KEY_HEADERS = {"BASETEN_API_KEY": ("Authorization", "Bearer {}"),
+               "ANTHROPIC_API_KEY": ("X-Api-Key", "{}"),
+               "CLAUDE_CODE_OAUTH_TOKEN": ("Authorization", "Bearer {}")}
+PROVIDER_DOMAINS = {"anthropic": "api.anthropic.com", "baseten": "inference.baseten.co"}
+
+
+def sandbox_credential(model: Model, real: dict[str, str]) -> tuple[dict[str, str], list[dict]]:
+    """For `real` ({variable: key}): the placeholder env the agent gets, and the proxy rule that adds the key."""
+    if not real:
+        return {}, []
+    (name, value), = real.items()
+    header, form = KEY_HEADERS[name]
+    placeholder = "pr-eval-placeholder-" + secrets.token_hex(16)
+    rule = {"destinations": [PROVIDER_DOMAINS[model.provider]],
+            "headers": {header: form.format("{{SECRET:model-key}}")}, "secrets": {"model-key": value}}
+    return {name: placeholder}, [rule]
+
+
+SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.I)
+MASK = "[redacted]"
+
+
+def known_secrets() -> list[str]:
+    """Every credential this process holds: secret-named variables, and a token read from the Keychain."""
+    values = {v for k, v in os.environ.items() if SECRET_NAME.search(k)} | FROM_KEYCHAIN
+    return sorted((v for v in values if len(v) >= 12), key=len, reverse=True)
+
+
+def redact_known(text: str) -> str:
+    """`text` with every credential this process holds masked, by value."""
+    for value in known_secrets():
+        if value in text:
+            text = text.replace(value, MASK)
+    return text
+
+
+def redact_file(path: Path) -> None:
+    """Rewrite an artifact in place if it holds a known credential."""
+    if not path.is_file():
+        return
+    raw = clean = path.read_bytes()
+    for value in known_secrets():
+        clean = clean.replace(value.encode(), MASK.encode())
+    if clean != raw:
+        path.write_bytes(clean)
 
 
 def missing_credential(model: Model) -> str | None:

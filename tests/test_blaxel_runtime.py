@@ -242,6 +242,54 @@ class RuntimeTests(unittest.TestCase):
             self.assertIsNone(runner.validation_status(task, settings))
 
 
+class ModelKeyTests(unittest.TestCase):
+    """The company model key never enters the agent's sandbox, and no artifact holds it."""
+
+    def test_the_sandbox_gets_a_placeholder_and_the_proxy_adds_the_key(self):
+        key = "real-company-key-0123456789abcdef"
+        for provider, name, domain, header in (("anthropic", "ANTHROPIC_API_KEY", "api.anthropic.com", "X-Api-Key"),
+                                               ("baseten", "BASETEN_API_KEY", "inference.baseten.co", "Authorization")):
+            with self.subTest(provider), tempfile.TemporaryDirectory() as d:
+                d = Path(d)
+                task = SimpleNamespace(id="public-task", instruction="Fix it.", path=d,
+                                       meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}})
+                model = SimpleNamespace(key="m", model="m", effort="high", provider=provider)
+                sent, rules = [], []
+
+                def execute(container, script, *, env=None, **_):
+                    sent.append((container, env or {}))
+                    # An agent that found a key and printed it, in its log and its change.
+                    return runtime.Execution(0, json.dumps({"type": "result", "result": key}) + "\n", key)
+
+                def download(container, remote, local, optional=False):
+                    local.write_text(f"+leaked = {key!r}\n")
+                with mock.patch.dict(os.environ, {name: key}, clear=True), \
+                        mock.patch.object(runner, "container_name", side_effect=["agent", "verifier"]), \
+                        mock.patch.object(runner, "start_container"), \
+                        mock.patch.object(runner, "prepare_workspace", return_value=(None, {"baseline": "a" * 40})), \
+                        mock.patch.object(runtime, "restrict_network",
+                                          side_effect=lambda c, domains, routing: rules.append((c, domains, routing))), \
+                        mock.patch.object(runtime, "execute", side_effect=execute), \
+                        mock.patch.object(runtime, "upload"), mock.patch.object(runtime, "delete"), \
+                        mock.patch.object(runtime, "download", side_effect=download), \
+                        mock.patch.object(runner, "price_agent", side_effect=lambda agent, *args: agent), \
+                        mock.patch.object(runner, "run_tests", return_value={"passed": True, "timed_out": False,
+                                                                              "output": "ok"}):
+                    runner.run_trial(task, model, 1, d / "trial", "run-one", runner.Settings(workspace="eval-only"))
+                agent_env = [env for container, env in sent if container == "agent" and name in env]
+                self.assertEqual(len(agent_env), 1)
+                self.assertTrue(agent_env[0][name].startswith("pr-eval-placeholder-"))
+                self.assertFalse([env for _, env in sent if key in json.dumps(env)])
+                (container, domains, routing), = rules
+                self.assertEqual((container, domains), ("agent", [domain]))
+                self.assertEqual(routing, [{"destinations": [domain], "secrets": {"model-key": key},
+                                            "headers": {header: ("Bearer " if header == "Authorization" else "")
+                                                        + "{{SECRET:model-key}}"}}])
+                for path in (d / "trial").rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn(key, path.read_text(errors="replace"), path.name)
+
+
 class TrialBoundaryTests(unittest.TestCase):
     def trial(self, d, events, prepare, on_delete=lambda name: None):
         """run_trial with every sandbox step mocked; the agent's sandbox is "agent", the verifier "verifier"."""

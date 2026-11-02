@@ -35,6 +35,9 @@ def mock_env(**values):
     return mock.patch.dict("os.environ", values)
 
 
+KEY = "test-real-key-" + "0123456789abcdef"  # stands in for a company model key
+
+
 def baseten_model() -> Model:
     return Model(key="glm-5.3", label="GLM-5.3", kind="open", provider="baseten", model="zai-org/GLM-5.3",
                  effort="high", prices={"zai-org/GLM-5.3": {"input": 1.40, "cached_input": 0.14, "output": 4.40}})
@@ -136,7 +139,7 @@ class AgentScriptTest(unittest.TestCase):
         from unittest import mock
         with mock.patch.object(runner.runtime, "restrict_network") as restrict:
             runner.block_lookups("trial", ["api.anthropic.com"])
-        restrict.assert_called_once_with("trial", ["api.anthropic.com"])
+        restrict.assert_called_once_with("trial", ["api.anthropic.com"], [])
 
 
 class ParsingTest(unittest.TestCase):
@@ -1478,12 +1481,14 @@ class ReportTest(unittest.TestCase):
                 trial_dir = job / "trials" / f"x__{model}__1"
                 trial_dir.mkdir(parents=True)
                 (trial_dir / "result.json").write_text(json.dumps(self.trial("x", model, outcome, 0.5)))
-                (trial_dir / "agent.patch").write_text("diff --git a/x b/x\n+</script><b>")
+                (trial_dir / "agent.patch").write_text("diff --git a/x b/x\n+</script><b>\n+" + KEY)
             (job / "run.json").write_text(json.dumps({
                 "run_id": "r1", "created_at": "2026-10-16T00:00:00+00:00", "attempts": 1, "tasks": ["x"],
                 "tasks_dir": str(Path(d) / "tasks"), "image": "img", "harness_version": "2.1.296", "judge": None,
                 "models": [anthropic_model().as_dict(), baseten_model().as_dict()]}))
-            html = report.build(job).read_text()
+            with mock.patch.dict(os.environ, {"BASETEN_API_KEY": KEY}):
+                html = report.build(job).read_text()
+            self.assertNotIn(KEY, html + (job / "report.json").read_text())  # a known key is masked
             data = json.loads((job / "report.json").read_text())
             self.assertTrue(data["complete"])
             self.assertEqual(data["summary"]["claude-opus"]["solved"], 1)
