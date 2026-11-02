@@ -102,6 +102,8 @@ export interface Run {
   resumable: boolean;
   /** On a private repository. */
   private?: boolean;
+  /** Who started it; sent only to admins, who see everyone's runs. */
+  owner?: string | null;
   /** What Run again puts back in the form; null when it can't. */
   again?: Again | null;
   board?: Board;
@@ -131,6 +133,8 @@ export interface AppState {
   spend?: { spent: number; cap: number } | null;
   github: GitHubAccount;
   favorites: Favorite[];
+  /** Hosted: you are an admin, so you see every run and the Access page. */
+  admin?: boolean;
 }
 
 /** Who reads GitHub for you. Hosted, `sign_in` offers your own GitHub sign-in; locally the `gh` CLI's login reads. */

@@ -6,10 +6,21 @@ any of this to run pr-eval yourself. Its sign-in package, `@blaxel/sign-in`, isn
 folder can't be deployed outside Baseten as it is.
 
 - **Sign-in:** `server.mjs` is the only public door: "Sign in with Blaxel" in front of
-  `pr-eval serve` on 127.0.0.1. Who may sign in is set in `site.config.mjs`. The page learns who is
+  `pr-eval serve` on 127.0.0.1. The page learns who is
   asking only from `X-Forwarded-Email`, which the sign-in server sets after dropping whatever the
   browser sent. A request that starts or stops a run must come from the site itself, and the page
   logs who sent it.
+- **Who may sign in:** the people `data/access.json` on the volume lists:
+  `{"admins": [], "emails": [], "domains": []}`. A verified Blaxel email gets in when it is an
+  admin, an invited address (any domain, Gmail too) or at exactly one of the domains (never a
+  subdomain; public mail domains and wildcards are refused). The first start creates the file with
+  two admins (michael.stolarz@baseten.co, mstolarz@blaxel.ai) and the domains baseten.co and
+  blaxel.ai, so everyone who could sign in before still can; `deploy.py` never overwrites it.
+  Admins change it on the page's **Access** tab, which only they see. The sign-in server answers
+  that tab (`access.mjs`): it checks the person is an admin in the file as it is now on every
+  request, checks each entry with the sign-in's own rules, never removes the last admin, writes the
+  file atomically and logs who changed what. The sign-in re-reads the file on every change, so
+  someone removed is signed out on their next request.
 - **Keys:** the page's process gets the judges', models', GitHub and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
 - **GitHub:** the page's own GitHub login, shared by everyone, reads public repositories only
@@ -21,8 +32,9 @@ folder can't be deployed outside Baseten as it is.
   come back. Their token lives in the page's memory
   only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. In
   an organization, an owner installs the app, or approves the person's request to.
-- **Who sees a run:** only the person who started it, on a public repository too. The page
-  records them in `access.json` in the run's folder, and hides a run with no owner recorded. The
+- **Who sees a run:** only the person who started it, on a public repository too, and the admins,
+  who see every run, with who started it, and can open any. The page records the starter in
+  `access.json` in the run's folder, and hides a run with no owner recorded from everyone else. The
   runs, their logs and the log lines naming who started or stopped one all stay on the volume.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
 - **Runs:** trials run in the same dedicated workspace as local runs, and the page's sandbox lives

@@ -3,8 +3,10 @@
 // `pr-eval serve` only answers 127.0.0.1, so this server is the one public door. A signed-in,
 // allowed person's requests reach the page with their email in X-Forwarded-Email (whatever the
 // browser sent in it is dropped first), and every write has already passed the exact-origin check.
+// /api/admin/access is answered here, not by the page: it edits who may sign in (access.mjs).
 import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { adminApi, seedAccess } from './access.mjs'
 import { createSiteServer, listen, loadConfig, proxySite, runMain, stopOnSignals } from '@blaxel/sign-in'
 
 /** Whether a `pr-eval run` process is going in this sandbox (the page starts them as `python -m eval_sandbox run`). */
@@ -45,7 +47,10 @@ runMain(async () => {
   const page = Number(process.env.PR_EVAL_PORT ?? 8765)
   const config = await loadConfig({ file: fileURLToPath(new URL('./site.config.mjs', import.meta.url)) })
   const app = proxySite(`http://127.0.0.1:${page}`, { websockets: false, ...config.proxy })
-  const server = await createSiteServer({ config, app })
+  // The access list lives on the volume beside the runs; admins change it from the page's Access tab.
+  if (config.policy.file) await seedAccess(config.policy.file)
+  const api = config.policy.file ? adminApi({ file: config.policy.file }) : undefined
+  const server = await createSiteServer({ config, app, api })
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
   if (process.env.BL_SANDBOX_API) keepAwake(process.env.BL_SANDBOX_API)

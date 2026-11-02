@@ -1,20 +1,116 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPolicy, loadBrand, renderLogin } from '@blaxel/sign-in'
+import { adminApi, SEED, seedAccess } from './access.mjs'
 import config from './site.config.mjs'
 
-test('a refused account gets the shared access instructions from sign-in 0.2.0', () => {
+const quiet = { info() {}, warn() {}, error() {} }
+const folder = t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pr-eval-access-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
+
+/** The admin API behind a plain HTTP server; the test names the signed-in person in a header. */
+async function serve(t, file) {
+  const api = adminApi({ file, log: quiet })
+  const server = createServer(async (req, res) => {
+    const path = new URL(req.url, 'http://x').pathname
+    if (await api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const base = `http://127.0.0.1:${server.address().port}/api/admin/access`
+  return {
+    get: async email => { const r = await fetch(base, { headers: { 'x-test-email': email } }); return { status: r.status, body: await r.json() } },
+    post: async (email, body) => {
+      const r = await fetch(base, { method: 'POST', headers: { 'x-test-email': email, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      return { status: r.status, body: await r.json() }
+    },
+  }
+}
+
+test('a refused account gets the shared access instructions from sign-in 0.3.0', () => {
   const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)))
-  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.2.0')
+  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.3.0')
   const html = renderLogin({
     brand: loadBrand(config.brand, fileURLToPath(new URL('./', import.meta.url))),
-    policy: createPolicy(config.access),
+    policy: createPolicy({ ...config.access, file: join(tmpdir(), 'no-such-access.json'), log: quiet }),
     origin: 'http://localhost',
     state: { code: 'not_allowed', message: 'This account is not on the list.' },
     blaxelSignOut: 'https://app.blaxel.ai/logout',
   })
   assert.match(html, /This account can&#39;t get in/)
-  assert.match(html, /Ask Michael Stolarz on Slack to add you\./)
+  assert.match(html, /Ask an Eval Sandbox admin, such as Michael Stolarz, on Slack to add you\./)
+})
+
+test('who may sign in comes only from the access file, which starts with the seed', async t => {
+  assert.deepEqual(Object.keys(config.access), ['file'])
+  const file = join(folder(t), 'data', 'access.json')
+  assert.equal(await seedAccess(file, quiet), true)
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: [...SEED.admins].sort(), emails: [], domains: [...SEED.domains].sort() })
+  writeFileSync(file, JSON.stringify({ admins: ['a@baseten.co'], emails: [], domains: [] }))
+  assert.equal(await seedAccess(file, quiet), false) // an existing file is never replaced
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins[0], 'a@baseten.co')
+})
+
+test('an invited outside email gets in and an uninvited one does not, live from the file an admin edits', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet)
+  const policy = createPolicy({ file, log: quiet })
+  const api = await serve(t, file)
+  assert.equal(policy.check('michael.stolarz@baseten.co'), 'allowed')
+  assert.equal(policy.check('someone@blaxel.ai'), 'allowed')
+  assert.equal(policy.check('guest@partner.io'), 'refused')
+
+  const added = await api.post('michael.stolarz@baseten.co', { list: 'emails', value: ' Guest@Partner.io ' })
+  assert.equal(added.status, 200)
+  assert.deepEqual(added.body.emails, ['guest@partner.io'])
+  assert.equal(policy.check('guest@partner.io'), 'allowed')
+  assert.equal(policy.check('other@partner.io'), 'refused')
+
+  assert.equal((await api.post('michael.stolarz@baseten.co', { list: 'domains', value: '@partner.io' })).status, 200)
+  assert.equal(policy.check('other@partner.io'), 'allowed')
+  assert.equal((await api.post('mstolarz@blaxel.ai', { list: 'domains', value: 'partner.io', remove: true })).status, 200)
+  assert.equal((await api.post('mstolarz@blaxel.ai', { list: 'emails', value: 'guest@partner.io', remove: true })).status, 200)
+  assert.equal(policy.check('guest@partner.io'), 'refused')
+  assert.equal(policy.check('other@partner.io'), 'refused')
+  assert.deepEqual(readdirSync(join(file, '..')), ['access.json']) // written by rename: no temporary file left
+})
+
+test('only admins read or change the list, checked against the file on every request', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet)
+  const api = await serve(t, file)
+  for (const who of ['someone@baseten.co', undefined]) {
+    assert.equal((await api.get(who)).status, 403)
+    assert.equal((await api.post(who, { list: 'admins', value: 'someone@baseten.co' })).status, 403)
+  }
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins.length, 2)
+
+  const promoted = await api.post('mstolarz@blaxel.ai', { list: 'admins', value: 'someone@baseten.co' })
+  assert.deepEqual(promoted.body.admins, ['michael.stolarz@baseten.co', 'mstolarz@blaxel.ai', 'someone@baseten.co'])
+  assert.equal((await api.get('someone@baseten.co')).status, 200)
+  await api.post('someone@baseten.co', { list: 'admins', value: 'mstolarz@blaxel.ai', remove: true })
+  assert.equal((await api.get('mstolarz@blaxel.ai')).status, 403) // removed a moment ago: no longer an admin
+})
+
+test('entries follow the sign-in rules, and the last admin stays', async t => {
+  const file = join(folder(t), 'access.json')
+  writeFileSync(file, JSON.stringify({ admins: ['only@baseten.co'], emails: [], domains: [] }))
+  const api = await serve(t, file)
+  const as = body => api.post('only@baseten.co', body)
+  assert.match((await as({ list: 'domains', value: 'gmail.com' })).body.error, /public email provider/)
+  assert.match((await as({ list: 'domains', value: '*.partner.io' })).body.error, /wildcard/)
+  assert.match((await as({ list: 'emails', value: '*@partner.io' })).body.error, /not a valid email/)
+  assert.match((await as({ list: 'owners', value: 'x@partner.io' })).body.error, /which list/)
+  const last = await as({ list: 'admins', value: 'only@baseten.co', remove: true })
+  assert.equal(last.status, 400)
+  assert.match(last.body.error, /last admin/)
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: ['only@baseten.co'], emails: [], domains: [] })
 })
