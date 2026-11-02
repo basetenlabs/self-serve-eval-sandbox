@@ -21,13 +21,13 @@ folder can't be deployed outside Baseten as it is.
   request, checks each entry with the sign-in's own rules, never removes the last admin, writes the
   file atomically and logs who changed what. The sign-in re-reads the file on every change, so
   someone removed is signed out on their next request.
-- **Keys:** the page's process gets the judges', models', GitHub and Blaxel keys in its environment
+- **Keys:** the page's process gets the judges', models' and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
-- **GitHub:** the page's own GitHub login, shared by everyone, reads public repositories only
-  (`PR_EVAL_PUBLIC_REPOS_ONLY`). For private ones, people **Sign in with GitHub** on the page:
-  GitHub's device flow through the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
+- **GitHub:** the page has no GitHub login of its own. Before starting a run, each person
+  **Signs in with GitHub** on the page, public repositories included: GitHub's device flow through
+  the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
   (read-only Contents, Pull requests and Metadata; no webhooks; its client id is in `deploy.py`,
-  and the page needs no secret). It reads only the repositories each person adds to it: a
+  and the page needs no secret). Private repositories need the app added to them: a
   repository it can't read yet shows **Add it on GitHub**, and the page looks again when they
   come back. Their token lives in the page's memory
   only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. In

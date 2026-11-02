@@ -43,6 +43,9 @@ QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models star
 # sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the page that adds repositories to it
+# Hosted (GitHub sign-in on), the page has no GitHub login of its own: each person reads repositories and runs
+# on their own GitHub sign-in, public repositories included.
+SIGN_IN_FIRST = "Sign in with GitHub to start a run: the eval reads repositories with your own GitHub login."
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
@@ -188,7 +191,8 @@ class App:
             image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
         except RuntimeError as exc:
             problem = str(exc)
-        gh = bool(shutil.which("gh")) and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
+        gh = not GITHUB_CLIENT_ID and bool(shutil.which("gh")) \
+            and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
         try:
             gh_login = tasks.gh("user").get("login") if gh else None
         except (RuntimeError, SystemExit, subprocess.SubprocessError):
@@ -336,6 +340,8 @@ class App:
         if not repo:
             return {"error": "Use owner/repo or a GitHub link."}
         token = self.token(user)
+        if GITHUB_CLIENT_ID and not token:
+            return {"repo": repo, "error": f"Sign in with GitHub so the eval can read {repo}."}
         # The page asks about a repository several times as it's picked (its pull requests, the saved
         # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept: after
         # adding the repository to the GitHub App, the person comes back and the page looks again.
@@ -353,8 +359,7 @@ class App:
                             "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
                 return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
             self.repos[key] = (time.monotonic(), data)
-        # The hosted page's own GitHub login is shared by everyone signed in: it never reads
-        # private code. A private repository needs the visitor's own GitHub sign-in.
+        # Without GitHub sign-in, a page that runs public repositories only never reads private code.
         if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") and not token:
             return {"repo": repo, "error": "Sign in with GitHub to use a private repository." if GITHUB_CLIENT_ID
                     else "This hosted page runs public repositories only."}
@@ -420,7 +425,9 @@ class App:
         repo = None if quick or pulls else parse_repo(str(form.get("repo") or ""))
         if not (quick or pulls or repo):
             return {"error": "Enter a GitHub repository as owner/repo, or paste pull request links."}
-        if not checks["gh"]:
+        if GITHUB_CLIENT_ID and not self.token(user):
+            return {"error": SIGN_IN_FIRST}
+        if not GITHUB_CLIENT_ID and not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
@@ -552,6 +559,8 @@ class App:
             return {"error": "That run can't be resumed."}
         if blocked := self.state(user=user)["blocked"] or self.taken(self.repos_of(self.jobs_dir / run_id), run_id):
             return {"error": blocked}
+        if GITHUB_CLIENT_ID and not self.token(user):
+            return {"error": "Sign in with GitHub to resume a run: the eval reads repositories with your own GitHub login."}
         if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
             return {"error": "Sign in with GitHub to resume a run on a private repository."}
         self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.token(user))
@@ -580,7 +589,7 @@ class App:
     def spawn(self, run_id: str, argv: list[str], github_token: str | None = None) -> None:
         """`pr-eval run` in a process of its own, so it outlives the page and the server.
 
-        With a visitor's GitHub token, the run reads and clones with it instead of the page's login.
+        With a visitor's GitHub token, the run reads and clones with it instead of the local `gh` login.
         """
         with self.lock:
             job_dir = self.jobs_dir / run_id
