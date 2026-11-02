@@ -678,6 +678,71 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(meta["request"]["repos"], ["o/r"])  # what resume needs to start over
         self.assertEqual(meta["tasks"], [])
 
+    def end_run_on_clone(self, private: bool, other: dict | None = None) -> tuple[bool, list]:
+        """Stop run r1 on o/secret beside its bare clone, and maybe another run; whether the clone is left."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repos = Path(d) / "repos"
+            (repos / "o__secret.git").mkdir(parents=True)
+            if other:
+                (Path(d) / "jobs" / "r2").mkdir(parents=True)
+                (Path(d) / "jobs" / "r2" / "run.json").write_text(json.dumps(other))
+            job = self.job(d, pipeline.Request(repos=["o/secret"]))
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
+                    mock.patch.object(tasks, "gh", return_value={"private": private}) as gh, \
+                    mock.patch.object(pipeline, "alive", return_value=True), \
+                    mock.patch.object(pipeline, "find_tasks", side_effect=KeyboardInterrupt), \
+                    mock.patch.object(runner, "cleanup"), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(pipeline.execute(job, [baseten_model()], runner.Settings()), 130)
+            return (repos / "o__secret.git").exists(), gh.call_args_list
+
+    def test_a_private_repositorys_clone_goes_with_its_last_run(self):
+        kept, asked = self.end_run_on_clone(private=True)
+        self.assertFalse(kept)
+        self.assertEqual(asked, [mock.call("repos/o/secret")])
+
+    def test_a_private_clone_stays_while_another_run_on_it_is_going(self):
+        going = {"request": {"repos": []}, "tasks": ["O__Secret-7"],  # another account's run, named by its tasks
+                 "status": {"phase": "running", "pid": 1}}
+        self.assertTrue(self.end_run_on_clone(private=True, other=going)[0])
+        ended = {**going, "status": {"phase": "done", "pid": 1}}
+        self.assertFalse(self.end_run_on_clone(private=True, other=ended)[0])
+
+    def test_a_public_repositorys_clone_stays(self):
+        self.assertTrue(self.end_run_on_clone(private=False)[0])
+
+    def test_starting_sweeps_clones_that_dead_runs_left(self):
+        """A run whose process died never cleaned up: the next `pr-eval run` or `pr-eval serve` does."""
+        with tempfile.TemporaryDirectory() as d:
+            repos, jobs = Path(d) / "repos", Path(d) / "jobs"
+            runs = {"dead": ("o/orphan", 111), "live": ("o/inuse", 222)}
+            for name, (repo, pid) in runs.items():
+                (jobs / name).mkdir(parents=True)
+                (jobs / name / "run.json").write_text(json.dumps(
+                    {"request": {"repos": [repo]}, "status": {"phase": "running", "pid": pid}}))
+            for clone in ("o__orphan.git", "o__inuse.git", "o__public.git"):
+                (repos / clone).mkdir(parents=True)
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
+                    mock.patch.object(tasks, "gh", side_effect=lambda path: {"private": path != "repos/o/public"}), \
+                    mock.patch.object(pipeline, "alive", side_effect=lambda pid: pid == 222), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                pipeline.sweep_clones(jobs)
+            self.assertEqual(sorted(p.name for p in repos.iterdir()), ["o__inuse.git", "o__public.git"])
+
+    def test_a_starting_run_keeps_the_clones_it_is_about_to_use(self):
+        with tempfile.TemporaryDirectory() as d:
+            repos = Path(d) / "repos"
+            (repos / "o__secret.git").mkdir(parents=True)
+            job = self.job(d, pipeline.Request(repos=["o/secret"]))
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
+                    mock.patch.object(tasks, "gh", return_value={"private": True}), \
+                    mock.patch.object(pipeline, "alive", side_effect=lambda pid: pid == os.getpid()), \
+                    mock.patch.object(pipeline, "preflight", return_value=([baseten_model()], None)), \
+                    mock.patch.object(pipeline, "new_job", return_value=job), \
+                    mock.patch.object(pipeline, "execute", side_effect=lambda *a, **k: (repos / "o__secret.git").exists()), \
+                    mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(cli.main(["run", "o/secret", "--jobs", str(Path(d) / "jobs"), "--name", "r1"]))
+
     def test_tasks_join_the_run_as_their_checks_pass(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:

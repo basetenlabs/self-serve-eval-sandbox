@@ -72,20 +72,10 @@ def parse_repo(text: str) -> str | None:
     return text if REPO.fullmatch(text) else None
 
 
-def alive(pid: int | None) -> bool:
-    """Whether a run's process is still going (and is still a pr-eval process)."""
-    if not pid:
-        return False
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    command = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    return "eval_sandbox" in command or "pr-eval" in command
+alive = pipeline.alive
 
 
-def repo_of(task_id: str) -> str:
-    return task_id.rsplit("-", 1)[0].replace("__", "/")
+repo_of = pipeline.repo_of
 
 
 class App:
@@ -848,6 +838,8 @@ def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     page = App(jobs_dir)
     # Check the workspace, the CLIs and the judge while the server starts, so the first visit doesn't wait.
     threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
+    # Delete the private clones left by runs whose process died, such as when the page last restarted.
+    threading.Thread(target=pipeline.sweep_clones, args=(jobs_dir,), daemon=True).start()
     handler = type("BoundHandler", (Handler,), {"app": page})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
