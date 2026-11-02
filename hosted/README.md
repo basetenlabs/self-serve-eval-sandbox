@@ -19,9 +19,11 @@ folder can't be deployed outside Baseten as it is.
   and the page needs no secret). It reads only the repositories each person adds to it: a
   repository it can't read yet shows **Add it on GitHub**, and the page looks again when they
   come back. Their token lives in the page's memory
-  only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. A
-  run on a private repository is seen only by the person who started it (`access.json` in its
-  folder). In an organization, an owner installs the app, or approves the person's request to.
+  only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. In
+  an organization, an owner installs the app, or approves the person's request to.
+- **Who sees a run:** only the person who started it, on a public repository too. The page
+  records them in `access.json` in the run's folder, and hides a run with no owner recorded. The
+  runs, their logs and the log lines naming who started or stopped one all stay on the volume.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
 - **Runs:** trials run in the same dedicated workspace as local runs, and the page's sandbox lives
   there too: `deploy.py` reads it from `PR_EVAL_BLAXEL_WORKSPACE`, else `~/.config/pr-eval/blaxel.json`,

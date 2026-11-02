@@ -60,12 +60,12 @@ export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) 
   );
 }
 
-/** The run's name, a lock when only its owner sees it, and how big it was. */
+/** The run's name, a lock when it is on a private repository, and how big it was. */
 function Title({ run, link = true }: { run: Run; link?: boolean }) {
   const name = (
     <>
       {run.title}
-      {run.private && <LockIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label="Private: only you see this run" />}
+      {run.private && <LockIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label="Private repository" />}
     </>
   );
   return (
