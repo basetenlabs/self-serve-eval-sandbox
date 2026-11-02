@@ -16,7 +16,7 @@ a fresh verifier sandbox after the agent has finished.
 
 Pull requests come from GitHub through the `gh` CLI, so private repositories work with
 whatever access `gh auth login` gave. Each repository is cloned once, bare, into
-data/repos/; the clone never enters a sandbox.
+data/repos/; the clone never enters a sandbox, and a private one goes when its last run ends.
 """
 from __future__ import annotations
 
