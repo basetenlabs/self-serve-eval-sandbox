@@ -327,14 +327,14 @@ class CollectTest(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def export(self, commits=(), **kwargs):
+    def export(self, commits=(), mirror=None, **kwargs):
         from unittest import mock
         issue = {"title": "double() returns its input", "body": "double(2) should be 4, but it returns 2. " * 3}
 
         def github(endpoint):
             return [{"commit": {"message": m}} for m in commits] if endpoint.endswith("/commits?per_page=100") else issue
         with mock.patch.object(tasks, "gh", side_effect=github):
-            return tasks.export_task(self.repo / ".git", "o/r", "Python", self.pr, self.out, **kwargs)
+            return tasks.export_task(mirror or self.repo / ".git", "o/r", "Python", self.pr, self.out, **kwargs)
 
     def test_go_imports_leave_out_the_standard_library(self):
         (self.repo / "a.go").write_text('package a\n\nimport (\n\t"fmt"\n\tv1 "k8s.io/api/core/v1"\n)\n\n'
@@ -417,6 +417,52 @@ class CollectTest(unittest.TestCase):
             export.assert_not_called()  # same commands: the folder and its check are kept
             tasks.collect("o/r", self.out, prs=[7], setup="make deps", test="pytest")
             export.assert_called_once()
+
+    def test_a_blobless_clone_fetches_a_tasks_files_in_one_batch(self):
+        import subprocess
+        import tarfile
+        from unittest import mock
+        (self.repo / "other.py").write_text("untouched by the PR\n")
+        self.git("add", "other.py")
+        self.git("commit", "-qm", "more base")
+        base = self.git("rev-parse", "HEAD")
+        (self.repo / "lib.py").write_text("def double(x):\n    return x + x\n")
+        (self.repo / "tests" / "test_lib.py").write_text("assert double(3) == 6\n")
+        self.git("commit", "-qam", "fix, squash-merged")
+        self.pr["merge_commit_sha"] = self.git("rev-parse", "HEAD")
+        self.git("config", "uploadpack.allowFilter", "true")
+        self.git("config", "uploadpack.allowAnySHA1InWant", "true")
+        mirror = Path(self.dir.name) / "mirror.git"
+        subprocess.run(["git", "clone", "-q", "--bare", "--filter=blob:none", f"file://{self.repo}", str(mirror)], check=True)
+        with mock.patch.object(tasks.subprocess, "run", wraps=subprocess.run) as run:
+            task = tasks.load(self.export(mirror=mirror))
+        batches = [c.args[0] for c in run.call_args_list if "--stdin" in c.args[0]]
+        self.assertEqual(len(batches), 1)  # the base tree's missing files, all at once
+        listing = tasks.git(mirror, "rev-list", "--objects", "--no-walk", "--missing=print", base).decode()
+        self.assertNotIn("?", listing)
+        with tarfile.open(task.path / "environment" / "source.tar.gz") as tar:
+            self.assertEqual(tar.extractfile("other.py").read().decode(), "untouched by the PR\n")
+            self.assertEqual(tar.extractfile("lib.py").read().decode(), "def double(x):\n    return 2 * x\n")
+
+    def test_a_scan_skips_unfit_prs_by_githubs_file_list_and_reports_counts(self):
+        from unittest import mock
+
+        def pr(n, title, files):
+            return {"number": n, "title": title, "body": "", "html_url": f"u{n}", "merged_at": "2026-10-01T00:00:00Z",
+                    "merge_commit_sha": "x", "files": [{"path": p, "role": tasks.role(p), "lines": 5} for p in files]}
+        fit = ["lib.py", "tests/test_lib.py"]
+        listing = [pr(1, "Fix a", fit), pr(2, "Docs", ["README.md"]), pr(3, "Bump deps", fit), pr(4, "Fix b", fit),
+                   pr(5, "Fix c", fit)]
+        said = []
+        with mock.patch.object(tasks, "gh", return_value={"language": "Python"}), \
+                mock.patch.object(tasks, "clone", return_value=self.repo / ".git"), \
+                mock.patch.object(tasks, "merged_prs", return_value=iter(listing)), \
+                mock.patch.object(tasks, "export_task", side_effect=lambda m, r, l, p, o, **k: o / str(p["number"])) as export:
+            written = tasks.collect("o/r", self.out, limit=2, on_progress=said.append, workers=1)
+        self.assertEqual(sorted(p.name for p in written), ["1", "4"])
+        self.assertEqual(sorted(c.args[3]["number"] for c in export.call_args_list), [1, 4])  # never the docs or the bump
+        self.assertEqual(said[0], "Cloning o/r")
+        self.assertEqual(said[-1], "Reading o/r's merged pull requests: 2 of 2 tasks found, 4 looked at")
 
     def test_pull_requests_in_the_forms_people_paste(self):
         for text in ("https://github.com/o/r/pull/12", "github.com/o/r/pull/12/files", " o/r#12 ",
@@ -667,6 +713,20 @@ class PipelineTest(unittest.TestCase):
             status = pipeline.Job(job.path).meta["status"]
         self.assertEqual(status["phase"], "failed")
         self.assertIn("missing-task", status["detail"])
+
+    def test_collecting_shows_each_step_on_the_page(self):
+        with tempfile.TemporaryDirectory() as d:
+            job = self.job(d, pipeline.Request(repos=["o/r"]))
+            job.status("collecting", "Finding merged pull requests in o/r")
+            tell = pipeline.collecting(job)
+            for text in ("Cloning o/r: receiving objects 10%", "Cloning o/r: receiving objects 20%",
+                         "Reading o/r's merged pull requests: 0 of 10 tasks found, 0 looked at"):
+                tell(text)
+                if "10%" in text:
+                    self.assertEqual(pipeline.Job(job.path).meta["status"]["detail"], text)
+            status = pipeline.Job(job.path).meta["status"]
+        self.assertEqual(status["phase"], "collecting")  # the page reads the step and counts from the detail
+        self.assertEqual(status["detail"], "Reading o/r's merged pull requests: 0 of 10 tasks found, 0 looked at")
 
     def test_a_stopped_run_can_be_resumed(self):
         from unittest import mock

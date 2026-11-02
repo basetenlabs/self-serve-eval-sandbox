@@ -298,15 +298,17 @@ def default_name(request: Request) -> str:
     return f"{named[0].split('/')[-1] if named else 'quick' if request.quick else 'sample'}-{stamp}"
 
 
-def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
-    """Task folders for the request, collected from GitHub where they don't exist yet."""
+def find_tasks(request: Request, tasks_dir: Path, on_progress=None) -> list[tasks.Task]:
+    """Task folders for the request, collected from GitHub where they don't exist yet.
+    `on_progress(text)` hears each step of collecting, with counts."""
     if request.task_ids:
         return tasks.discover(tasks_dir, request.task_ids)
     if request.repos or request.pulls:
         wanted = {repo: request.prs for repo in request.repos} | request.pulls
         paths = [path for repo, prs in wanted.items() for path in tasks.collect(
             repo, tasks_dir, prs=prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
-            setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines)]
+            setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines,
+            on_progress=on_progress)]
         return [tasks.load(p) for p in paths]
     paths = [path for repo, prs in tasks.sample(request.quick).items() for path in tasks.collect(repo, tasks_dir, prs=prs)]
     found = sorted((tasks.load(p) for p in paths), key=lambda t: t.meta["task"]["merged_at"])
@@ -349,7 +351,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
             else:
                 request = Request(**job.meta.get("request") or {})
                 job.status("collecting", f"Finding merged pull requests in {request.describe()}")
-                candidates = find_tasks(request, tasks_dir)
+                candidates = find_tasks(request, tasks_dir, on_progress=collecting(job))
                 if not candidates:
                     raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
                 job.meta["candidates"] = [t.id for t in candidates]
@@ -385,6 +387,24 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     finally:
         if asking:  # it deletes its sandbox when it's done, however the run ended
             asking.join(120)
+
+
+def collecting(job: Job):
+    """Shows each step of collecting on the page as it goes ("Cloning o/r: receiving objects 45%").
+    A new step is saved at once; updates within a step at most once a second."""
+    last, lock = ("", 0.0), threading.Lock()
+
+    def tell(text: str) -> None:
+        nonlocal last
+        step = text.split(":", 1)[0]
+        with lock:
+            if step == last[0] and time.monotonic() - last[1] < 1:
+                return
+            last = (step, time.monotonic())
+            job.meta["status"] = {**job.meta["status"], "detail": text, "updated_at": now()}
+            job.save()
+
+    return tell
 
 
 def start_running(job: Job, models: list[config.Model], settings: runner.Settings) -> None:

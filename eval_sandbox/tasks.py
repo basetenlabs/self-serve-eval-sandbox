@@ -15,8 +15,9 @@ Only `environment/` and `instruction.md` ever reach the agent. The rest is copie
 a fresh verifier sandbox after the agent has finished.
 
 Pull requests come from GitHub through the `gh` CLI, so private repositories work with
-whatever access `gh auth login` gave. Each repository is cloned once, bare, into
-data/repos/; the clone never enters a sandbox, and a private one goes when its last run ends.
+whatever access `gh auth login` gave. Each repository is cloned once, bare and blobless
+(commits and trees, with file contents fetched as tasks need them), into data/repos/; the
+clone never enters a sandbox, and a private one goes when its last run ends.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ import shutil
 import subprocess
 import threading
 import tomllib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -175,13 +176,23 @@ def write_toml(path: Path, sections: dict[str, dict]) -> None:
 def gh(endpoint: str, token: str | None = None):
     """One GitHub API call through the gh CLI, which carries the user's own login, or `token`:
     the hosted page's visitor's, when they signed in with GitHub."""
+    return gh_args([endpoint], endpoint, token)
+
+
+def gh_args(args: list[str], name: str, token: str | None):
     if not shutil.which("gh"):
         raise SystemExit("pr-eval collect reads pull requests with the GitHub CLI: install gh, then `gh auth login`.")
-    p = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True, timeout=120,
+    p = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=120,
                        env={**os.environ, "GH_TOKEN": token} if token else None)
     if p.returncode:
-        raise RuntimeError(f"gh api {endpoint}: {p.stderr.strip()[-300:]}")
+        raise RuntimeError(f"gh api {name}: {p.stderr.strip()[-300:]}")
     return json.loads(p.stdout)
+
+
+def graphql(query: str, token: str | None = None, **variables: str):
+    """One GitHub GraphQL query through the gh CLI, like `gh`. Variables are strings."""
+    fields = [arg for name, value in variables.items() for arg in ("-f", f"{name}={value}")]
+    return gh_args(["graphql", "-f", f"query={query}", *fields], "graphql", token)
 
 
 # gh lends git its login, so cloning a private repository needs nothing beyond `gh auth login`.
@@ -192,24 +203,86 @@ def git(mirror: Path, *args: str) -> bytes:
     return subprocess.run(["git", f"--git-dir={mirror}", *args], check=True, capture_output=True).stdout
 
 
-def clone(repo: str, repos_dir: Path) -> Path:
-    """A bare clone of the repository, made once and reused."""
+GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+# What git prints while it works: "Receiving objects:  45% (1234/5678), 120.00 MiB | 30.00 MiB/s".
+GIT_PROGRESS = re.compile(r"(?:remote: )?([A-Z][a-z]+(?: [a-z]+)*):\s+(\d+)% \((\d+)/(\d+)\)(?:, ([\d.]+ [KMG]iB))?")
+
+
+def clone(repo: str, repos_dir: Path, on_progress=None) -> Path:
+    """A blobless bare clone of the repository, made once and reused.
+
+    It holds every commit and tree but no file contents: PostHog's takes 42 s and 360 MB, against
+    6 minutes and 8.1 GB for a full clone. A task fetches the files it needs (`prefetch`).
+    `on_progress(text)` hears how far the clone has got.
+    """
     path = repos_dir / f"{repo.replace('/', '__')}.git"
     if not path.exists():
         repos_dir.mkdir(parents=True, exist_ok=True)
         print(f"cloning {repo} into {path}")
-        if subprocess.run(["git", *GIT_AUTH, "clone", "--bare", "--quiet", f"https://github.com/{repo}.git", str(path)],
-                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}).returncode:
-            raise SystemExit(f"couldn't clone {repo}: check that `gh auth status` shows an account with access to it")
+        partial = path.with_name(path.name + ".partial")  # a clone cut short is never taken for a finished one
+        shutil.rmtree(partial, ignore_errors=True)
+        p = subprocess.Popen(["git", *GIT_AUTH, "clone", "--bare", "--filter=blob:none", "--progress",
+                              f"https://github.com/{repo}.git", str(partial)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=GIT_ENV)
+        tail = ""
+        for line in lines(p.stderr):
+            tail = line
+            if on_progress and (match := GIT_PROGRESS.match(line)):
+                step, percent, size = match[1].lower(), match[2], match[5]
+                on_progress(f"Cloning {repo}: {step} {percent}%" + (f", {size}" if size else ""))
+        if p.wait():
+            shutil.rmtree(partial, ignore_errors=True)
+            raise SystemExit(f"couldn't clone {repo} ({tail.strip()[-200:]}): "
+                             "check that `gh auth status` shows an account with access to it")
+        partial.rename(path)
     return path
+
+
+def lines(stream):
+    """A process's output, line by line, where a carriage return also ends a line (git's progress)."""
+    pending = b""
+    while chunk := stream.read1(65536):
+        pending += chunk
+        *done, pending = re.split(rb"[\r\n]", pending)
+        yield from (d.decode(errors="replace") for d in done if d)
+    if pending:
+        yield pending.decode(errors="replace")
+
+
+_FETCHING: dict[Path, threading.Lock] = {}
+
+
+def fetching(mirror: Path) -> threading.Lock:
+    """One fetch into a clone at a time: tasks exported side by side share most of their files."""
+    return _FETCHING.setdefault(mirror, threading.Lock())
+
+
+def prefetch(mirror: Path, commit: str) -> None:
+    """Fetch, in one batch, the files at `commit` that a blobless clone doesn't have yet.
+
+    Without it, `git archive` asks GitHub for each missing file on its own, one round trip per
+    file. The first task in a repository fetches its whole tree (PostHog's: 220 MB, under a
+    minute); later ones fetch only what changed since.
+    """
+    if not git(mirror, "config", "--get", "--default=", "remote.origin.promisor").strip():
+        return  # a full clone has everything
+    with fetching(mirror):
+        listing = git(mirror, "rev-list", "--objects", "--no-walk", "--missing=print", commit).decode()
+        missing = [line[1:] for line in listing.splitlines() if line.startswith("?")]
+        if missing:
+            subprocess.run(["git", *GIT_AUTH, f"--git-dir={mirror}", "-c", "fetch.negotiationAlgorithm=noop",
+                            "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no",
+                            "--filter=blob:none", "--stdin", "origin"],
+                           input="\n".join(missing).encode(), check=True, capture_output=True, env=GIT_ENV)
 
 
 def ensure_commit(mirror: Path, sha: str) -> None:
     """Fetch a commit the clone doesn't have yet, such as a merge newer than the clone."""
-    if subprocess.run(["git", f"--git-dir={mirror}", "cat-file", "-e", f"{sha}^{{commit}}"],
-                      capture_output=True).returncode:
-        subprocess.run(["git", *GIT_AUTH, f"--git-dir={mirror}", "fetch", "--quiet", "origin", sha],
-                       check=True, capture_output=True, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    with fetching(mirror):
+        if subprocess.run(["git", f"--git-dir={mirror}", "cat-file", "-e", f"{sha}^{{commit}}"],
+                          capture_output=True).returncode:
+            subprocess.run(["git", *GIT_AUTH, f"--git-dir={mirror}", "fetch", "--quiet", "--no-write-fetch-head",
+                            "origin", sha], check=True, capture_output=True, env=GIT_ENV)
 
 
 def clean_text(text: str) -> str:
@@ -409,9 +482,10 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     shutil.rmtree(tmp, ignore_errors=True)
     for folder in ("environment", "tests/files", "solution"):
         (tmp / folder).mkdir(parents=True)
-    # Compressed, it is about a quarter the size to keep and to upload to each sandbox.
-    (tmp / "environment" / "source.tar.gz").write_bytes(
-        gzip.compress(git(mirror, "archive", "--format=tar", base), compresslevel=6, mtime=0))
+    # Compressed, it is about a quarter the size to keep and to upload to each sandbox. Git writes
+    # it straight to the file, so a monorepo's tree never sits in memory.
+    prefetch(mirror, base)
+    git(mirror, "archive", "--format=tar.gz", "-o", str(tmp / "environment" / "source.tar.gz"), base)
     for path, content in hidden.items():
         target = tmp / "tests" / "files" / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -440,15 +514,34 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     return dest
 
 
+MERGED = """query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, first: 50, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number title body url mergedAt mergeCommit { oid }
+              files(first: 100) { nodes { path additions deletions } } }
+    }
+  }
+}"""
+
+
 def merged_prs(repo: str, since: str | None = None, pages: int = 10):
-    """Merged pull requests, most recently updated first."""
-    for page in range(1, pages + 1):
-        listing = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={page}")
-        if not listing:
+    """Merged pull requests, most recently updated first, each with the files it changed
+    ({path, role, lines}), 50 to a GitHub request, so the unfit ones never touch the clone."""
+    owner, name = repo.split("/", 1)
+    after = None
+    for _ in range(pages):
+        found = graphql(MERGED, owner=owner, name=name, **({"after": after} if after else {}))
+        listing = found["data"]["repository"]["pullRequests"]
+        for pr in listing["nodes"]:
+            if pr["mergeCommit"] and (not since or pr["mergedAt"][:10] >= since):
+                yield {"number": pr["number"], "title": pr["title"], "body": pr["body"], "html_url": pr["url"],
+                       "merged_at": pr["mergedAt"], "merge_commit_sha": pr["mergeCommit"]["oid"],
+                       "files": [{"path": f["path"], "role": role(f["path"]), "lines": f["additions"] + f["deletions"]}
+                                 for f in pr["files"]["nodes"]]}
+        if not listing["pageInfo"]["hasNextPage"]:
             return
-        for pr in listing:
-            if pr.get("merged_at") and (not since or pr["merged_at"][:10] >= since):
-                yield pr
+        after = listing["pageInfo"]["endCursor"]
 
 
 def browse(repo: str, numbers: list[int] | None = None, count: int = 30, token: str | None = None) -> list[dict]:
@@ -511,13 +604,16 @@ def search(repo: str, words: str, token: str | None = None, count: int = 12) -> 
 def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = None, limit: int = 20,
             since: str | None = None, setup: str | None = None, test: str | None = None,
             language: str | None = None, repos_dir: Path = DEFAULT_REPOS, force: bool = False,
-            max_lines: int = DEFAULT_MAX_LINES) -> list[Path]:
+            max_lines: int = DEFAULT_MAX_LINES, on_progress=None, workers: int = 4) -> list[Path]:
     """Task folders for one repository: the given PR numbers, or up to `limit` recent merged PRs.
 
     Folders that already exist are kept unless `force`, so collecting again is cheap and
     keeps their validation results. One made with other install or test commands than
-    these is made again, and so checked again.
+    these is made again, and so checked again. `workers` tasks are written side by side;
+    `on_progress(text)` hears each step, with counts.
     """
+    say = on_progress or (lambda text: None)
+
     def folder(number: int) -> Path:
         return out / f"{repo.replace('/', '__')}-{number}"
 
@@ -541,27 +637,65 @@ def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = Non
             recipe(repo, language, [])
         except Skip as why:
             raise SystemExit(f"{repo}: {why}") from None
-    mirror = clone(repo, repos_dir)
+    say(f"Cloning {repo}")
+    mirror = clone(repo, repos_dir, on_progress)
     out.mkdir(parents=True, exist_ok=True)
-    candidates = (gh(f"repos/{repo}/pulls/{n}") for n in todo) if prs else merged_prs(repo, since)
-    skipped = 0
-    for pr in candidates:
-        if not prs and len(written) >= limit:
-            break
-        if kept(pr["number"]):
-            if prs or load(folder(pr["number"])).meta["task"]["lines_changed"] <= max_lines:
-                written.append(folder(pr["number"]))
-            continue
+
+    def export(pr: dict | int) -> Path:
+        pr = pr if isinstance(pr, dict) else gh(f"repos/{repo}/pulls/{pr}")
         try:
-            if not prs and MAINTENANCE.search(pr["title"]):
-                raise Skip("maintenance, not a code change")
-            written.append(export_task(mirror, repo, language, pr, out, setup=setup, test=test,
-                                       max_lines=MAX_LINES if prs else max_lines))
-            print(f"  {repo}#{pr['number']}: {pr['title']}")
+            path = export_task(mirror, repo, language, pr, out, setup=setup, test=test,
+                               max_lines=MAX_LINES if prs else max_lines)
         except Skip as why:
-            skipped += 1
             if prs:  # asked for by number, so say why
                 print(f"  {repo}#{pr['number']}: skipped, {why}")
+            raise
+        print(f"  {repo}#{pr['number']}: {pr['title']}")
+        return path
+
+    looked = skipped = 0
+    going: dict = {}
+
+    def tell() -> None:
+        if prs:
+            say(f"Preparing {repo}'s pull requests: {looked - len(going)} of {len(todo)} done")
+        else:
+            say(f"Reading {repo}'s merged pull requests: {len(written)} of {limit} tasks found, "
+                f"{looked - len(going)} looked at")
+
+    def settle(block: bool) -> None:
+        nonlocal skipped
+        done, _ = wait(going, return_when=FIRST_COMPLETED) if block else ({f for f in going if f.done()}, None)
+        for future in done:
+            going.pop(future)
+            try:
+                written.append(future.result())
+            except Skip:
+                skipped += 1
+            tell()
+
+    tell()
+    candidates = iter(todo) if prs else merged_prs(repo, since)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for pr in candidates:
+            settle(block=False)
+            while going and (len(going) >= workers or (not prs and len(written) + len(going) >= limit)):
+                settle(block=True)
+            if not prs and len(written) >= limit:
+                break
+            number = pr if isinstance(pr, int) else pr["number"]
+            if not prs and kept(number):
+                if load(folder(number)).meta["task"]["lines_changed"] <= max_lines:
+                    written.append(folder(number))
+                continue
+            looked += 1
+            if not prs and (MAINTENANCE.search(pr["title"]) or unfit(pr["files"], max_lines)):
+                skipped += 1  # maintenance, or GitHub's list of its files rules it out: the clone isn't read
+                tell()
+                continue
+            going[pool.submit(export, pr)] = number
+        while going:
+            settle(block=True)
     if skipped and not prs:
         print(f"  {repo}: passed over {skipped} merged PRs (maintenance, no test changes, or too large)")
     return written
