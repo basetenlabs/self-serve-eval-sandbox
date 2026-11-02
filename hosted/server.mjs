@@ -4,9 +4,13 @@
 // allowed person's requests reach the page with their email in X-Forwarded-Email (whatever the
 // browser sent in it is dropped first), and every write has already passed the exact-origin check.
 // /api/admin/access is answered here, not by the page: it edits who may sign in (access.mjs).
+// With a mail key (PR_EVAL_MAIL_API_KEY), the refused page offers "Request access", which emails
+// the admins (requests.mjs); without one it shows no button.
 import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { adminApi, seedAccess } from './access.mjs'
+import { resendMailer } from './mailer.mjs'
+import { accessRequests } from './requests.mjs'
 import { createSiteServer, listen, loadConfig, proxySite, runMain, stopOnSignals } from '@blaxel/sign-in'
 
 /** Whether a `pr-eval run` process is going in this sandbox (the page starts them as `python -m eval_sandbox run`). */
@@ -50,7 +54,12 @@ runMain(async () => {
   // The access list lives on the volume beside the runs; admins change it from the page's Access tab.
   if (config.policy.file) await seedAccess(config.policy.file)
   const api = config.policy.file ? adminApi({ file: config.policy.file }) : undefined
-  const server = await createSiteServer({ config, app, api })
+  const key = process.env.PR_EVAL_MAIL_API_KEY
+  delete process.env.PR_EVAL_MAIL_API_KEY
+  const requestAccess = key && config.policy.file
+    ? accessRequests({ file: config.policy.file, origin: config.origin, mailer: resendMailer({ key, from: process.env.PR_EVAL_MAIL_FROM }) })
+    : undefined
+  const server = await createSiteServer({ config, app, api, requestAccess })
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
   if (process.env.BL_SANDBOX_API) keepAwake(process.env.BL_SANDBOX_API)

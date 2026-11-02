@@ -13,6 +13,6 @@
     "check": "node --disable-warning=ExperimentalWarning node_modules/@blaxel/sign-in/server.mjs --check --config site.config.mjs"
   },
   "dependencies": {
-    "@blaxel/sign-in": "npm:@blaxel-ai/sign-in@0.3.0"
+    "@blaxel/sign-in": "npm:@blaxel-ai/sign-in@0.4.0"
   }
 }

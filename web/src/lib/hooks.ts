@@ -1,20 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 
-// ---------- hash routes: #/, #/runs/<id>[/<tab>[/<task>]] and #/access (admins, hosted) ----------
+// ---------- hash routes: #/, #/runs/<id>[/<tab>[/<task>]] and #/access[?invite=<email>] (admins, hosted) ----------
 
-export type Route = { page: "home" } | { page: "access" } | { page: "run"; id: string; tab?: string; task?: string };
+export type Route = { page: "home" } | { page: "access"; invite?: string } | { page: "run"; id: string; tab?: string; task?: string };
 
-function parse(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+export function parse(hash: string): Route {
+  const [path, query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
+  const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "runs" && parts[1]) return { page: "run", id: parts[1], tab: parts[2], task: parts[3] };
-  if (parts[0] === "access") return { page: "access" };
+  // An access request's email links here with the address to invite filled in.
+  if (parts[0] === "access") {
+    const invite = new URLSearchParams(query).get("invite")?.trim();
+    return invite ? { page: "access", invite } : { page: "access" };
+  }
   return { page: "home" };
 }
 
 export const href = (route: Route) =>
   route.page === "run"
     ? `#/runs/${encodeURIComponent(route.id)}${route.tab ? `/${route.tab}${route.task ? `/${encodeURIComponent(route.task)}` : ""}` : ""}`
-    : route.page === "access" ? "#/access" : "#/";
+    : route.page === "access" ? `#/access${route.invite ? `?invite=${encodeURIComponent(route.invite)}` : ""}` : "#/";
 
 export function useRoute(): [Route, (r: Route, replace?: boolean) => void] {
   const [route, setRoute] = useState(() => parse(location.hash));

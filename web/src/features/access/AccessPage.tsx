@@ -21,7 +21,7 @@ const LISTS: { key: ListName; title: string; text: string; placeholder: string }
 ];
 
 /** Who may sign in to the hosted page: admins, invited addresses and whole domains. Changes apply at once. */
-export function AccessPage() {
+export function AccessPage({ invite }: { invite?: string }) {
   const [access, setAccess] = React.useState<Access | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -42,12 +42,17 @@ export function AccessPage() {
         A Blaxel account with a verified email gets in when it is on one of these lists. Changes apply at once:
         someone you remove is signed out on their next request. Everyone sees only their own runs; admins see every run.
       </p>
+      {invite && access && !access.emails.includes(invite.toLowerCase()) && !access.admins.includes(invite.toLowerCase()) && (
+        <div role="status" className="mt-8 max-w-[66ch] bg-surface px-4 py-3 text-[14px] shadow-[inset_2px_0_0_var(--foreground)]">
+          <span className="font-mono text-[13px]">{invite}</span> asked for access. Their address is filled in under Invited people: press Add to let them in.
+        </div>
+      )}
       <div className="mt-10">
         {error ? <Empty title="Not available">{error}</Empty>
           : !access ? <div className="h-64 animate-pulse bg-node" aria-busy />
             : (
               <div className="grid gap-10 lg:grid-cols-3 lg:gap-8">
-                {LISTS.map((list) => <List key={list.key} list={list} access={access} onChange={setAccess} />)}
+                {LISTS.map((list) => <List key={list.key} list={list} access={access} onChange={setAccess} prefill={list.key === "emails" ? invite : undefined} />)}
               </div>
             )}
       </div>
@@ -55,11 +60,12 @@ export function AccessPage() {
   );
 }
 
-function List({ list, access, onChange }: {
-  list: (typeof LISTS)[number]; access: Access; onChange: (a: Access) => void;
+function List({ list, access, onChange, prefill }: {
+  list: (typeof LISTS)[number]; access: Access; onChange: (a: Access) => void; prefill?: string;
 }) {
   const toast = useToast();
-  const [value, setValue] = React.useState("");
+  // A request's link fills in the invite list only while that address isn't on it yet.
+  const [value, setValue] = React.useState(() => prefill && !access[list.key].includes(prefill.toLowerCase()) ? prefill : "");
   const [busy, setBusy] = React.useState(false);
   const [problem, setProblem] = React.useState<string | null>(null);
   const entries = access[list.key];
@@ -101,6 +107,7 @@ function List({ list, access, onChange }: {
           aria-label={`Add to ${list.title.toLowerCase()}`}
           aria-invalid={!!problem}
           autoComplete="off"
+          autoFocus={!!prefill && value === prefill}
           spellCheck={false}
         />
         <Button type="submit" variant="outline" disabled={busy || !value.trim()}>Add</Button>

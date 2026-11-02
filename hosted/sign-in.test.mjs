@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPolicy, loadBrand, renderLogin } from '@blaxel/sign-in'
 import { adminApi, SEED, seedAccess } from './access.mjs'
+import { resendMailer } from './mailer.mjs'
+import { accessRequests, inviteLink } from './requests.mjs'
 import config from './site.config.mjs'
 
 const quiet = { info() {}, warn() {}, error() {} }
@@ -35,9 +37,9 @@ async function serve(t, file) {
   }
 }
 
-test('a refused account gets the shared access instructions from sign-in 0.3.0', () => {
+test('a refused account gets the shared access instructions from sign-in 0.4.0', () => {
   const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)))
-  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.3.0')
+  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.4.0')
   const html = renderLogin({
     brand: loadBrand(config.brand, fileURLToPath(new URL('./', import.meta.url))),
     policy: createPolicy({ ...config.access, file: join(tmpdir(), 'no-such-access.json'), log: quiet }),
@@ -113,4 +115,52 @@ test('entries follow the sign-in rules, and the last admin stays', async t => {
   assert.equal(last.status, 400)
   assert.match(last.body.error, /last admin/)
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: ['only@baseten.co'], emails: [], domains: [] })
+})
+
+test('an access request emails each current admin, and only them, a link that fills in the invite', async t => {
+  const file = join(folder(t), 'access.json')
+  writeFileSync(file, JSON.stringify({ admins: ['boss@baseten.co', 'Second@Blaxel.ai'], emails: ['guest@partner.io'], domains: ['baseten.co'] }))
+  const sent = []
+  const mailer = { send: async message => { sent.push(message) } }
+  const hook = accessRequests({ file, origin: 'https://eval.example', mailer, log: quiet })
+  await hook({ email: 'new+eval@gmail.com' })
+  assert.deepEqual(sent.map(m => m.to), ['boss@baseten.co', 'second@blaxel.ai'], 'admins only: never invited people, domains or the requester')
+  assert.equal(sent[0].subject, 'Eval Sandbox: new+eval@gmail.com asked for access')
+  assert.ok(sent[0].text.includes('https://eval.example/#/access?invite=new%2Beval%40gmail.com'))
+  assert.equal(inviteLink('https://eval.example', 'a@b.io'), 'https://eval.example/#/access?invite=a%40b.io')
+
+  // The file as it is now decides: a new admin gets the next request, a removed one doesn't.
+  writeFileSync(file, JSON.stringify({ admins: ['third@baseten.co'] }))
+  sent.length = 0
+  await hook({ email: 'other@gmail.com' })
+  assert.deepEqual(sent.map(m => m.to), ['third@baseten.co'])
+})
+
+test('an access request fails, so the person can ask again, only when no admin was reached', async t => {
+  const file = join(folder(t), 'access.json')
+  writeFileSync(file, JSON.stringify({ admins: ['a@baseten.co', 'b@baseten.co'] }))
+  const down = new Set(['a@baseten.co'])
+  const mailer = { send: async ({ to }) => { if (down.has(to)) throw new Error('rejected') } }
+  const hook = accessRequests({ file, origin: 'https://eval.example', mailer, log: quiet })
+  await hook({ email: 'x@gmail.com' }) // one admin reached is enough
+  down.add('b@baseten.co')
+  await assert.rejects(hook({ email: 'x@gmail.com' }), /no admin could be emailed/)
+  writeFileSync(file, '{"admins": [')
+  await assert.rejects(hook({ email: 'x@gmail.com' }), /access file can't be read/)
+  writeFileSync(file, JSON.stringify({ admins: [], emails: ['x@y.io'] }))
+  await assert.rejects(hook({ email: 'x@gmail.com' }), /no admin/)
+})
+
+test('the Resend mailer sends one plain-text message per admin, and a refusal throws', async () => {
+  const calls = []
+  let status = 200
+  const fetcher = async (url, init) => { calls.push({ url, init }); return { ok: status < 300, status } }
+  const mailer = resendMailer({ key: 'test-key', from: 'Eval Sandbox <eval@example.com>', fetcher })
+  await mailer.send({ to: 'boss@baseten.co', subject: 's', text: 't' })
+  assert.equal(calls[0].url, 'https://api.resend.com/emails')
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer test-key')
+  assert.deepEqual(JSON.parse(calls[0].init.body), { from: 'Eval Sandbox <eval@example.com>', to: ['boss@baseten.co'], subject: 's', text: 't' })
+  status = 403
+  await assert.rejects(mailer.send({ to: 'boss@baseten.co', subject: 's', text: 't' }), /Resend answered 403/)
+  assert.throws(() => resendMailer({ from: 'x@y.io' }), /needs a key/)
 })
