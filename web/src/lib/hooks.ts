@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
-// ---------- hash routes: #/ and #/runs/<id>[/<tab>[/<task>]] ----------
+// ---------- hash routes: #/, #/runs/<id>[/<tab>[/<task>]] and #/access (admins, hosted) ----------
 
-export type Route = { page: "home" } | { page: "run"; id: string; tab?: string; task?: string };
+export type Route = { page: "home" } | { page: "access" } | { page: "run"; id: string; tab?: string; task?: string };
 
 function parse(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "runs" && parts[1]) return { page: "run", id: parts[1], tab: parts[2], task: parts[3] };
+  if (parts[0] === "access") return { page: "access" };
   return { page: "home" };
 }
 
 export const href = (route: Route) =>
   route.page === "run"
     ? `#/runs/${encodeURIComponent(route.id)}${route.tab ? `/${route.tab}${route.task ? `/${encodeURIComponent(route.task)}` : ""}` : ""}`
-    : "#/";
+    : route.page === "access" ? "#/access" : "#/";
 
 export function useRoute(): [Route, (r: Route, replace?: boolean) => void] {
   const [route, setRoute] = useState(() => parse(location.hash));

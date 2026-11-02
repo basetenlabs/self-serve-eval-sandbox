@@ -1074,6 +1074,45 @@ class AppTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_hosted_an_admin_sees_and_opens_every_run(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d) / "jobs"
+            jobs.mkdir()
+            self.add_run(jobs, "a-run", "a@x.co", phase="interrupted")
+            self.add_run(jobs, "b-run", "b@x.co", phase="interrupted")
+            (jobs / "b-run" / app.ACCESS).write_text(json.dumps({"owner": "b@x.co", "private": True}))
+            (Path(d) / "data").mkdir()
+            (Path(d) / "data" / "access.json").write_text(json.dumps({"admins": ["Boss@X.co"], "emails": [], "domains": ["x.co"]}))
+            page = app.App(jobs)
+            boss = self.hosted_state(page, "boss@x.co")
+            self.assertTrue(boss["admin"])
+            self.assertEqual({r["id"]: r["owner"] for r in boss["runs"]}, {"a-run": "a@x.co", "b-run": "b@x.co"})
+            a = self.hosted_state(page, "a@x.co")
+            self.assertFalse(a["admin"])
+            self.assertEqual([r["id"] for r in a["runs"]], ["a-run"])
+            self.assertNotIn("owner", a["runs"][0])
+            self.assertFalse(self.hosted_state(page, None)["admin"])  # locally: no admins
+            self.assertEqual(page.find("b-run", "boss@x.co")["id"], "b-run")
+            (jobs / "b-run" / "trials" / "t__m__1").mkdir(parents=True)
+            self.assertNotEqual(page.trace("b-run", "t__m__1", "boss@x.co"), {"error": "No such attempt."})
+            handler = type("H", (app.Handler,), {"app": page})
+            server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+
+            def get(path, user):
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+                conn.request("GET", path, headers={"x-forwarded-email": user})
+                return conn.getresponse().status
+            try:
+                self.assertEqual(get("/b-run/report.json", "boss@x.co"), 200)
+                self.assertEqual(get("/b-run/report.json", "a@x.co"), 404)
+                (Path(d) / "data" / "access.json").write_text(json.dumps({"admins": ["a@x.co"]}))  # boss removed
+                self.assertEqual(get("/b-run/report.json", "boss@x.co"), 404)
+                self.assertEqual(get("/b-run/report.json", "a@x.co"), 200)
+            finally:
+                server.shutdown()
+
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))

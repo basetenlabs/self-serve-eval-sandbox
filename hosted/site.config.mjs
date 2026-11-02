@@ -2,11 +2,13 @@
 
 /** @type {import('@blaxel/sign-in/types').SiteConfig} */
 export default {
-  // Blaxel accounts with a verified email at exactly these domains.
-  access: { domains: ['baseten.co', 'blaxel.ai'] },
+  // Blaxel accounts with a verified email that data/access.json allows: its admins, single invited
+  // addresses and whole domains. Admins edit it on the page; the sign-in re-reads it on every change.
+  // server.mjs creates it on first start (see SEED in access.mjs).
+  access: { file: '../data/access.json' },
   brand: {
     name: 'Eval Sandbox',
-    askForAccess: 'Ask Michael Stolarz on Slack to add you.',
+    askForAccess: 'Ask an Eval Sandbox admin, such as Michael Stolarz, on Slack to add you.',
     company: 'Baseten',
     tagline: 'Run coding models on real pull requests and compare what they solve and what it costs.',
     login: { eyebrow: 'Internal preview', title: 'Sign in to Eval Sandbox' },

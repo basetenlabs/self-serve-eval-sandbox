@@ -93,6 +93,8 @@ class App:
         self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
         self.claims: dict[str, set[str] | None] = {}  # repositories of each run started here, before its run.json
         self.favorites_file = jobs_dir.parent / "data" / "favorites.json"
+        # Hosted: who may sign in, which the sign-in server (hosted/access.mjs) keeps and its admins edit.
+        self.access_file = jobs_dir.parent / "data" / "access.json"
 
     # ---------- what the page shows ----------
 
@@ -101,9 +103,13 @@ class App:
             child.poll()
         catalog, judge = config.load(self.models_config)
         everyone = self.everyone()
-        runs = [r for d, r in everyone if self.visible(d, user)]
+        admin = self.admin(user)
+        runs = [r for d, r in everyone if admin or self.visible(d, user)]
         for d, run in everyone:
-            run["private"] = bool(read_json(d / ACCESS).get("private"))
+            access = read_json(d / ACCESS)
+            run["private"] = bool(access.get("private"))
+            if admin:  # an admin sees everyone's runs, so the list says whose each one is
+                run["owner"] = access.get("owner")
         runs.sort(key=lambda r: r["active_at"], reverse=True)
         for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
@@ -117,7 +123,7 @@ class App:
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
-                "github": self.github_state(user), "favorites": self.favorites(user)}
+                "github": self.github_state(user), "favorites": self.favorites(user), "admin": admin}
 
     def everyone(self) -> list[tuple[Path, dict]]:
         """Every run, whoever may see it."""
@@ -557,12 +563,19 @@ class App:
 
     def visible(self, job_dir: Path, user: str | None) -> bool:
         """Whether this person may see the run. Signed in (hosted): only a run they started, whatever its
-        repository; a run with no owner recorded is no one's. Locally (no sign-in): any run, except one
-        someone started signed in on a private repository."""
+        repository, and an admin every run; a run with no owner recorded is no one else's. Locally (no
+        sign-in): any run, except one someone started signed in on a private repository."""
         access = read_json(job_dir / ACCESS)
         if user:
-            return access.get("owner") == user
+            return access.get("owner") == user or self.admin(user)
         return not access.get("private")
+
+    def admin(self, user: str | None) -> bool:
+        """Whether this signed-in person is an admin in the hosted access list right now. The sign-in
+        server alone writes that list and checks each admin's change again; here it only widens what
+        an admin sees. Locally there is no list and no admin."""
+        admins = read_json(self.access_file).get("admins") if user else None
+        return isinstance(admins, list) and user.strip().lower() in {str(a).strip().lower() for a in admins}
 
     def spawn(self, run_id: str, argv: list[str], github_token: str | None = None) -> None:
         """`pr-eval run` in a process of its own, so it outlives the page and the server.

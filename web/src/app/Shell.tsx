@@ -28,6 +28,12 @@ export function Shell({ state, route, go, offline, children }: {
             <span className="h-5 w-px bg-rule" aria-hidden />
             <span className="label-mono text-[12px] whitespace-nowrap text-foreground">Eval Sandbox</span>
           </a>
+          {route.page === "access" && (
+            <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-muted-foreground md:flex">
+              <ChevronRightIcon className="size-3.5 shrink-0" />
+              <span className="label-mono text-foreground">Access</span>
+            </nav>
+          )}
           {route.page === "run" && (
             <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-muted-foreground md:flex">
               <ChevronRightIcon className="size-3.5 shrink-0" />
@@ -54,6 +60,11 @@ export function Shell({ state, route, go, offline, children }: {
                 <span className="size-1.5 bg-foreground" /> Ready
               </span>
             ) : null}
+            {state?.admin && route.page !== "access" && (
+              <Tip content="Who can sign in: admins, invited people and whole domains">
+                <Button variant="ghost" size="sm" asChild><a href={href({ page: "access" })}>Access</a></Button>
+              </Tip>
+            )}
             <Tip content={theme === "dark" ? "Light theme" : "Dark theme"}>
               <Button variant="ghost" size="icon-sm" onClick={toggleTheme} aria-label="Toggle theme">
                 {theme === "dark" ? <SunIcon /> : <MoonIcon />}

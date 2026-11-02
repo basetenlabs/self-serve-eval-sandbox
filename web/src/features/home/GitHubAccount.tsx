@@ -95,7 +95,7 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
             <span className="truncate">Signed in with GitHub{login ? <> as <b className="font-medium">@{login}</b></> : ""}</span>
           </span>
           <span className="text-muted-foreground">
-            {github.install ? "Add your private repos to Baseten Eval Sandbox on GitHub so the eval can read them. " : ""}Only you see your runs.
+            {github.install ? "Add your private repos to Baseten Eval Sandbox on GitHub so the eval can read them. " : ""}Only you and the page's admins see your runs.
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-4">
@@ -142,7 +142,7 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
       <>
         <span className="grid min-w-0 flex-1 gap-0.5">
           <span className="text-[15px] font-medium">Your own repos: sign in with GitHub so the eval can read them.</span>
-          <span className="text-muted-foreground">Public repos work without it. Only you see your runs.</span>
+          <span className="text-muted-foreground">Public repos work without it. Only you and the page's admins see your runs.</span>
         </span>
         <Button type="button" onClick={signIn} disabled={busy}>
           {busy ? <LoaderIcon className="animate-spin" /> : <GitHubMark />} {busy ? "Asking GitHub" : "Sign in with GitHub"}

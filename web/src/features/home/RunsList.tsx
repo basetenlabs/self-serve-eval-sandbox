@@ -75,7 +75,8 @@ function Title({ run, link = true }: { run: Run; link?: boolean }) {
         : <span className="flex items-center gap-1.5 text-[15px] font-medium">{name}</span>}
       <span className="label-mono text-[10.5px] text-muted-foreground">
         {[run.tasks ? plural(run.tasks, "PR") : null, run.models.length > 2 ? `${run.models.length} models` : null,
-          run.judged === false ? "Tests only" : null].filter(Boolean).join(" · ")}
+          run.judged === false ? "Tests only" : null, run.owner !== undefined ? `By ${run.owner ?? "no one recorded"}` : null]
+          .filter(Boolean).join(" · ")}
       </span>
     </span>
   );
