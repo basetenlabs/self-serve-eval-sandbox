@@ -37,9 +37,9 @@ async function serve(t, file) {
   }
 }
 
-test('a refused account gets the shared access instructions from sign-in 0.3.0', () => {
+test('a refused account gets the shared access instructions from sign-in 0.4.0', () => {
   const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)))
-  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.3.0')
+  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.4.0')
   const html = renderLogin({
     brand: loadBrand(config.brand, fileURLToPath(new URL('./', import.meta.url))),
     policy: createPolicy({ ...config.access, file: join(tmpdir(), 'no-such-access.json'), log: quiet }),
