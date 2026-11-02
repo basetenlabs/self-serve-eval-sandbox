@@ -8,10 +8,11 @@ gets the same condensed copy (trace.json) instead of the log itself.
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from . import config
 
 MAX_TEXT = 6000     # a message or a thought
 MAX_OUTPUT = 2400   # a tool's output, head and tail
@@ -26,14 +27,11 @@ SECRET = re.compile(r"sk-(?:proj|ant|pg)-[A-Za-z0-9_-]{16,}|gh[opsu]_[A-Za-z0-9]
                     r"|\b[A-Za-z0-9]{8}\.[A-Za-z0-9]{32}\b")
 HANDED = re.compile(r"((?i:bearer|api-key)\s+|(?i:api_?key|token|secret|password)[\"']?\s*[:=]\s*[\"']?)"
                     r"(?=[^\s\"']*\d)[A-Za-z0-9._~+/=-]{16,}")
-SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.I)
 
 
 def redact(text: str) -> str:
     """`text` with credentials masked: by shape, and every secret this process holds by value."""
-    for name, value in os.environ.items():
-        if len(value) >= 12 and SECRET_NAME.search(name) and value in text:
-            text = text.replace(value, MASK)
+    text = config.redact_known(text)
     return HANDED.sub(lambda m: m[1] + MASK, SECRET.sub(MASK, text))
 
 

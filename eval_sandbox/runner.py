@@ -24,7 +24,7 @@ from pathlib import Path
 
 from . import judge as judge_mod
 from . import runtime
-from .config import BASETEN_URL, Model, Panel, credential_env
+from .config import BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, sandbox_credential
 from .tasks import TEST_FILE, Task, snapshot
 from .tasks import load as load_task
 
@@ -154,14 +154,20 @@ def agent_script(model: Model) -> tuple[str, dict[str, str]]:
     return script, env
 
 
-def run_agent(container: str, model: Model, secrets_env: dict, log_path: Path, timeout: int) -> dict:
-    """Run Claude Code remotely and collect the durable stream log."""
+def run_agent(container: str, model: Model, placeholder_env: dict, log_path: Path, timeout: int) -> dict:
+    """Run Claude Code remotely and collect the durable stream log.
+
+    `placeholder_env` holds the attempt's placeholder credential, never a real key: the
+    sandbox's egress proxy adds that (see config.sandbox_credential).
+    """
     script, env_vars = agent_script(model)
     started = time.monotonic()
-    result = runtime.execute(container, script, env={**env_vars, **secrets_env}, timeout=timeout,
+    result = runtime.execute(container, script, env={**env_vars, **placeholder_env}, timeout=timeout,
                              stdout_path="/logs/agent.jsonl", stderr_path="/logs/agent.stderr")
     log_path.write_text(result.stdout)
     log_path.with_suffix(".stderr").write_text(result.stderr)
+    for path in (log_path, log_path.with_suffix(".stderr")):
+        redact_file(path)
     compact_stream(log_path)
     return {"exit_code": result.code, "timed_out": result.timed_out,
             "seconds": round(time.monotonic() - started, 1), **summarize_stream(log_path)}
@@ -316,9 +322,9 @@ def agent_cost(model: Model, model_usage: dict) -> tuple[float | None, str]:
     return model.price(model_usage), "price-table"
 
 
-def block_lookups(container: str, domains: list[str] | None = None) -> None:
-    """Narrow the creation-time enforced proxy to the selected provider."""
-    runtime.restrict_network(container, domains or ["api.anthropic.com", "inference.baseten.co"])
+def block_lookups(container: str, domains: list[str] | None = None, routing: list[dict] | None = None) -> None:
+    """Narrow the creation-time enforced proxy to the selected provider; `routing` adds its key on the way."""
+    runtime.restrict_network(container, domains or ["api.anthropic.com", "inference.baseten.co"], routing or [])
 
 
 def container_name(run_id: str) -> str:
@@ -398,6 +404,7 @@ def capture_patch(container: str, baseline: str, local: Path) -> tuple[str, str]
     if code or timed_out:
         raise runtime.RuntimeError("Could not capture the agent patch.")
     runtime.download(container, "/workspace/.git/pr-eval.patch", local)
+    redact_file(local)
     patch = local.read_bytes().decode(errors="replace")
     code, numstat, timed_out = sh(container, f"git diff --cached --numstat {baseline}", timeout=60)
     if code or timed_out:
@@ -536,7 +543,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     live = trial_dir / "stage.json"
     helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
     try:
-        secrets_env = credential_env(model)
+        placeholder_env, routing = sandbox_credential(model, credential_env(model))
         if ready and ready.error:
             raise ready.error
         if not ready:
@@ -550,14 +557,14 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
-        block_lookups(container, ["api.anthropic.com"] if model.provider == "anthropic"
-                      else ["inference.baseten.co"])
+        block_lookups(container, [PROVIDER_DOMAINS[model.provider]], routing)
         prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         stage(live, "agent", started_at=result["started_at"])
-        agent = run_agent(container, model, secrets_env, trial_dir / "agent.jsonl", agent_timeout)
+        agent = run_agent(container, model, placeholder_env, trial_dir / "agent.jsonl", agent_timeout)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
+        redact_file(trial_dir / "proxy.log")
         result["agent"] = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
         if "subtype" not in agent and not agent["timed_out"]:
             return finish("invalid", "agent-crashed")

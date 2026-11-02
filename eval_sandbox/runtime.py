@@ -164,18 +164,23 @@ def get(name: str):
     return _SANDBOXES[name]
 
 
-def restrict_network(name: str, domains: list[str]) -> None:
+def restrict_network(name: str, domains: list[str], routing: list[dict] | None = None) -> None:
+    """Allow only `domains`. `routing` rules make the platform proxy, outside the sandbox, add
+    headers from write-only secrets: the model key reaches the provider without entering the sandbox."""
     if not domains or "*" in domains:
         raise RuntimeError("The agent requires a nonempty provider-only allowlist.")
     from blaxel.core.sandbox.types import SandboxUpdateNetwork
+    routing = routing or []
     try:
         sandbox = sdk().update_network(name, SandboxUpdateNetwork(network={
             "firewall": {"rulesets": ["proxy"]},
-            "allowedDomains": domains, "proxy": {"routing": []},
+            "allowedDomains": domains, "proxy": {"routing": routing},
         }))
         actual = sandbox.spec.network.to_dict()
         allowed = actual.get("allowedDomains") or actual.get("proxy", {}).get("allowedDomains")
-        if allowed != domains or actual.get("firewall", {}).get("rulesets") != ["proxy"]:
+        routed = [rule.get("destinations") for rule in (actual.get("proxy") or {}).get("routing") or []]
+        if (allowed != domains or actual.get("firewall", {}).get("rulesets") != ["proxy"]
+                or routed != [rule["destinations"] for rule in routing]):
             raise RuntimeError("Blaxel did not apply the requested network restriction.")
         _SANDBOXES[name] = sandbox
     except Exception as exc:
