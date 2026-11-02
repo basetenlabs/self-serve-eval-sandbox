@@ -12,7 +12,7 @@ runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy
     Preview  public HTTPS; hosted/server.mjs (@blaxel/sign-in) signs people in and is the only public door
     Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/) and the
              sign-in state (/data/sign-in)
-    Secrets  read on this Mac (Keychain, `gh auth token`) and handed to the page's process
+    Secrets  read on this Mac (Keychain) and handed to the page's process
              environment only; never written to the volume, the image or this repository
 
 Keys come from the Keychain items in SECRETS below, else from the environment:
@@ -20,13 +20,13 @@ Keys come from the Keychain items in SECRETS below, else from the environment:
     ANTHROPIC_API_KEY       Claude models and the Opus judge
     OPENAI_API_KEY          the GPT-6.1 Sol judge
     BL_API_KEY              a Blaxel service account in the trial workspace
-    GH_TOKEN                `gh auth token` (public repositories only: PR_EVAL_PUBLIC_REPOS_ONLY)
     PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the
                             refused sign-in page offers "Request access", which emails the admins; it reaches
                             the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
 
-People sign in with GitHub through the GitHub App "Baseten Eval Sandbox" (device flow; read-only
-Contents, Pull requests and Metadata). Its client id is public and the page needs nothing else: the
+The page has no GitHub login of its own: everyone signs in with GitHub through the GitHub App
+"Baseten Eval Sandbox" (device flow; read-only Contents, Pull requests and Metadata) before a run,
+and the run reads and clones with their token. Its client id is public and the page needs nothing else: the
 app's client secret and private key never reach it. Their tokens stay in the page's memory.
 """
 from __future__ import annotations
@@ -102,8 +102,6 @@ def keychain(service: str) -> str | None:
 def secrets() -> dict[str, str]:
     # The page's own Keychain items come first, so a key exported in the shell for local runs never reaches it.
     found = {name: keychain(service) or os.environ.get(name) for name, service in SECRETS.items()}
-    found["GH_TOKEN"] = os.environ.get("GH_TOKEN") or subprocess.run(
-        ["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
     if missing := [name for name, value in found.items() if not value]:
         raise SystemExit(f"missing {', '.join(missing)}: see the top of hosted/deploy.py")
     return found

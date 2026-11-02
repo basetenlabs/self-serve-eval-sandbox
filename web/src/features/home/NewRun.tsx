@@ -130,10 +130,11 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
-  const blocked = !!state.blocked || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
+  const blocked = !!state.blocked || signedOut || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
   const hint = state.blocked ? state.blocked
+    : signedOut ? "Sign in with GitHub to start a run: the eval reads repositories, public ones too, with your own GitHub login."
     : over ? `This run would cost about ${usd(cost)}, and you have ${usd(left)} left of your ${usd(state.spend!.cap)} for the last 24 hours. Choose fewer pull requests or models.`
     : !models.length ? "Choose at least one model."
     : checking ? "Checking the pull requests on GitHub."
@@ -199,16 +200,22 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="Fast"
               text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
-              text={signedOut ? "Public repos work as they are. Your private repos need Sign in with GitHub."
+              text={signedOut ? "Sign in with GitHub, then paste pull request links or pick from a repository's latest merges."
                 : "Paste pull request links, or pick from a repository's latest merges."} />
             <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
               text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
           </RadioGroup.Root>
 
+          {source === "quick" && state.github.sign_in && (
+            <div className="mt-4 animate-enter bg-surface px-4 py-2.5 shadow-[inset_0_0_0_1px_var(--frame)]">
+              <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
+            </div>
+          )}
+
           {source === "suite" && (
             <div className="mt-4 grid animate-enter grid-cols-1 gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
               <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
-                <GitHubAccount github={state.github} checks={state.checks} onChange={hurry} />
+                <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
               </div>
               {favorites.length ? (
                 <>
@@ -349,12 +356,16 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
                 <span>{error}</span>
               </div>
             )}
-            <Button type="submit" size="lg" disabled={!!blocked || starting} className="group mt-5 w-full">
+            {signedOut && !state.blocked ? (
+              <Button type="button" size="lg" className="mt-5 w-full" onClick={() => gitHubSignIn.current?.signIn()}>
+                <GitHubMark /> Sign in with GitHub to start
+              </Button>
+            ) : <Button type="submit" size="lg" disabled={!!blocked || starting} className="group mt-5 w-full">
               {starting ? <LoaderIcon className="animate-spin" /> : null}
               {starting ? "Starting" : "Start run"}
               {!starting && <ChevronRightIcon className="transition-transform group-hover:translate-x-0.5" />}
               <Kbd className="ml-1 hidden sm:inline-flex">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
-            </Button>
+            </Button>}
             <p className="mt-3 text-[13px] leading-snug text-muted-foreground" aria-live="polite">{hint}</p>
           </Column>
           {aside}
@@ -426,10 +437,10 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, on
     );
   } else if (mode === "repo") {
     if (looking) body = <span className="inline-flex items-center gap-1.5 text-muted-foreground"><LoaderIcon className="size-3.5 animate-spin" /> Looking it up</span>;
-    // Signed out, a repository the page can't read is most likely private: say so, with the sign-in right here.
+    // Signed out, the page reads no repository: say so, with the sign-in right here.
     else if (info?.error && info.repo && onSignIn) body = (
       <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className={danger}>Can't read <span className="font-mono text-[12px]">{info.repo}</span> without GitHub access. If it's one of your private repos, sign in with GitHub so the eval can read it.</span>
+        <span className={danger}>Sign in with GitHub so the eval can read <span className="font-mono text-[12px]">{info.repo}</span>.</span>
         <Button type="button" size="sm" variant="outline" onClick={onSignIn}><GitHubMark />Sign in with GitHub</Button>
       </span>
     );

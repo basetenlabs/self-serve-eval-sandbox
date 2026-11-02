@@ -973,6 +973,14 @@ class AppTest(unittest.TestCase):
             page.github["a@x.co"]["until"] = 0  # GitHub's token expired
             self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": None})
 
+    def test_the_hosted_page_reads_github_only_with_the_visitors_own_sign_in(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+                mock.patch.object(page, "state", return_value={"checks": {"blaxel": True, "bl_cli": True, "gh": False}}):
+            self.assertIn("Sign in with GitHub", page.repo_info("o/public", "a@x.co")["error"])  # public ones too
+            self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
+        gh.assert_not_called()  # the page has no GitHub login of its own to fall back on
+
     def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
         page = app.App(Path("/nonexistent"))
         page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
