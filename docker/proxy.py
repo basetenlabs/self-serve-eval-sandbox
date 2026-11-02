@@ -161,46 +161,57 @@ def _anthropic_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
 
     A `tool_result` arrives inside the *user* turn following the assistant's `tool_use`, but OpenAI wants each result
     as its own `role: "tool"` message directly after the assistant message that called it, so results are emitted
-    before the rest of that turn. `thinking` blocks are dropped: no Chat Completions host accepts them back, and the
-    model re-reasons from the effort setting.
+    before the rest of that turn. An assistant turn's `thinking` goes back as `reasoning_content`, the field
+    DeepSeek-style hosts read prior reasoning from; dropped, the model re-reasons every step of a tool loop.
     """
     out: list[dict[str, Any]] = []
     if system := text_of(body.get("system")):
         out.append({"role": "system", "content": system})
 
+    reasoning = ""  # a thinking-only assistant message hands its reasoning to the next one
     for message in body.get("messages") or []:
         role, content = message.get("role", "user"), message.get("content")
         if isinstance(content, str):
             out.append({"role": role, "content": content})
-            continue
-
-        parts, tool_calls, results = _split_anthropic_blocks(content or [])
-        out.extend(results)
-        if tool_calls:
-            out.append({"role": "assistant", "content": text_of(parts) or None, "tool_calls": tool_calls})
-        elif parts:
-            # Single text part goes as a plain string: some hosts reject a parts array on a system or assistant
-            # message even where they accept it on a user one.
-            only_text = all(part["type"] == "text" for part in parts)
-            out.append({"role": role, "content": text_of(parts) if only_text else parts})
+        else:
+            parts, tool_calls, results, thought = _split_anthropic_blocks(content or [])
+            if role == "assistant":
+                reasoning += thought
+            out.extend(results)
+            if tool_calls:
+                out.append({"role": "assistant", "content": text_of(parts) or None, "tool_calls": tool_calls})
+            elif parts:
+                # Single text part goes as a plain string: some hosts reject a parts array on a system or assistant
+                # message even where they accept it on a user one.
+                only_text = all(part["type"] == "text" for part in parts)
+                out.append({"role": role, "content": text_of(parts) if only_text else parts})
+            else:
+                continue
+        if out[-1]["role"] != "assistant":
+            reasoning = ""  # never carried across a user turn
+        elif reasoning:
+            out[-1]["reasoning_content"], reasoning = reasoning, ""
     return out
 
 
 def _split_anthropic_blocks(
     blocks: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Sort one turn's content blocks into (content parts, tool calls, tool results).
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Sort one turn's content blocks into (content parts, tool calls, tool results, reasoning text).
 
-    `thinking` and `redacted_thinking` match nothing here and are dropped deliberately.
+    `redacted_thinking` carries only Anthropic's encrypted payload, which no other host can read, so it is dropped.
     """
     parts: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
+    reasoning = ""
 
     for block in blocks:
         kind = block.get("type")
         if kind == "text":
             parts.append({"type": "text", "text": block.get("text") or ""})
+        elif kind == "thinking":
+            reasoning += block.get("thinking") or ""
         elif kind == "image":
             parts.append(_anthropic_image(block))
         elif kind == "tool_use":
@@ -213,7 +224,7 @@ def _split_anthropic_blocks(
             # A result may carry images; an OpenAI tool message is text-only, so only the text survives.
             results.append({"role": "tool", "tool_call_id": block.get("tool_use_id") or "",
                             "content": text_of(block.get("content")) or ""})
-    return parts, tool_calls, results
+    return parts, tool_calls, results, reasoning
 
 
 def _anthropic_image(block: dict[str, Any]) -> dict[str, Any]:
@@ -253,8 +264,8 @@ def chat_to_anthropic(answer: Answer, include_thinking: bool = True) -> dict[str
     """
     blocks: list[dict[str, Any]] = []
     if include_thinking and answer.reasoning:
-        # No signature: the real API signs thinking to verify it on the way back, and this proxy drops thinking on
-        # the way up, so there is nothing to verify.
+        # No signature: the real API signs thinking to verify it on the way back; this proxy hands it back to the
+        # host as plain `reasoning_content`, so there is nothing to verify.
         blocks.append({"type": "thinking", "thinking": answer.reasoning, "signature": ""})
     if answer.text:
         blocks.append({"type": "text", "text": answer.text})
@@ -371,16 +382,22 @@ def _responses_items(items: list[Any] | None) -> list[dict[str, Any]]:
     """Convert Responses `input` items into OpenAI messages.
 
     Consecutive `function_call` items merge into one assistant message: splitting them would put a `role: "tool"`
-    reply after an assistant message that never called the tool it answers, which the host rejects. `reasoning` and
-    the host-specific call types (local_shell_call, custom_tool_call) are dropped, having nothing to replay to.
+    reply after an assistant message that never called the tool it answers, which the host rejects. A `reasoning`
+    item's text rides on the assistant message after it as `reasoning_content`. The host-specific call types
+    (local_shell_call, custom_tool_call) are dropped, having nothing to replay to.
     """
     out: list[dict[str, Any]] = []
+    reasoning = ""  # waiting for the assistant message it belongs to
     for item in items or []:
         if not isinstance(item, dict):
             continue
         kind = item.get("type") or ("message" if item.get("role") else None)
-        if kind == "message":
+        if kind == "reasoning":
+            reasoning += text_of(item.get("content")) or text_of(item.get("summary"))
+        elif kind == "message":
             out.append({"role": item.get("role", "user"), "content": text_of(item.get("content"))})
+            if out[-1]["role"] == "assistant" and reasoning:
+                out[-1]["reasoning_content"], reasoning = reasoning, ""
         elif kind == "function_call":
             call = {"id": item.get("call_id") or item.get("id") or "", "type": "function",
                     "function": {"name": item.get("name") or "", "arguments": item.get("arguments") or "{}"}}
@@ -388,6 +405,8 @@ def _responses_items(items: list[Any] | None) -> list[dict[str, Any]]:
                 out[-1]["tool_calls"].append(call)
             else:
                 out.append({"role": "assistant", "content": None, "tool_calls": [call]})
+            if reasoning:
+                out[-1]["reasoning_content"], reasoning = reasoning, ""
         elif kind == "function_call_output":
             # codex sends `output` as a plain string; the spec also allows a block list.
             result = item.get("output")
@@ -775,7 +794,9 @@ class Proxy(BaseHTTPRequestHandler):
 
         self._record(turn, started, path, shape, 200,
                      f"stop={answer.finish_reason} tools={len(answer.tool_calls)} "
-                     f"in={answer.usage.get('prompt_tokens')} out={answer.usage.get('completion_tokens')}"
+                     f"in={answer.usage.get('prompt_tokens')} out={answer.usage.get('completion_tokens')} "
+                     f"thought={(answer.usage.get('completion_tokens_details') or {}).get('reasoning_tokens')} "
+                     f"reasoning-back={sum(1 for m in chat['messages'] if m.get('reasoning_content'))}"
                      + (f" partial-error={json.dumps(answer.error)[:120]}" if answer.error else ""))
 
     def _chat_url(self) -> str:
