@@ -72,20 +72,10 @@ def parse_repo(text: str) -> str | None:
     return text if REPO.fullmatch(text) else None
 
 
-def alive(pid: int | None) -> bool:
-    """Whether a run's process is still going (and is still a pr-eval process)."""
-    if not pid:
-        return False
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    command = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    return "eval_sandbox" in command or "pr-eval" in command
+alive = pipeline.alive
 
 
-def repo_of(task_id: str) -> str:
-    return task_id.rsplit("-", 1)[0].replace("__", "/")
+repo_of = pipeline.repo_of
 
 
 class App:

@@ -678,6 +678,39 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(meta["request"]["repos"], ["o/r"])  # what resume needs to start over
         self.assertEqual(meta["tasks"], [])
 
+    def end_run_on_clone(self, private: bool, other: dict | None = None) -> tuple[bool, list]:
+        """Stop run r1 on o/secret beside its bare clone, and maybe another run; whether the clone is left."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repos = Path(d) / "repos"
+            (repos / "o__secret.git").mkdir(parents=True)
+            if other:
+                (Path(d) / "jobs" / "r2").mkdir(parents=True)
+                (Path(d) / "jobs" / "r2" / "run.json").write_text(json.dumps(other))
+            job = self.job(d, pipeline.Request(repos=["o/secret"]))
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
+                    mock.patch.object(tasks, "gh", return_value={"private": private}) as gh, \
+                    mock.patch.object(pipeline, "alive", return_value=True), \
+                    mock.patch.object(pipeline, "find_tasks", side_effect=KeyboardInterrupt), \
+                    mock.patch.object(runner, "cleanup"), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(pipeline.execute(job, [baseten_model()], runner.Settings()), 130)
+            return (repos / "o__secret.git").exists(), gh.call_args_list
+
+    def test_a_private_repositorys_clone_goes_with_its_last_run(self):
+        kept, asked = self.end_run_on_clone(private=True)
+        self.assertFalse(kept)
+        self.assertEqual(asked, [mock.call("repos/o/secret")])
+
+    def test_a_private_clone_stays_while_another_run_on_it_is_going(self):
+        going = {"request": {"repos": []}, "tasks": ["O__Secret-7"],  # another account's run, named by its tasks
+                 "status": {"phase": "running", "pid": 1}}
+        self.assertTrue(self.end_run_on_clone(private=True, other=going)[0])
+        ended = {**going, "status": {"phase": "done", "pid": 1}}
+        self.assertFalse(self.end_run_on_clone(private=True, other=ended)[0])
+
+    def test_a_public_repositorys_clone_stays(self):
+        self.assertTrue(self.end_run_on_clone(private=False)[0])
+
     def test_tasks_join_the_run_as_their_checks_pass(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:

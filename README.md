@@ -78,7 +78,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Where your code goes
 
-- The repository clone stays on your machine, in `data/repos/`.
+- The repository clone stays on your machine, in `data/repos/`. A private repository's clone is deleted when its last run ends.
 - Each attempt runs in a fresh sandbox in your Blaxel workspace, starting from the repository as it was before the merge. While the agent works it can reach only the model provider: no GitHub, no package registries, no web tools.
 - When the agent stops, its sandbox is deleted. Only then do its diff and the PR's hidden tests go to a separate sandbox for grading. The agent never sees the answer.
 - Code the agent reads goes to the model being tested (Anthropic or Baseten). Diffs go to the judges (Anthropic, OpenAI and Baseten).
