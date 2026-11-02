@@ -78,11 +78,11 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Where your code goes
 
-- The repository clone stays on your machine, in `data/repos/`. A private repository's clone is deleted when its last run ends, or, if that run's process died, when `pr-eval serve` or `pr-eval run` next starts.
+- The repository clone stays on your machine, in `data/repos/`, and each pull request's task (its code, merged diff and tests) in `tasks/`. A private repository's clone and tasks are deleted when its last run ends, or, if that run's process died, when `pr-eval serve` or `pr-eval run` next starts. The run's report and results stay; resuming collects the tasks again.
 - Each attempt runs in a fresh sandbox in your Blaxel workspace, starting from the repository as it was before the merge. While the agent works it can reach only the model provider: no GitHub, no package registries, no web tools.
 - When the agent stops, its sandbox is deleted. Only then do its diff and the PR's hidden tests go to a separate sandbox for grading. The agent never sees the answer.
 - Code the agent reads goes to the model being tested (Anthropic or Baseten). Diffs go to the judges (Anthropic, OpenAI and Baseten).
-- Transcripts and reports are saved locally in `jobs/`. Treat them as sensitive.
+- Transcripts and reports are saved locally in `jobs/`. Treat them as sensitive. Set `PR_EVAL_PRIVATE_RETENTION_DAYS` to delete a private repository's run transcripts that many days after the run ends.
 - Sandboxes are deleted after use. If the process is killed, `pr-eval cleanup --workspace <name>` removes what's left.
 - Setup commands are trusted: they run with network access, before the allowlist is narrowed.
 - Keys come only from the environment (or, for the Claude token, the macOS Keychain; see [SETUP.md](SETUP.md)), never from files.

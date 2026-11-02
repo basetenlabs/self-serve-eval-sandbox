@@ -68,8 +68,8 @@ def cmd_run(args) -> int:
                                region=args.region, workspace=args.workspace, agent_timeout=args.agent_timeout,
                                judge=judge, keep_sandboxes=args.keep_sandboxes)
     job.meta["concurrency"] = settings.concurrency  # the page shows how many attempts run side by side
-    job.status("collecting", "Starting")  # going before the sweep, so no sweep takes the clones it needs
-    pipeline.sweep_clones(job.path.parent)
+    job.status("collecting", "Starting")  # going before the sweep, so no sweep takes the clones and tasks it needs
+    pipeline.sweep_private(job.path.parent)
     return pipeline.execute(job, models, settings, skip_check=args.skip_validation)
 
 

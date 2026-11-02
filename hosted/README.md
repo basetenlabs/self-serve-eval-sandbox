@@ -43,9 +43,14 @@ folder can't be deployed outside Baseten as it is.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
   would clone it and check its pull requests at once), except two quick samples. Runs started in
   the last 24 hours may cost $300 in all and $50 per person (the agents' cost as reports count it;
-  judges and Blaxel aren't included). A run whose estimate would go over waits. Set them with
+  judges and Blaxel aren't included). A run whose estimate would go over waits; a model no
+  earlier run priced counts $5 an attempt, or the dearest attempt seen if more. A run going
+  stops (resumable) once its owner or the page reaches the limit. Set them with
   `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`, `PR_EVAL_SPEND_TOTAL` and
   `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time and no spending limit.
+- **Private repositories:** a run's clone and task folders go when it ends (its report and results
+  stay). With `PR_EVAL_PRIVATE_RETENTION_DAYS` set when deploying, a private run's transcripts go
+  that many days after it ends; unset keeps them.
 
 ## Deploy
 
