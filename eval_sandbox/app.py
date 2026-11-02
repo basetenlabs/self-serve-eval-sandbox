@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from . import config, pipeline, runner, runtime, tasks, trace
+from . import config, pipeline, report, runner, runtime, tasks, trace
 
 PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -56,6 +56,11 @@ RUNS_PER_PERSON = int(os.environ.get("PR_EVAL_RUNS_PER_PERSON") or 1)
 SPEND_TOTAL = float(os.environ.get("PR_EVAL_SPEND_TOTAL") or 0) or None
 SPEND_PER_PERSON = float(os.environ.get("PR_EVAL_SPEND_PER_PERSON") or 0) or None
 SPEND_WINDOW = timedelta(days=1)
+# What a run's attempt with a model no earlier run priced counts toward those limits: this, or the dearest
+# attempt any model has cost so far if that's more. Guessing low would let an unpriced model run past them.
+UNKNOWN_ATTEMPT_COST = 5.0
+SPEND_CHECK_SECONDS = 30  # how often the hosted page stops runs going once their owner or the page is over
+OVER_LIMIT = "over_limit.txt"  # in a run's folder the page stopped for spending: why, shown until it resumes
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
 # beside it, then the verifier alone once the agent's sandbox is deleted. One set up while
 # its task is still checked holds only its own: the verifier comes once the check passes.
@@ -92,6 +97,7 @@ class App:
         self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
         self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
         self.claims: dict[str, set[str] | None] = {}  # repositories of each run started here, before its run.json
+        self.halted: dict[str, int] = {}  # runs stopped for spending, and the process each was told to stop
         self.favorites_file = jobs_dir.parent / "data" / "favorites.json"
         # Hosted: who may sign in, which the sign-in server (hosted/access.mjs) keeps and its admins edit.
         self.access_file = jobs_dir.parent / "data" / "access.json"
@@ -133,15 +139,12 @@ class App:
     def limits(self, everyone: list[tuple[Path, dict]], runs: list[dict], user: str | None) -> dict:
         """`blocked`: why this person can't start a run now, if they can't. `spend`: what their runs
         started in the last day cost, and their limit, when there is one."""
-        since = (datetime.now(timezone.utc) - SPEND_WINDOW).isoformat(timespec="seconds")
         going = mine = 0
-        spent = my_spent = 0.0
         for d, run in everyone:
-            own = bool(user) and read_json(d / ACCESS).get("owner") == user
             if run["phase"] in pipeline.ACTIVE:
-                going, mine = going + 1, mine + own
-            if (run["started"] or since) >= since:  # ISO times in UTC sort as text
-                spent, my_spent = spent + run["cost"], my_spent + run["cost"] * own
+                going, mine = going + 1, mine + (bool(user) and read_json(d / ACCESS).get("owner") == user)
+        spent, by_owner = spending(everyone)
+        my_spent = by_owner.get(user, 0.0) if user else 0.0
         mine_cap = SPEND_PER_PERSON if user else None
         if user and mine >= RUNS_PER_PERSON:
             blocked = "Your run is still going. Start another when it finishes, or stop it." if RUNS_PER_PERSON == 1 \
@@ -160,6 +163,43 @@ class App:
             blocked = None
         return {"blocked": blocked, "spend": {"spent": my_spent, "cap": mine_cap} if mine_cap else None,
                 "spent_total": spent}
+
+    def enforce_spending(self) -> list[str]:
+        """Stop every going run whose owner, or the whole page, has reached its spending limit: a run
+        started under the limit keeps spending until its attempts finish. Returns the runs told to stop."""
+        if not (SPEND_TOTAL or SPEND_PER_PERSON):
+            return []
+        everyone = self.everyone()
+        spent, by_owner = spending(everyone)
+        stopped = []
+        for d, run in everyone:
+            if run["phase"] not in pipeline.ACTIVE:
+                continue
+            owner = read_json(d / ACCESS).get("owner")
+            if SPEND_TOTAL and spent >= SPEND_TOTAL:
+                why = (f"Stopped: this page reached its {usd(SPEND_TOTAL)} limit, as runs from the last 24 hours "
+                       f"cost {usd(spent)}. Resume once older runs stop counting, a day after each started.")
+            elif SPEND_PER_PERSON and owner and by_owner.get(owner, 0.0) >= SPEND_PER_PERSON:
+                why = (f"Stopped: its owner reached their {usd(SPEND_PER_PERSON)} limit, as their runs from the last "
+                       f"24 hours cost {usd(by_owner[owner])}. Resume once older runs stop counting, a day after each started.")
+            else:
+                continue
+            pid = self.pid(run["id"])
+            if not alive(pid) or self.halted.get(run["id"]) == pid:  # told once: a second Ctrl-C would cut its cleanup short
+                continue
+            (d / OVER_LIMIT).write_text(why)
+            self.halted[run["id"]] = pid
+            os.kill(pid, signal.SIGINT)  # the run removes its sandboxes and marks itself stopped
+            print(f"stopped run {run['id']}: {why}", flush=True)
+            stopped.append(run["id"])
+        return stopped
+
+    def pid(self, run_id: str) -> int | None:
+        """The process of a run going: one started or resumed from here, maybe before its status says so."""
+        child = self.children.get(run_id)
+        if child and child.poll() is None:
+            return child.pid
+        return (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
 
     def checks(self, judge: config.Panel) -> dict:
         """Dedicated Blaxel workspace, build CLI and GitHub. The remote checks take seconds, so only the
@@ -229,6 +269,8 @@ class App:
             phase = "done" if total and done >= total else "stopped"
         elif phase in pipeline.ACTIVE and not alive(status.get("pid")):
             phase, detail = "stopped", "The run's process ended before it finished. Resume to carry on."
+        if phase == "stopped" and (job_dir / OVER_LIMIT).is_file():
+            detail = (job_dir / OVER_LIMIT).read_text()
         request = meta.get("request") or {}
         repos = sorted({repo_of(t) for t in run_tasks})
         sample = {f"{r.replace('/', '__')}-{n}" for r, prs in tasks.sample().items() for n in prs}
@@ -277,8 +319,15 @@ class App:
         kept, left = set(meta.get("tasks") or []), meta.get("left_out") or {}
         models, attempts = [m["key"] for m in meta.get("models") or []], meta.get("attempts", 1)
         rows, sandboxes = [], 0
+        reported = None
         for task_id in meta.get("candidates") or meta.get("tasks") or []:
             info = self.task(tasks_dir / task_id)
+            if not info["title"]:  # a private repository's task folder goes when its run ends; its report keeps it
+                if reported is None:
+                    reported = {t["id"]: t for t in report.earlier_tasks(job_dir / "report.json")}
+                if t := reported.get(task_id):
+                    info = {**info, **{k: t.get(v) for k, v in (("title", "title"), ("language", "language"),
+                                                               ("url", "url"), ("lines", "lines_changed"))}}
             if task_id in kept:
                 check = {"stage": "passed"}
             elif task_id in left:
@@ -501,11 +550,17 @@ class App:
     @staticmethod
     def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None) -> str | None:
         """Why a run of `count` pull requests with these models would go over a spending limit, from each
-        model's cost per attempt as the page estimates it. A model with no earlier run counts nothing."""
+        model's cost per attempt as the page estimates it. A model with no earlier run counts as
+        UNKNOWN_ATTEMPT_COST or the dearest attempt seen, whichever is more."""
         if not (SPEND_TOTAL or (SPEND_PER_PERSON and user)):
             return None
-        cost = sum(((m.get("by_scope") or {}).get(scope) or m).get("cost_per_attempt") or 0
-                   for m in state["models"] if m["key"] in keys) * count
+        known = {m["key"]: m for m in state["models"]}
+        seen = [each["cost_per_attempt"] for m in state["models"]
+                for each in [m, *(m.get("by_scope") or {}).values()] if each.get("cost_per_attempt") is not None]
+        unknown = max([UNKNOWN_ATTEMPT_COST, *seen])
+        estimate = [((known.get(key, {}).get("by_scope") or {}).get(scope) or known.get(key, {})).get("cost_per_attempt")
+                    for key in dict.fromkeys(keys)]
+        cost = sum(unknown if each is None else each for each in estimate) * count
         mine = state.get("spend")
         if mine and cost > mine["cap"] - mine["spent"]:
             return (f"This run would cost about {usd(cost)}, and you have {usd(max(0, mine['cap'] - mine['spent']))} "
@@ -532,11 +587,7 @@ class App:
         run = self.find(run_id, user)
         if not run or run["phase"] not in pipeline.ACTIVE:
             return {"error": "That run isn't going."}
-        child = self.children.get(run_id)
-        if child and child.poll() is None:
-            pid = child.pid  # started or resumed from here, maybe before its status says so
-        else:
-            pid = (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
+        pid = self.pid(run_id)
         if not alive(pid):
             return {"error": "That run's process has already ended."}
         os.kill(pid, signal.SIGINT)  # the run removes its sandboxes and marks itself stopped
@@ -554,6 +605,7 @@ class App:
             return {"error": blocked}
         if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
             return {"error": "Sign in with GitHub to resume a run on a private repository."}
+        (self.jobs_dir / run_id / OVER_LIMIT).unlink(missing_ok=True)
         self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.token(user))
         return {"id": run_id}
 
@@ -686,6 +738,18 @@ class App:
             tmp.write_text(json.dumps(everyone, indent=1))
             tmp.replace(self.favorites_file)
         return {"favorites": everyone[user or "local"]}
+
+
+def spending(everyone: list[tuple[Path, dict]]) -> tuple[float, dict[str, float]]:
+    """What runs started in the last day cost so far, in all and by owner."""
+    since = (datetime.now(timezone.utc) - SPEND_WINDOW).isoformat(timespec="seconds")
+    total, by_owner = 0.0, {}
+    for d, run in everyone:
+        if (run["started"] or since) >= since:  # ISO times in UTC sort as text
+            total += run["cost"]
+            if owner := read_json(d / ACCESS).get("owner"):
+                by_owner[owner] = by_owner.get(owner, 0.0) + run["cost"]
+    return total, by_owner
 
 
 def install_url() -> str:
@@ -833,13 +897,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+def sweep_hourly(jobs_dir: Path) -> None:
+    while True:
+        pipeline.sweep_private(jobs_dir)
+        time.sleep(3600)
+
+
+def watch_spending(page: App) -> None:
+    """Hosted: stop runs going once their owner or the page passes its spending limit."""
+    while SPEND_TOTAL or SPEND_PER_PERSON:
+        try:
+            page.enforce_spending()
+        except Exception as exc:  # noqa: BLE001 - one bad read must not end the watch
+            print(f"(spending not checked: {exc})", flush=True)
+        time.sleep(SPEND_CHECK_SECONDS)
+
+
 def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
     page = App(jobs_dir)
     # Check the workspace, the CLIs and the judge while the server starts, so the first visit doesn't wait.
     threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
-    # Delete the private clones left by runs whose process died, such as when the page last restarted.
-    threading.Thread(target=pipeline.sweep_clones, args=(jobs_dir,), daemon=True).start()
+    # Delete the private clones and task folders left by runs whose process died, such as when the page last
+    # restarted, and private runs' transcripts once they're past keeping; again every hour while the page runs.
+    threading.Thread(target=sweep_hourly, args=(jobs_dir,), daemon=True).start()
+    threading.Thread(target=watch_spending, args=(page,), daemon=True).start()
     handler = type("BoundHandler", (Handler,), {"app": page})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"

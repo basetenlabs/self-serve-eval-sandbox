@@ -152,6 +152,8 @@ def build_data(job_dir: Path) -> dict:
     if not tasks_dir.is_dir():  # a run copied from another machine: use this checkout's tasks
         tasks_dir = DEFAULT_TASKS
     task_meta = {}
+    # A private repository's task folders go when its run ends; what the last report said of them stays.
+    earlier = {t["id"]: t for t in earlier_tasks(job_dir / "report.json")}
     for task_id in sorted({t["task_id"] for t in trials} | set(meta.get("tasks", []))):
         path = tasks_dir / task_id
         if (path / "task.toml").is_file():
@@ -166,7 +168,7 @@ def build_data(job_dir: Path) -> dict:
                 "test_scope": task.meta["verifier"].get("scope"),
             }
         else:
-            task_meta[task_id] = {"id": task_id, "repo": task_id.split("__")[0], "title": task_id}
+            task_meta[task_id] = earlier.get(task_id) or {"id": task_id, "repo": task_id.split("__")[0], "title": task_id}
 
     per_model = {k: summarize([t for t in trials if t["model"] == k]) for k in model_keys}
 
@@ -187,6 +189,13 @@ def build_data(job_dir: Path) -> dict:
             "timing": summarize_timing(trials, meta.get("created_at")),
             "tasks": list(task_meta.values()), "trials": trials,
             "complete": len(trials) == len(meta.get("tasks", [])) * len(models) * meta.get("attempts", 1)}
+
+
+def earlier_tasks(path: Path) -> list[dict]:
+    try:
+        return [t for t in json.loads(path.read_text()).get("tasks") or [] if isinstance(t, dict) and t.get("id")]
+    except (OSError, ValueError, AttributeError):
+        return []
 
 
 def build(job_dir: Path) -> Path:

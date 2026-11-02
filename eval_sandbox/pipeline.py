@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config, report, runner, runtime, tasks
@@ -30,6 +30,10 @@ DEFAULT_JOBS = ROOT / "jobs"
 DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash"]
 DEFAULT_LIMIT = 10
 ACTIVE = ("collecting", "checking", "running")
+# An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
+# A run on a private repository loses these PR_EVAL_PRIVATE_RETENTION_DAYS after it ends (unset: kept);
+# its report and each attempt's result stay.
+TRANSCRIPTS = ("agent.jsonl", "agent.stderr", "trace.json", "proxy.log", "prompt.md")
 
 # Why a task was left out, in words: the check runs before any model, so none of these is a model's fault.
 LEFT_OUT = {
@@ -88,8 +92,8 @@ class Job:
         runner.write_json(self.path / "run.json", self.meta)
 
     def status(self, phase: str, detail: str = "") -> None:
-        if phase not in ACTIVE:  # while this run still reads as going, so no new run starts on a clone being deleted
-            release_clones(self)
+        if phase not in ACTIVE:  # while this run still reads as going, so no new run starts on files being deleted
+            release_private(self)
         self.meta["status"] = {"phase": phase, "detail": detail, "pid": os.getpid(), "updated_at": now()}
         self.save()
         if detail:
@@ -120,28 +124,73 @@ def run_repos(meta: dict) -> list[str]:
     return list(dict.fromkeys([*named, *map(repo_of, ids)]))
 
 
-def release_clones(job: Job) -> None:
-    """Delete the bare clones of a finished, failed or stopped run's private repositories."""
+def release_private(job: Job) -> None:
+    """Delete what a finished, failed or stopped run kept of its private repositories: their bare
+    clones and their task folders (source, merged diff, hidden tests). The run's report and results stay."""
     try:
-        delete_private_clones({repo: clone_path(repo) for repo in run_repos(job.meta)}, job.path.parent, job.path)
+        tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
+        delete_private({repo: [clone_path(repo), *task_folders(repo, tasks_dir)] for repo in run_repos(job.meta)},
+                       job.path.parent, job.path)
     except Exception as exc:  # noqa: BLE001 - a cleanup hiccup must not hide how the run ended
-        print(f"(clones not cleaned up: {exc})", flush=True)
+        print(f"(private repositories not cleaned up: {exc})", flush=True)
 
 
-def sweep_clones(jobs_dir: Path) -> None:
-    """Delete every private clone no going run uses, such as one left by a run whose process died
-    (a crash, the page restarting) before it could clean up. `pr-eval serve` and `pr-eval run` sweep
-    as they start; a starting run marks itself going first, so the clones it's about to use stay."""
+def sweep_private(jobs_dir: Path) -> None:
+    """Delete every private clone and task folder no going run uses, such as ones left by a run whose
+    process died (a crash, the page restarting) before it could clean up. `pr-eval serve` and `pr-eval run`
+    sweep as they start; a starting run marks itself going first, so what it's about to use stays."""
     try:
-        clones = {path.name.removesuffix(".git").replace("__", "/", 1): path
-                  for path in tasks.DEFAULT_REPOS.glob("*__*.git")}
-        delete_private_clones(clones, jobs_dir)
+        found: dict[str, list[Path]] = {}
+        for path in tasks.DEFAULT_REPOS.glob("*__*.git"):
+            found.setdefault(path.name.removesuffix(".git").replace("__", "/", 1).lower(), []).append(path)
+        for path in tasks.DEFAULT_TASKS.glob("*__*-*"):
+            if path.is_dir() and path.name.rsplit("-", 1)[-1].isdigit():
+                found.setdefault(repo_of(path.name).lower(), []).append(path)
+        delete_private(found, jobs_dir)
     except Exception as exc:  # noqa: BLE001 - a cleanup hiccup must not stop a run or the page
-        print(f"(clones not cleaned up: {exc})", flush=True)
+        print(f"(private repositories not cleaned up: {exc})", flush=True)
+    try:
+        expire_transcripts(jobs_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"(transcripts not cleaned up: {exc})", flush=True)
+
+
+def expire_transcripts(jobs_dir: Path) -> None:
+    """Delete the transcripts of runs on private repositories that ended PR_EVAL_PRIVATE_RETENTION_DAYS
+    ago or more. Unset keeps them. A repository GitHub won't confirm is public counts as private."""
+    days = os.environ.get("PR_EVAL_PRIVATE_RETENTION_DAYS", "").strip()
+    if not days:
+        return
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=float(days))).isoformat(timespec="seconds")
+    answers: dict[str, bool] = {}
+    for path in jobs_dir.glob("*/run.json"):
+        try:
+            meta = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        status = meta.get("status") or {}
+        if status.get("phase") in ACTIVE and alive(status.get("pid")):
+            continue
+        if (status.get("updated_at") or meta.get("created_at") or "") > cutoff:  # ISO times in UTC sort as text
+            continue
+        found = [f for name in TRANSCRIPTS for f in path.parent.glob(f"trials/*/{name}")]
+        repos = run_repos(meta)
+        if not found or not any(answers.setdefault(r.lower(), private(r)) for r in repos):
+            continue
+        for f in found:
+            f.unlink(missing_ok=True)
+        print(f"deleted {len(found)} transcript files of run {path.parent.name} on a private repository", flush=True)
 
 
 def clone_path(repo: str) -> Path:
     return tasks.DEFAULT_REPOS / f"{repo.replace('/', '__')}.git"
+
+
+def task_folders(repo: str, tasks_dir: Path) -> list[Path]:
+    """The task folders collected from this repository, one per pull request."""
+    prefix = repo.replace("/", "__")
+    return [path for path in tasks_dir.glob(f"{prefix}-*") if path.is_dir()
+            and path.name.rsplit("-", 1)[-1].isdigit() and repo_of(path.name).lower() == repo.lower()]
 
 
 def busy_repos(jobs_dir: Path, skip: Path | None = None) -> set[str]:
@@ -160,22 +209,23 @@ def busy_repos(jobs_dir: Path, skip: Path | None = None) -> set[str]:
     return busy
 
 
-def delete_private_clones(clones: dict[str, Path], jobs_dir: Path, skip: Path | None = None) -> None:
-    """Delete these clones of private repositories, unless a going run uses the repository.
+def delete_private(found: dict[str, list[Path]], jobs_dir: Path, skip: Path | None = None) -> None:
+    """Delete these clones and task folders of private repositories, unless a going run uses the repository.
 
-    Every run on this machine shares data/repos/, whoever started it, so a clone stays while
-    any run on its repository is going. A repository GitHub won't confirm is public now
-    counts as private: deleting a public clone only costs cloning it again.
+    Every run on this machine shares data/repos/ and tasks/, whoever started it, so a repository's
+    files stay while any run on it is going. A repository GitHub won't confirm is public now counts
+    as private: deleting a public one's files only costs collecting them again.
     """
     busy = busy_repos(jobs_dir, skip)
-    clones = {repo: path for repo, path in clones.items()
-              if path.is_dir() and repo.lower() not in busy and private(repo)}
-    if clones:  # look again: a run may have started while GitHub answered
+    found = {repo: paths for repo, paths in found.items()
+             if any(path.is_dir() for path in paths) and repo.lower() not in busy and private(repo)}
+    if found:  # look again: a run may have started while GitHub answered
         busy = busy_repos(jobs_dir, skip)
-    for repo, path in clones.items():
+    for repo, paths in found.items():
         if repo.lower() not in busy:
-            shutil.rmtree(path, ignore_errors=True)
-            print(f"deleted the clone of private repository {repo}", flush=True)
+            for path in paths:
+                shutil.rmtree(path, ignore_errors=True)
+            print(f"deleted the clone and task folders of private repository {repo}", flush=True)
 
 
 def private(repo: str) -> bool:
@@ -252,6 +302,19 @@ def find_tasks(request: Request, tasks_dir: Path) -> list[tasks.Task]:
     return tasks.spread(found, request.limit, repo=lambda t: t.meta["task"]["repo"])
 
 
+def restore_tasks(ids: list[str], tasks_dir: Path, request: dict) -> list[tasks.Task]:
+    """A resumed run's tasks, collected again where they were deleted with their private repository."""
+    missing: dict[str, list[int]] = {}
+    for task_id in ids:
+        number = task_id.rsplit("-", 1)[-1]
+        if "__" in task_id and number.isdigit() and not (tasks_dir / task_id / "task.toml").is_file():
+            missing.setdefault(repo_of(task_id), []).append(int(number))
+    for repo, prs in missing.items():
+        tasks.collect(repo, tasks_dir, prs=prs, setup=request.get("setup"), test=request.get("test"),
+                      language=request.get("language"))
+    return tasks.discover(tasks_dir, ids)
+
+
 def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, skip_check: bool = False) -> int:
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
@@ -260,7 +323,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     try:
         restore_execution(job.meta, settings)
         if job.meta.get("tasks") and job.meta.get("checked", True):  # resumed after the check: keep the same tasks
-            selected = tasks.discover(tasks_dir, job.meta["tasks"])
+            selected = restore_tasks(job.meta["tasks"], tasks_dir, job.meta.get("request") or {})
             settings.image = prepare_image(job, settings.image)
             asking = note_harness_version(job, settings)
             if not skip_check and len(check(job, selected, settings)) != len(selected):
@@ -269,7 +332,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
             runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
         else:
             if job.meta.get("candidates"):  # resumed while checking: the same pull requests
-                candidates = tasks.discover(tasks_dir, job.meta["candidates"])
+                candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {})
             else:
                 request = Request(**job.meta.get("request") or {})
                 job.status("collecting", f"Finding merged pull requests in {request.describe()}")

@@ -679,11 +679,14 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(meta["tasks"], [])
 
     def end_run_on_clone(self, private: bool, other: dict | None = None) -> tuple[bool, list]:
-        """Stop run r1 on o/secret beside its bare clone, and maybe another run; whether the clone is left."""
+        """Stop run r1 on o/secret beside its bare clone and task folders, and maybe another run;
+        whether they are left."""
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
-            repos = Path(d) / "repos"
+            repos, task_dir = Path(d) / "repos", Path(d) / "tasks"
             (repos / "o__secret.git").mkdir(parents=True)
+            for name in ("o__secret-7", "o__secret-x-3"):  # the second is o/secret-x's, not o/secret's
+                (task_dir / name / "tests").mkdir(parents=True)
             if other:
                 (Path(d) / "jobs" / "r2").mkdir(parents=True)
                 (Path(d) / "jobs" / "r2" / "run.json").write_text(json.dumps(other))
@@ -694,7 +697,11 @@ class PipelineTest(unittest.TestCase):
                     mock.patch.object(pipeline, "find_tasks", side_effect=KeyboardInterrupt), \
                     mock.patch.object(runner, "cleanup"), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(pipeline.execute(job, [baseten_model()], runner.Settings()), 130)
-            return (repos / "o__secret.git").exists(), gh.call_args_list
+            kept = (repos / "o__secret.git").exists()
+            self.assertEqual((task_dir / "o__secret-7").exists(), kept)  # the clone and the task folders go together
+            self.assertTrue((task_dir / "o__secret-x-3").exists())
+            self.assertTrue((job.path / "run.json").is_file())  # the run and its results stay
+            return kept, [c for c in gh.call_args_list if c != mock.call("repos/o/secret-x")]
 
     def test_a_private_repositorys_clone_goes_with_its_last_run(self):
         kept, asked = self.end_run_on_clone(private=True)
@@ -714,7 +721,9 @@ class PipelineTest(unittest.TestCase):
     def test_starting_sweeps_clones_that_dead_runs_left(self):
         """A run whose process died never cleaned up: the next `pr-eval run` or `pr-eval serve` does."""
         with tempfile.TemporaryDirectory() as d:
-            repos, jobs = Path(d) / "repos", Path(d) / "jobs"
+            repos, jobs, task_dir = Path(d) / "repos", Path(d) / "jobs", Path(d) / "tasks"
+            for name in ("o__orphan-1", "o__inuse-2", "o__public-3", "o__unknown-4"):
+                (task_dir / name).mkdir(parents=True)
             runs = {"dead": ("o/orphan", 111), "live": ("o/inuse", 222)}
             for name, (repo, pid) in runs.items():
                 (jobs / name).mkdir(parents=True)
@@ -722,12 +731,70 @@ class PipelineTest(unittest.TestCase):
                     {"request": {"repos": [repo]}, "status": {"phase": "running", "pid": pid}}))
             for clone in ("o__orphan.git", "o__inuse.git", "o__public.git"):
                 (repos / clone).mkdir(parents=True)
-            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
-                    mock.patch.object(tasks, "gh", side_effect=lambda path: {"private": path != "repos/o/public"}), \
+            def gh(path):
+                if path == "repos/o/unknown":
+                    raise RuntimeError("HTTP 404")  # GitHub won't say: counts as private
+                return {"private": path != "repos/o/public"}
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), mock.patch.object(tasks, "DEFAULT_TASKS", task_dir), \
+                    mock.patch.object(tasks, "gh", side_effect=gh), \
                     mock.patch.object(pipeline, "alive", side_effect=lambda pid: pid == 222), \
                     contextlib.redirect_stdout(io.StringIO()):
-                pipeline.sweep_clones(jobs)
+                pipeline.sweep_private(jobs)
             self.assertEqual(sorted(p.name for p in repos.iterdir()), ["o__inuse.git", "o__public.git"])
+            self.assertEqual(sorted(p.name for p in task_dir.iterdir()), ["o__inuse-2", "o__public-3"])
+
+    def test_a_resumed_run_collects_the_tasks_its_end_deleted_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            task_dir = Path(d) / "tasks"
+            (task_dir / "o__kept-1").mkdir(parents=True)
+            (task_dir / "o__kept-1" / "task.toml").write_text("")
+            with mock.patch.object(tasks, "collect") as collect, \
+                    mock.patch.object(tasks, "discover", return_value=["found"]) as discover:
+                found = pipeline.restore_tasks(["o__kept-1", "o__secret-7", "o__secret-9", "local-task"], task_dir,
+                                               {"setup": "make", "test": "make test"})
+            collect.assert_called_once_with("o/secret", task_dir, prs=[7, 9], setup="make", test="make test", language=None)
+            discover.assert_called_once_with(task_dir, ["o__kept-1", "o__secret-7", "o__secret-9", "local-task"])
+            self.assertEqual(found, ["found"])
+
+    def test_a_rebuilt_report_keeps_what_it_said_of_deleted_tasks(self):
+        with tempfile.TemporaryDirectory() as d:
+            job = self.job(d, pipeline.Request(repos=["o/secret"]))
+            job.meta["tasks"] = ["o__secret-7"]
+            job.save()
+            told = {"id": "o__secret-7", "repo": "o/secret", "title": "Fix the parser", "reference_patch": "diff"}
+            (job.path / "report.json").write_text(json.dumps({"tasks": [told]}))
+            self.assertEqual(report.build_data(job.path)["tasks"], [told])
+
+    def private_run_with_transcripts(self, d: str, ended: timedelta) -> Path:
+        run = Path(d) / "jobs" / "r1"
+        (run / "trials" / "t__m__1").mkdir(parents=True)
+        ended_at = (datetime.now(timezone.utc) - ended).isoformat(timespec="seconds")
+        (run / "run.json").write_text(json.dumps({"request": {"repos": ["o/secret"]},
+                                                  "status": {"phase": "done", "pid": 1, "updated_at": ended_at}}))
+        for name in (*pipeline.TRANSCRIPTS, "result.json", "agent.patch"):
+            (run / "trials" / "t__m__1" / name).write_text("x")
+        (run / "report.html").write_text("report")
+        return run
+
+    def test_private_runs_lose_their_transcripts_after_the_retention_days(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = self.private_run_with_transcripts(d, timedelta(days=8))
+            jobs = old.parent
+            with mock.patch.object(tasks, "gh", return_value={"private": True}), \
+                    mock.patch.object(pipeline, "alive", return_value=False), contextlib.redirect_stdout(io.StringIO()):
+                with mock.patch.dict(os.environ, {"PR_EVAL_PRIVATE_RETENTION_DAYS": ""}):
+                    pipeline.expire_transcripts(jobs)  # unset: kept
+                self.assertTrue((old / "trials" / "t__m__1" / "agent.jsonl").exists())
+                with mock.patch.dict(os.environ, {"PR_EVAL_PRIVATE_RETENTION_DAYS": "30"}):
+                    pipeline.expire_transcripts(jobs)  # not old enough yet
+                self.assertTrue((old / "trials" / "t__m__1" / "agent.jsonl").exists())
+                with mock.patch.dict(os.environ, {"PR_EVAL_PRIVATE_RETENTION_DAYS": "7"}):
+                    with mock.patch.object(tasks, "gh", return_value={"private": False}):
+                        pipeline.expire_transcripts(jobs)  # a public repository's run keeps them
+                    self.assertTrue((old / "trials" / "t__m__1" / "agent.jsonl").exists())
+                    pipeline.expire_transcripts(jobs)
+            self.assertEqual(sorted(p.name for p in (old / "trials" / "t__m__1").iterdir()), ["agent.patch", "result.json"])
+            self.assertTrue((old / "report.html").exists())
 
     def test_a_starting_run_keeps_the_clones_it_is_about_to_use(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1203,13 +1270,38 @@ class AppTest(unittest.TestCase):
             state["models"] = [model]
             self.assertIn("about $10.00, and you have $5.00 left of your $50.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co"))
             self.assertIsNone(page.over_budget(state, ["m"], 10, "o/a", "a@x.co"))  # cheaper on this repository
-            self.assertIsNone(page.over_budget(state, ["other"], 10, "o/x", "a@x.co"))  # no earlier run to price it
+            # No earlier run prices "other": it counts as the dearest of UNKNOWN_ATTEMPT_COST and every attempt seen.
+            self.assertIn(f"about {app.usd(app.UNKNOWN_ATTEMPT_COST * 10)}", page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
+            with mock.patch.object(app, "UNKNOWN_ATTEMPT_COST", 0.01):
+                self.assertIn("about $10.00", page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
             self.add_run(jobs, "r2", "a@x.co", phase="done", cost=10)
             self.assertIn("reached your $50.00 limit", self.hosted_state(page, "a@x.co")["blocked"])
             self.add_run(jobs, "r3", None, phase="done", cost=50)
             state = self.hosted_state(page, "b@x.co")
             self.assertIn("reached its $100 limit", state["blocked"])
             self.assertEqual(state["spend"], {"spent": 0, "cap": 50})
+
+    def test_going_runs_stop_once_their_owner_or_the_page_passes_its_limit(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 50.0), \
+                mock.patch.object(app, "SPEND_TOTAL", 100.0), mock.patch.object(app, "alive", return_value=True), \
+                mock.patch.object(app.os, "kill") as kill, contextlib.redirect_stdout(io.StringIO()):
+            jobs = Path(d)
+            self.add_run(jobs, "a-done", "a@x.co", phase="done", cost=30)
+            self.add_run(jobs, "a-going", "a@x.co", cost=10)
+            self.add_run(jobs, "b-going", "b@x.co", cost=5)
+            page = app.App(jobs)
+            self.assertEqual(page.enforce_spending(), [])  # a has spent 40 of 50
+            (jobs / "a-going" / "report.json").write_text(json.dumps({"models": [], "trials": [], "summary": {"m": {"cost_usd": 25}}}))
+            self.assertEqual(page.enforce_spending(), ["a-going"])  # a passed 50 while it ran; b's run goes on
+            kill.assert_called_once_with(1, app.signal.SIGINT)
+            self.assertEqual(page.enforce_spending(), [])  # told once: a second Ctrl-C would cut its cleanup short
+            self.add_run(jobs, "c-done", "c@x.co", phase="done", cost=45)
+            self.assertEqual(page.enforce_spending(), ["b-going"])  # the page passed 100: every run stops
+            self.assertIn("this page reached its $100 limit", (jobs / "b-going" / app.OVER_LIMIT).read_text())
+            run = json.loads((jobs / "a-going" / "run.json").read_text())
+            run["status"]["phase"] = "stopped"
+            (jobs / "a-going" / "run.json").write_text(json.dumps(run))
+            self.assertIn("its owner reached their $50.00 limit", page.describe(jobs / "a-going")["detail"])
 
     def test_a_run_started_while_signed_in_records_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
