@@ -7,7 +7,6 @@ import { plural } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import type { AppState, Run } from "@/lib/types";
 import { fillAgain, NewRun } from "./NewRun";
-import { Readiness } from "./Readiness";
 import { RunsList } from "./RunsList";
 
 const STEPS = [
@@ -73,7 +72,7 @@ export function HomePage({ state, error, go, hurry }: {
               </Tip>
             )}
           </div>
-          {state ? <NewRun key={form} state={state} go={go} hurry={hurry} aside={<Readiness state={state} />} /> : <ComposerSkeleton error={error} />}
+          {state ? <NewRun key={form} state={state} go={go} hurry={hurry} /> : <ComposerSkeleton error={error} />}
         </div>
       </section>
 
@@ -94,6 +93,8 @@ export function HomePage({ state, error, go, hurry }: {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+// `pr-eval serve` listens on this machine; anywhere else the page is hosted and its visitors have no terminal.
+const LOCAL = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
 /** Every run, with the ones that failed or stopped more than a day ago folded away. */
 function History({ runs, go }: { runs: Run[]; go: (r: Route) => void }) {
@@ -156,7 +157,7 @@ function ComposerSkeleton({ error }: { error: string | null }) {
   if (error) {
     return (
       <Empty title="Can't reach the page server">
-        Is <code className="font-mono text-foreground">pr-eval serve</code> still running? This page retries on its own.
+        {LOCAL ? <>Is <code className="font-mono text-foreground">pr-eval serve</code> still running? </> : "The page's server isn't answering. "}This page retries on its own.
         <div className="mt-4"><Button variant="outline" size="sm" onClick={() => location.reload()}>Reload</Button></div>
       </Empty>
     );
