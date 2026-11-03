@@ -1121,8 +1121,18 @@ class AppTest(unittest.TestCase):
         with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
                 mock.patch.object(page, "state", return_value={"checks": {"blaxel": True, "bl_cli": True, "gh": False}}):
             self.assertIn("Sign in with GitHub", page.repo_info("o/public", "a@x.co")["error"])  # public ones too
-            self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
+            with mock.patch.object(app, "quick_collected", return_value=False):  # the quick sample isn't collected yet
+                self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
         gh.assert_not_called()  # the page has no GitHub login of its own to fall back on
+
+    def test_the_quick_sample_starts_without_github_once_its_tasks_are_collected(self):
+        page = app.App(Path("/nonexistent"))
+        with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+                mock.patch.object(app, "quick_collected", return_value=True), \
+                mock.patch.object(page, "state", return_value={"checks": {"blaxel": True, "bl_cli": True, "gh": False}}):
+            self.assertNotEqual(page._start({"quick": True, "models": []}, "a@x.co")["error"], app.SIGN_IN_FIRST)
+            self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
+        gh.assert_not_called()  # its tasks are only read: nothing asks GitHub
 
     def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
         page = app.App(Path("/nonexistent"))

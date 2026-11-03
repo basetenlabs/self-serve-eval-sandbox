@@ -24,7 +24,9 @@ folder can't be deployed outside Baseten as it is.
 - **Keys:** the page's process gets the judges', models' and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
 - **GitHub:** the page has no GitHub login of its own. Before starting a run, each person
-  **Signs in with GitHub** on the page, public repositories included: GitHub's device flow through
+  **Signs in with GitHub** on the page, public repositories included. The one exception is the
+  quick sample once its tasks are collected: its runs only read them, so someone without a GitHub
+  account (an AE giving a demo) can start it signed out. Sign-in is GitHub's device flow through
   the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
   (read-only Contents, Pull requests and Metadata; no webhooks; its client id is in `deploy.py`,
   and the page needs no secret). Private repositories need the app added to them: a

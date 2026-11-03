@@ -128,7 +128,8 @@ class App:
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
-                "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True))},
+                "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True)),
+                          "ready": quick_collected()},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
@@ -474,7 +475,8 @@ class App:
         repo = None if quick or pulls else parse_repo(str(form.get("repo") or ""))
         if not (quick or pulls or repo):
             return {"error": "Enter a GitHub repository as owner/repo, or paste pull request links."}
-        if GITHUB_CLIENT_ID and not self.token(user):
+        # The quick sample's tasks, once collected, are only read: a run of them needs no GitHub sign-in.
+        if GITHUB_CLIENT_ID and not self.token(user) and not (quick and quick_collected()):
             return {"error": SIGN_IN_FIRST}
         if not GITHUB_CLIENT_ID and not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
@@ -610,7 +612,8 @@ class App:
             return {"error": "That run can't be resumed."}
         if blocked := self.state(user=user)["blocked"] or self.taken(self.repos_of(self.jobs_dir / run_id), run_id):
             return {"error": blocked}
-        if GITHUB_CLIENT_ID and not self.token(user):
+        quick = self.repos_of(self.jobs_dir / run_id) is None
+        if GITHUB_CLIENT_ID and not self.token(user) and not (quick and quick_collected()):
             return {"error": "Sign in with GitHub to resume a run: the eval reads repositories with your own GitHub login."}
         if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
             return {"error": "Sign in with GitHub to resume a run on a private repository."}
@@ -747,6 +750,12 @@ class App:
             tmp.write_text(json.dumps(everyone, indent=1))
             tmp.replace(self.favorites_file)
         return {"favorites": everyone[user or "local"]}
+
+
+def quick_collected() -> bool:
+    """Whether the quick sample's task folders are on disk, so a run of it reads nothing from GitHub."""
+    return all((tasks.DEFAULT_TASKS / f"{repo.replace('/', '__')}-{n}" / "task.toml").is_file()
+               for repo, prs in tasks.sample(True).items() for n in prs)
 
 
 def spending(everyone: list[tuple[Path, dict]]) -> tuple[float, dict[str, float]]:
