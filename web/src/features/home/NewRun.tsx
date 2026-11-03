@@ -130,11 +130,13 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
-  const blocked = !!state.blocked || signedOut || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
+  // The quick sample's tasks are already collected, so it runs without GitHub: an AE signed in to the page without a GitHub account can demo it.
+  const needsGitHub = signedOut && !(mode === "quick" && state.quick.ready);
+  const blocked = !!state.blocked || needsGitHub || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
   const hint = state.blocked ? state.blocked
-    : signedOut ? "Sign in with GitHub to start a run: the eval reads repositories, public ones too, with your own GitHub login."
+    : needsGitHub ? "Sign in with GitHub to start a run: the eval reads repositories, public ones too, with your own GitHub login."
     : over ? `This run would cost about ${usd(cost)}, and you have ${usd(left)} left of your ${usd(state.spend!.cap)} for the last 24 hours. Choose fewer pull requests or models.`
     : !models.length ? "Choose at least one model."
     : checking ? "Checking the pull requests on GitHub."
@@ -206,7 +208,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
               text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
           </RadioGroup.Root>
 
-          {source === "quick" && state.github.sign_in && (
+          {source === "quick" && state.github.sign_in && (!state.quick.ready || !!state.github.login) && (
             <div className="mt-4 animate-enter bg-surface px-4 py-2.5 shadow-[inset_0_0_0_1px_var(--frame)]">
               <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
             </div>
@@ -356,7 +358,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
                 <span>{error}</span>
               </div>
             )}
-            {signedOut && !state.blocked ? (
+            {needsGitHub && !state.blocked ? (
               <Button type="button" size="lg" className="mt-5 w-full" onClick={() => gitHubSignIn.current?.signIn()}>
                 <GitHubMark /> Sign in with GitHub to start
               </Button>

@@ -122,7 +122,8 @@ export interface AppState {
   checks: Checks;
   models: CatalogModel[];
   runs: Run[];
-  quick: { tasks: number; repos: number };
+  /** `ready`: its tasks are collected, so it starts without a GitHub sign-in. */
+  quick: { tasks: number; repos: number; ready?: boolean };
   default_limit: number;
   max_limit: number;
   /** Some run is going, anyone's: the page polls faster. */
