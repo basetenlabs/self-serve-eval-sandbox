@@ -230,6 +230,10 @@ def delete_private(found: dict[str, list[Path]], jobs_dir: Path, skip: Path | No
 
 
 def private(repo: str) -> bool:
+    # The sample's repositories are public, as configured. Asking GitHub could fail (the hosted page's
+    # anonymous requests hit its rate limit) and delete the quick sample's tasks, which then need a GitHub sign-in.
+    if repo.lower() in {r.lower() for quick in (True, False) for r in tasks.sample(quick)}:
+        return False
     try:
         return tasks.gh(f"repos/{repo}").get("private") is not False
     except (RuntimeError, SystemExit, ValueError):

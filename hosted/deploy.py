@@ -46,7 +46,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from eval_sandbox import runtime, trace  # noqa: E402
+from eval_sandbox import runtime, tasks, trace  # noqa: E402
 WORKSPACE = ""  # set in main() from the same setting local runs use
 REGION = "us-pdx-1"
 SANDBOX = "pr-eval-host"
@@ -198,6 +198,17 @@ def release_files() -> dict[str, bytes]:
     return out
 
 
+def quick_task_files() -> dict[str, bytes]:
+    """The quick sample's task folders, collected here first where missing (this Mac's `gh` login). On the
+    page they let a signed-in person with no GitHub account run the quick sample: its runs only read them."""
+    out = {}
+    for repo, prs in tasks.sample(True).items():
+        for folder in tasks.collect(repo, prs=prs):
+            for file in sorted(f for f in folder.rglob("*") if f.is_file()):
+                out[str(file.relative_to(tasks.DEFAULT_TASKS.parent))] = file.read_bytes()
+    return out
+
+
 def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
     out = {}
     for job in jobs:
@@ -330,6 +341,8 @@ def main() -> int:
     files = release_files()
     run(sandbox, f"mkdir -p {APP} {AUTH} && chmod 700 {AUTH} && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))
     upload(sandbox, files, APP)
+    step("Copying the quick sample's tasks")
+    upload(sandbox, quick_task_files(), APP)
     if args.seed:
         step(f"Copying {len(args.seed)} run summaries")
         upload(sandbox, seed_files(args.seed, keys), APP)
