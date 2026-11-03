@@ -75,7 +75,9 @@ prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_
 # The judges grade every attempt the hidden tests have run on. Each reads the request,
 # the merged diff and the agent's diff on its own; then the chair reads the same evidence
 # and their verdicts and gives the final one, which decides whether the attempt is solved.
-# Judge tokens are reported separately: they are the cost of grading, not of the work.
+# Judge tokens are reported separately: they are the cost of grading, not of the work. A
+# Chat Completions judge needs `prices` (USD per million tokens) for the hosted spending
+# limits to count it; Claude Code prices the Claude judge itself.
 #
 # provider = "anthropic" runs a Claude model through Claude Code (print mode, no tools)
 #   with the same credential as the Claude models above. Any other judge calls an
@@ -95,11 +97,15 @@ label = "GPT-6.1 Sol"
 model = "gpt-6.1-sol"
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
+# OpenAI's list rates (developers.openai.com/api/docs/pricing, 2026-10-17); prompts here stay
+# far under the 272K tokens past which it charges more.
+prices = { input = 2.00, cached_input = 0.10, output = 10.00 }
 
 [[judge.panel]]
 label = "Kimi K3"
 model = "moonshotai/Kimi-K3"
 base_url = "https://inference.baseten.co/v1"
 api_key_env = "BASETEN_API_KEY"
+prices = { input = 3.00, cached_input = 0.30, output = 15.00 }
 # It also chairs, so it grades twice per attempt; Baseten returns 429s for too many at once.
 max_concurrent = 4

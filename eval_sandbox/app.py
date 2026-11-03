@@ -52,8 +52,9 @@ APP_ORIGIN = os.environ.get("APP_ORIGIN")
 ACCESS = "access.json"  # in a run's folder started by someone signed in: its owner, the only one who sees it hosted
 MAX_FAVORITES = 200
 # Hosted, everyone shares one Blaxel workspace and one set of model keys: how many runs may go at once,
-# in all and for one person, and how much runs started in the last day may cost (the agents' cost, as
-# reports count it), in all and for one person. Locally: one run at a time and no spending limit.
+# in all and for one person, and how much may be spent on models in the last day (every agent attempt,
+# invalid and stopped ones too, and every judge, from each run's ledger), in all and for one person.
+# Locally: one run at a time and no spending limit.
 MAX_RUNS = int(os.environ.get("PR_EVAL_MAX_RUNS") or 1)
 RUNS_PER_PERSON = int(os.environ.get("PR_EVAL_RUNS_PER_PERSON") or 1)
 SPEND_TOTAL = float(os.environ.get("PR_EVAL_SPEND_TOTAL") or 0) or None
@@ -62,6 +63,8 @@ SPEND_WINDOW = timedelta(days=1)
 # What a run's attempt with a model no earlier run priced counts toward those limits: this, or the dearest
 # attempt any model has cost so far if that's more. Guessing low would let an unpriced model run past them.
 UNKNOWN_ATTEMPT_COST = 5.0
+# What one judge's answer with no price counts: well over any measured so far (about $0.05 to $0.15).
+UNKNOWN_JUDGE_COST = 0.25
 SPEND_CHECK_SECONDS = 30  # how often the hosted page stops runs going once their owner or the page is over
 OVER_LIMIT = "over_limit.txt"  # in a run's folder the page stopped for spending: why, shown until it resumes
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
@@ -147,7 +150,7 @@ class App:
         for d, run in everyone:
             if run["phase"] in pipeline.ACTIVE:
                 going, mine = going + 1, mine + (bool(user) and read_json(d / ACCESS).get("owner") == user)
-        spent, by_owner = spending(everyone)
+        spent, by_owner = spending(everyone, self.unpriced(everyone))
         my_spent = by_owner.get(user, 0.0) if user else 0.0
         mine_cap = SPEND_PER_PERSON if user else None
         if user and mine >= RUNS_PER_PERSON:
@@ -158,11 +161,11 @@ class App:
                 else "A run is already going. Let it finish, or stop it, before starting another." \
                 if any(r["phase"] in pipeline.ACTIVE for r in runs) else "Someone else's run is going. Start yours when it finishes."
         elif mine_cap and my_spent >= mine_cap:
-            blocked = (f"You've reached your {usd(mine_cap)} limit: your runs from the last 24 hours cost {usd(my_spent)}. "
-                       "Each run stops counting a day after it started.")
+            blocked = (f"You've reached your {usd(mine_cap)} limit: your runs spent {usd(my_spent)} in the last 24 hours. "
+                       "Each attempt stops counting a day after it ran.")
         elif SPEND_TOTAL and spent >= SPEND_TOTAL:
-            blocked = (f"This page has reached its {usd(SPEND_TOTAL)} limit: runs from the last 24 hours cost {usd(spent)}. "
-                       "Each run stops counting a day after it started.")
+            blocked = (f"This page has reached its {usd(SPEND_TOTAL)} limit: runs spent {usd(spent)} in the last 24 hours. "
+                       "Each attempt stops counting a day after it ran.")
         else:
             blocked = None
         return {"blocked": blocked, "spend": {"spent": my_spent, "cap": mine_cap} if mine_cap else None,
@@ -174,18 +177,18 @@ class App:
         if not (SPEND_TOTAL or SPEND_PER_PERSON):
             return []
         everyone = self.everyone()
-        spent, by_owner = spending(everyone)
+        spent, by_owner = spending(everyone, self.unpriced(everyone))
         stopped = []
         for d, run in everyone:
             if run["phase"] not in pipeline.ACTIVE:
                 continue
             owner = read_json(d / ACCESS).get("owner")
             if SPEND_TOTAL and spent >= SPEND_TOTAL:
-                why = (f"Stopped: this page reached its {usd(SPEND_TOTAL)} limit, as runs from the last 24 hours "
-                       f"cost {usd(spent)}. Resume once older runs stop counting, a day after each started.")
+                why = (f"Stopped: this page reached its {usd(SPEND_TOTAL)} limit, as runs spent {usd(spent)} in the "
+                       "last 24 hours. Resume once older attempts stop counting, a day after each ran.")
             elif SPEND_PER_PERSON and owner and by_owner.get(owner, 0.0) >= SPEND_PER_PERSON:
-                why = (f"Stopped: its owner reached their {usd(SPEND_PER_PERSON)} limit, as their runs from the last "
-                       f"24 hours cost {usd(by_owner[owner])}. Resume once older runs stop counting, a day after each started.")
+                why = (f"Stopped: its owner reached their {usd(SPEND_PER_PERSON)} limit, as their runs spent "
+                       f"{usd(by_owner[owner])} in the last 24 hours. Resume once older attempts stop counting, a day after each ran.")
             else:
                 continue
             pid = self.pid(run["id"])
@@ -197,6 +200,14 @@ class App:
             print(f"stopped run {run['id']}: {why}", flush=True)
             stopped.append(run["id"])
         return stopped
+
+    def unpriced(self, everyone: list[tuple[Path, dict]]) -> dict[str, float]:
+        """What an agent attempt that ran but has no price counts, by model: its latest cost per attempt, else
+        UNKNOWN_ATTEMPT_COST or the dearest attempt seen, whichever is more. Key "" is that fallback."""
+        found = self.estimates(sorted((r for _, r in everyone), key=lambda r: r["active_at"], reverse=True))
+        each = {key: e["cost_per_attempt"] for key, e in found.items()}
+        dearest = [c for e in found.values() for c in [e["cost_per_attempt"], *(s["cost_per_attempt"] for s in e["by_scope"].values())]]
+        return {**each, "": max([UNKNOWN_ATTEMPT_COST, *dearest])}
 
     def pid(self, run_id: str) -> int | None:
         """The process of a run going: one started or resumed from here, maybe before its status says so."""
@@ -610,9 +621,16 @@ class App:
         run = self.find(run_id, user)
         if not run or not run["resumable"]:
             return {"error": "That run can't be resumed."}
-        if blocked := self.state(user=user)["blocked"] or self.taken(self.repos_of(self.jobs_dir / run_id), run_id):
+        state = self.state(user=user)
+        if blocked := state["blocked"] or self.taken(self.repos_of(self.jobs_dir / run_id), run_id):
             return {"error": blocked}
         quick = self.repos_of(self.jobs_dir / run_id) is None
+        # What it has left to run must fit what's left of the limits, as a new run's would.
+        keys = [m["key"] for m in run["models"]]
+        left = run["progress"]["total"] - run["progress"]["done"] + run["lost"]
+        scope = "quick" if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
+        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user)):
+            return {"error": problem}
         if GITHUB_CLIENT_ID and not self.token(user) and not (quick and quick_collected()):
             return {"error": "Sign in with GitHub to resume a run: the eval reads repositories with your own GitHub login."}
         if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
@@ -758,16 +776,48 @@ def quick_collected() -> bool:
                for repo, prs in tasks.sample(True).items() for n in prs)
 
 
-def spending(everyone: list[tuple[Path, dict]]) -> tuple[float, dict[str, float]]:
-    """What runs started in the last day cost so far, in all and by owner."""
+def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | None = None) -> tuple[float, dict[str, float]]:
+    """What was spent on models in the last day, in all and by owner: each run's ledger entries from then, by
+    when they were spent, so a run resumed days later counts too. A run from before the ledger counts its
+    report's cost if it started in the last day. A run with no owner counts toward the page's total only."""
     since = (datetime.now(timezone.utc) - SPEND_WINDOW).isoformat(timespec="seconds")
+    unpriced = unpriced or {"": UNKNOWN_ATTEMPT_COST}
     total, by_owner = 0.0, {}
     for d, run in everyone:
-        if (run["started"] or since) >= since:  # ISO times in UTC sort as text
-            total += run["cost"]
-            if owner := read_json(d / ACCESS).get("owner"):
-                by_owner[owner] = by_owner.get(owner, 0.0) + run["cost"]
+        ledger = d / runner.SPEND_LEDGER
+        if ledger.is_file():
+            cost = ledger_cost(ledger, since, unpriced)
+        elif (run["started"] or since) >= since:  # ISO times in UTC sort as text
+            cost = run["cost"]
+        else:
+            continue
+        total += cost
+        if owner := read_json(d / ACCESS).get("owner"):
+            by_owner[owner] = by_owner.get(owner, 0.0) + cost
     return total, by_owner
+
+
+def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
+    """A run's charges since `since`. One with no price counts as `unpriced` says for an agent attempt of its
+    model, or UNKNOWN_JUDGE_COST for a judge's answer: a missing price never reads as free."""
+    cost = 0.0
+    try:
+        lines = ledger.read_text().splitlines()
+    except OSError:
+        return 0.0
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:  # a line still being written
+            continue
+        if not isinstance(entry, dict) or str(entry.get("at") or "") < since:
+            continue
+        usd_spent = entry.get("usd")
+        if not isinstance(usd_spent, (int, float)):
+            usd_spent = UNKNOWN_JUDGE_COST if entry.get("kind") == "judge" \
+                else unpriced.get(entry.get("model") or "", unpriced[""])
+        cost += usd_spent
+    return cost
 
 
 def install_url() -> str:

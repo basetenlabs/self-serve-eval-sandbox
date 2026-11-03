@@ -86,6 +86,14 @@ class HungJudgeTest(unittest.TestCase):
         with mock.patch.object(judge.urllib.request, "urlopen", side_effect=replies):
             self.assertEqual(judge.ask_chat(self.chat_judge(), "system", "user")["verdict"], "pass")
 
+    def test_a_chat_judges_answer_is_priced_from_its_tokens(self):
+        usage = {"prompt_tokens": 1_000_000, "completion_tokens": 100_000, "prompt_tokens_details": {"cached_tokens": 500_000}}
+        reply = lambda: io.BytesIO(json.dumps({"choices": [{"message": {"content": ANSWER}}], "usage": usage}).encode())
+        priced = Judge(**{**self.chat_judge().__dict__, "prices": {"input": 2.0, "cached_input": 0.1, "output": 10.0}})
+        with mock.patch.object(judge.urllib.request, "urlopen", side_effect=[reply(), reply()]):
+            self.assertAlmostEqual(judge.ask_chat(priced, "system", "user")["cost_usd"], 1.0 + 0.05 + 1.0)
+            self.assertIsNone(judge.ask_chat(self.chat_judge(), "system", "user")["cost_usd"])  # no price: unknown, not free
+
     def test_a_judge_that_never_answers_is_an_error_not_a_verdict(self):
         def urlopen(request, timeout):
             self.clock.sleep(timeout)

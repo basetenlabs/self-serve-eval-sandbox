@@ -130,7 +130,7 @@ export interface AppState {
   busy: boolean;
   /** Why you can't start a run now: your run is going, the most runs are, or a spending limit is reached. */
   blocked?: string | null;
-  /** What your runs started in the last 24 hours cost, and your limit, when there is one. */
+  /** What your runs spent on models in the last 24 hours, and your limit, when there is one. */
   spend?: { spent: number; cap: number } | null;
   github: GitHubAccount;
   favorites: Favorite[];

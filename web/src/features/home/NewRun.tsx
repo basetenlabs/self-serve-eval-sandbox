@@ -347,7 +347,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
                 {!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
               </PlanRow>
               {state.spend && (
-                <PlanRow label="Last 24 hours" tip="What your runs started in the last 24 hours cost, out of your limit.">
+                <PlanRow label="Last 24 hours" tip="What your runs spent on models in the last 24 hours, judges included, out of your limit.">
                   <span>{money(state.spend.spent)} <span className="text-muted-foreground">of {money(state.spend.cap)}</span></span>
                 </PlanRow>
               )}
