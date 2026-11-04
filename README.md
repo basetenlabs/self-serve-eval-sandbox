@@ -103,7 +103,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Models
 
-`configs/models.toml` lists the models and their prices: `claude-opus`, `glm-5.3`, `kimi-k3`, `muse-spark`, `deepseek-v4.1-flash`, `nemotron-3.5-super`. To add one, copy an entry and set its Baseten model id and prices.
+`configs/models.toml` lists the models and their prices: `claude-opus`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash`, `nemotron-3.5-super`. To add one, copy an entry and set its Baseten model id and prices.
 
 ## Development
 
