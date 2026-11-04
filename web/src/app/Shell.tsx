@@ -78,9 +78,9 @@ export function Shell({ state, route, go, offline, children }: {
       <footer className="border-t border-dashed border-rule">
         <div className="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-3 px-4 py-6 sm:px-6 md:guide-x md:px-8">
           <span className="label-mono text-muted-foreground">Baseten ▪ Eval Sandbox</span>
-          <span className="label-mono text-muted-foreground">
+          {state && !state.github.sign_in && <span className="label-mono text-muted-foreground">
             Also from a terminal: <code className="normal-case tracking-normal text-foreground">pr-eval run --quick</code>
-          </span>
+          </span>}
         </div>
       </footer>
     </div>

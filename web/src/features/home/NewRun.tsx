@@ -17,6 +17,7 @@ import type { Again, AppState, CatalogModel, Favorite, PullList, RepoInfo } from
 import { cn } from "@/lib/utils";
 import { GitHubAccount, GitHubMark } from "./GitHubAccount";
 import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPicker";
+import { Readiness } from "./Readiness";
 
 type Source = "quick" | "repo" | "suite";
 type Pick = "latest" | "choose";
@@ -27,7 +28,7 @@ const QUICK_MINUTES = 8; // every quick-sample attempt starts at once; the slowe
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
-export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: Route) => void; hurry: () => void; aside?: React.ReactNode }) {
+export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) => void; hurry: () => void }) {
   const toast = useToast();
   const [stored, setSource] = useStored<string>("pr-eval-source", "quick");
   const source: Source = stored === "repo" || stored === "suite" ? stored : "quick";
@@ -51,6 +52,15 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
   const form = React.useRef<HTMLFormElement>(null);
   const gitHubSignIn = React.useRef<{ signIn: () => void }>(null);
   const signedOut = state.github.sign_in && !state.github.login;
+  // The Environment panel's sign-in: the quick sample may not show the GitHub box, so open Your pull requests first.
+  const [signInNext, setSignInNext] = React.useState(false);
+  React.useEffect(() => {
+    if (signInNext && gitHubSignIn.current) { setSignInNext(false); gitHubSignIn.current.signIn(); }
+  }, [signInNext, source]);
+  const signInFromAside = () => {
+    if (gitHubSignIn.current) gitHubSignIn.current.signIn();
+    else { setSource("repo"); setSignInNext(true); }
+  };
   const [favorites, save] = useFavorites(state.favorites);
   const onFavorite: OnFavorite = (pull, saved) => {
     void save(pull, saved).then((problem) => problem && toast("Couldn't save it", { body: problem, tone: "danger" }));
@@ -370,7 +380,7 @@ export function NewRun({ state, go, hurry, aside }: { state: AppState; go: (r: R
             </Button>}
             <p className="mt-3 text-[13px] leading-snug text-muted-foreground" aria-live="polite">{hint}</p>
           </Column>
-          {aside}
+          <Readiness state={state} onSignIn={signedOut ? signInFromAside : undefined} />
         </div>
       </div>
     </form>
