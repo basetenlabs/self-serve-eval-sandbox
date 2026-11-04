@@ -126,6 +126,45 @@ def evidence(task: Task, agent_patch: str, tests: dict, test_output: str) -> str
             f"```\n{test_output[-3000:]}\n```")
 
 
+SCREEN_VERSION = 1
+SCREEN = """You check tasks for a benchmark of coding agents before any agent tries them. Each
+task is a real merged pull request. The agent gets only the change request below and the
+repository as it was before the change; hidden tests from the merged pull request then
+decide whether its change works. The request was written before the pull request was
+finished, so the merged code and tests can do more than the request says.
+
+You are given the request and the merged diff, tests included. Decide whether a capable
+engineer who reads only the request, and the repository's existing code, could write a
+change that passes the merged tests.
+
+Pass when the tests check what the request asks for, or what follows from it, from the
+existing code, or from ordinary practice in this codebase, even if they check it in detail.
+Names the request lists under "Names the tests use" count as given.
+
+Fail when the tests need something the request neither states nor implies, so a correct
+change written from the request alone would fail them:
+- behavior the request leaves out or contradicts (a case it says to treat one way that the
+  tests want treated another, a message text, a new rule);
+- a name the tests import or call (a function, constant, class, parameter) that the request
+  never gives and that the existing code doesn't make obvious;
+- internal state or structure the tests inspect that a different, correct design wouldn't have.
+
+Answer with JSON only: {"verdict": "pass" | "fail", "reason": "<one sentence, under 40 words: for a fail, what the tests need that the request never states>"}"""
+
+
+def screen(judge: Judge, task: Task) -> dict:
+    """Does the request say enough to pass the merged tests? {"verdict", "reason"} or {"error"}.
+
+    The request is the PR's text or its issue, written before the PR was finished; its tests come
+    from the merged code. Where the two drifted apart, every attempt fails for the task's fault,
+    so a task whose tests need what its request never states is left out of the run.
+    """
+    reference = (task.path / "solution" / "reference.patch").read_text(errors="replace")
+    user = (f"## Change request ({task.meta['task']['repo']})\n\n{task.instruction.strip()}\n\n"
+            f"## Merged diff, tests included\n\n```diff\n{clip(readable(reference))}\n```")
+    return {"label": judge.name, "model": judge.model, "prompt_version": SCREEN_VERSION, **ask(judge, SCREEN, user)}
+
+
 def grade(panel: Panel, task: Task, agent_patch: str, tests: dict, test_output: str) -> dict:
     """Every judge's verdict, then the chair's: the final verdict and reason, with the panel's votes."""
     record = {"model": panel.name, "prompt_version": PROMPT_VERSION}

@@ -91,8 +91,9 @@ def cmd_collect(args) -> int:
 def cmd_validate(args) -> int:
     pipeline.ensure_image(args.image)
     selected = tasks.discover(args.tasks, args.task)
+    # The panel's chair also checks that each request says enough to pass its tests.
     settings = runner.Settings(image=runtime.resolve_image(args.image), concurrency=args.concurrency,
-                               workspace=runtime.workspace())
+                               workspace=runtime.workspace(), judge=config.load()[1])
     counts: dict[str, int] = {}
 
     def checked(record, done, total):

@@ -54,11 +54,13 @@ MAINTENANCE = re.compile(r"\b(bump|dependabot|renovate|release|changelog|typo|re
 CLOSES_ISSUE = re.compile(r"\b(?:fix(?:es|ed)?|clos(?:e[sd]?|ing)|resolv(?:e[sd]?|ing))\s+"
                           r"(?:(?:https://github.com/([^/\s]+/[^/\s]+)/issues/)|(?:(\w[\w.-]*/[\w.-]+))?#)(\d+)", re.I)
 # A line that defines a name: a function, method, class or type (group 1), or a top-level
-# variable or constant (group 2). Go, Python, JavaScript/TypeScript and Rust.
+# variable or constant (group 2): Go, Python, JavaScript/TypeScript and Rust. A Python module
+# constant (`ROW_LIMIT = 1000`, `ROW_LIMIT: int = 1000`) is a top-level upper-case assignment.
 DEFINITION = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+|export\s+(?:default\s+)?)?(?:async\s+)?"
     r"(?:func\s+(?:\([^)]*\)\s*)?|def\s+|fn\s+|function\*?\s+|class\s+|interface\s+|struct\s+|enum\s+|trait\s+)(\w+)"
-    r"|^(?:export\s+)?(?:type|var|const|let)\s+(\w+)")
+    r"|^(?:export\s+)?(?:type|var|const|let)\s+(\w+)"
+    r"|^([A-Z][A-Z0-9_]*)\s*(?::[^=]+)?=(?!=)")
 # A pull request as people paste it: its GitHub link, or owner/repo#number.
 PULL = re.compile(r"(?:(?:https?://)?(?:www\.)?github\.com/)?([\w.-]+/[\w.-]+?)(?:/pulls?/|#)(\d+)(?:[/?#].*)?")
 GO_IMPORT_BLOCK = re.compile(r"^import\s*\((.*?)^\)", re.M | re.S)
@@ -363,7 +365,8 @@ def signatures(lines: list[str]):
         while sum(p.count("(") - p.count(")") for p in parts) > 0 and i + len(parts) < len(lines) and len(parts) < 8:
             parts.append(lines[i + len(parts)].strip())
         text = " ".join(parts)
-        yield match[1] or match[2], (text.split("=", 1)[0] if match[2] else text).rstrip(" {:=")
+        variable = match[2] or match[3]
+        yield match[1] or variable, (text.split("=", 1)[0] if variable else text).rstrip(" {:=")
 
 
 def parameters(name: str, signature: str) -> str:

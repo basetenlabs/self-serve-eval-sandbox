@@ -45,6 +45,7 @@ LEFT_OUT = {
     "setup-timeout": "installing dependencies timed out",
     "timeout": "its tests timed out",
     "workspace-error": "the code couldn't be unpacked",
+    "request-misses-tests": "its tests need what its request never says",
 }
 
 
