@@ -126,20 +126,23 @@ def evidence(task: Task, agent_patch: str, tests: dict, test_output: str) -> str
             f"```\n{test_output[-3000:]}\n```")
 
 
-SCREEN_VERSION = 1
+SCREEN_VERSION = 2
 SCREEN = """You check tasks for a benchmark of coding agents before any agent tries them. Each
 task is a real merged pull request. The agent gets only the change request below and the
 repository as it was before the change; hidden tests from the merged pull request then
 decide whether its change works. The request was written before the pull request was
 finished, so the merged code and tests can do more than the request says.
 
-You are given the request and the merged diff, tests included. Decide whether a capable
-engineer who reads only the request, and the repository's existing code, could write a
-change that passes the merged tests.
+You are given the request and the merged diff, tests included. Decide whether the change a
+capable engineer would naturally write from the request and the repository's existing code
+passes the merged tests. Judge that natural change, not every possible design: a test that
+some unusual but correct design would fail is fine.
 
 Pass when the tests check what the request asks for, or what follows from it, from the
 existing code, or from ordinary practice in this codebase, even if they check it in detail.
-Names the request lists under "Names the tests use" count as given.
+Names the request lists under "Names the tests use" count as given. Tests that patch or mock
+standard-library calls (time, random, sleep) or module attributes the natural change would
+use are fine.
 
 Fail when the tests need something the request neither states nor implies, so a correct
 change written from the request alone would fail them:
@@ -147,7 +150,8 @@ change written from the request alone would fail them:
   tests want treated another, a message text, a new rule);
 - a name the tests import or call (a function, constant, class, parameter) that the request
   never gives and that the existing code doesn't make obvious;
-- internal state or structure the tests inspect that a different, correct design wouldn't have.
+- internal state or structure the tests build or inspect (a new field, a data shape) that the
+  request never describes and that the natural change would name or shape differently.
 
 Answer with JSON only: {"verdict": "pass" | "fail", "reason": "<one sentence, under 40 words: for a fail, what the tests need that the request never states>"}"""
 
