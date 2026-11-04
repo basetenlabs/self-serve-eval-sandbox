@@ -44,7 +44,7 @@ folder can't be deployed outside Baseten as it is.
   and stops if neither is set. While a run is going, the sign-in server keeps the sandbox awake.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
   would clone it and check its pull requests at once), except two quick samples. Runs in
-  the last 24 hours may spend $300 in all and $500 per person on models. Each run keeps a
+  the last 24 hours may spend $1,000 in all and $500 per person on models. Each run keeps a
   ledger (`spend.jsonl`) of every model call it pays for, written as each finishes: every agent
   attempt, including ones that ended invalid, were stopped or run again on resume, and every
   judge's answer. The limits add up the entries from the last 24 hours, by when each was spent,
