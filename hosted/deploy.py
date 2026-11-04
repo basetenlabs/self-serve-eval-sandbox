@@ -62,10 +62,10 @@ LABELS = {"app": "pr-eval-host"}
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # One workspace and one set of keys serve everyone: runs going at once, in all and per person, and what runs
-# started in the last 24 hours may cost in dollars, in all and per person (a quick sample is about $2).
+# spent on models in the last 24 hours, in all and per person (a quick sample is about $2 with its judges).
 LIMITS = {name: os.environ.get(name, default) for name, default in {
     "PR_EVAL_MAX_RUNS": "2", "PR_EVAL_RUNS_PER_PERSON": "1",
-    "PR_EVAL_SPEND_TOTAL": "300", "PR_EVAL_SPEND_PER_PERSON": "50"}.items()}
+    "PR_EVAL_SPEND_TOTAL": "1000", "PR_EVAL_SPEND_PER_PERSON": "500"}.items()}
 # Days a run on a private repository keeps its transcripts after it ends; unset keeps them.
 RETENTION = {name: os.environ[name] for name in ["PR_EVAL_PRIVATE_RETENTION_DAYS"] if os.environ.get(name)}
 # The release: everything the page and its runs read from the repository.

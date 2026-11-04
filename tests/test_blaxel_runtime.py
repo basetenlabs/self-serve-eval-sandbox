@@ -291,13 +291,13 @@ class ModelKeyTests(unittest.TestCase):
 
 
 class TrialBoundaryTests(unittest.TestCase):
-    def trial(self, d, events, prepare, on_delete=lambda name: None):
+    def trial(self, d, events, prepare, on_delete=lambda name: None, agent=None, trial_dir=None):
         """run_trial with every sandbox step mocked; the agent's sandbox is "agent", the verifier "verifier"."""
         task = SimpleNamespace(id="public-task", instruction="Fix the public example.",
                                meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}}, path=d)
         model = SimpleNamespace(key="model", model="model", provider="anthropic")
 
-        def agent(name, model, secrets, path, timeout):
+        def finished(name, model, secrets, path, timeout):
             path.write_text("")
             events.append(("agent", name))
             return {"subtype": "success", "timed_out": False}
@@ -313,13 +313,13 @@ class TrialBoundaryTests(unittest.TestCase):
                 mock.patch.object(runtime, "upload", side_effect=lambda name, *_: events.append(("upload", name))), \
                 mock.patch.object(runtime, "download"), \
                 mock.patch.object(runtime, "delete", side_effect=lambda name: (events.append(("delete", name)), on_delete(name))), \
-                mock.patch.object(runner, "run_agent", side_effect=agent), \
+                mock.patch.object(runner, "run_agent", side_effect=agent or finished), \
                 mock.patch.object(runner, "price_agent", side_effect=lambda agent, *args: agent), \
                 mock.patch.object(runner, "capture_patch", return_value=("patch", "1\t0\tfile.py")), \
                 mock.patch.object(runner, "sh", return_value=(0, "", False)), \
                 mock.patch.object(runner, "set_aside_agent_tests", return_value=[]), \
                 mock.patch.object(runner, "run_tests", side_effect=tests):
-            return runner.run_trial(task, model, 1, d / "trial", "run-one", runner.Settings(workspace="eval-only"))
+            return runner.run_trial(task, model, 1, trial_dir or d / "trial", "run-one", runner.Settings(workspace="eval-only"))
 
     def test_the_answer_reaches_the_verifier_only_after_the_agent_vm_is_deleted(self):
         events, both_set_up = [], threading.Barrier(2, timeout=5)
@@ -334,6 +334,18 @@ class TrialBoundaryTests(unittest.TestCase):
         self.assertLess(events.index(("prepare", "verifier")), events.index(("agent", "agent")))
         self.assertEqual(events[gone + 1:], [("upload", "verifier"), ("hidden", "verifier"), ("delete", "verifier")])
         self.assertEqual(result["outcome"], "solved")
+
+    def test_an_attempt_whose_agent_ran_is_charged_even_when_it_ends_with_no_cost(self):
+        """The spending limits read the run's ledger: an agent cut off by a sandbox error still spent."""
+        def lost(*_):
+            raise runtime.RuntimeError("sandbox went away")
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "trials" / "t1").mkdir(parents=True)
+            result = self.trial(Path(d), [], lambda *_: (None, {"baseline": "a" * 40}), agent=lost,
+                                trial_dir=Path(d) / "trials" / "t1")
+            charges = [json.loads(line) for line in (Path(d) / runner.SPEND_LEDGER).read_text().splitlines()]
+        self.assertEqual(result["invalid_reason"], "sandbox-error")
+        self.assertEqual([(c["kind"], c["model"], c["usd"]) for c in charges], [("agent", "model", None)])
 
     def test_an_attempt_that_ends_early_deletes_the_verifier_mid_setup(self):
         events, deleted, finished = [], threading.Event(), threading.Event()

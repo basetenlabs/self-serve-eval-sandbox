@@ -43,11 +43,16 @@ folder can't be deployed outside Baseten as it is.
   there too: `deploy.py` reads it from `PR_EVAL_BLAXEL_WORKSPACE`, else `~/.config/pr-eval/blaxel.json`,
   and stops if neither is set. While a run is going, the sign-in server keeps the sandbox awake.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
-  would clone it and check its pull requests at once), except two quick samples. Runs started in
-  the last 24 hours may cost $300 in all and $50 per person (the agents' cost as reports count it;
-  judges and Blaxel aren't included). A run whose estimate would go over waits; a model no
-  earlier run priced counts $5 an attempt, or the dearest attempt seen if more. A run going
-  stops (resumable) once its owner or the page reaches the limit. Set them with
+  would clone it and check its pull requests at once), except two quick samples. Runs in
+  the last 24 hours may spend $1,000 in all and $500 per person on models. Each run keeps a
+  ledger (`spend.jsonl`) of every model call it pays for, written as each finishes: every agent
+  attempt, including ones that ended invalid, were stopped or run again on resume, and every
+  judge's answer. The limits add up the entries from the last 24 hours, by when each was spent,
+  so a run resumed days later counts too. Blaxel compute isn't included. A charge with no price
+  never counts as free: an agent attempt counts its model's latest cost per attempt (else $5,
+  or the dearest attempt seen if more), a judge's answer $0.25. A run (or a resume) whose estimate
+  would go over waits; a run going stops (resumable) within 30 seconds once its owner or the page
+  reaches the limit, and the attempts it had going still count, so a person can end a little over. Set them with
   `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`, `PR_EVAL_SPEND_TOTAL` and
   `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time and no spending limit.
 - **Private repositories:** a run's clone and task folders go when it ends (its report and results

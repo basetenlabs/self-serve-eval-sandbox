@@ -1383,6 +1383,37 @@ class AppTest(unittest.TestCase):
             self.assertIn("reached its $100 limit", state["blocked"])
             self.assertEqual(state["spend"], {"spent": 0, "cap": 50})
 
+    def test_spending_counts_each_runs_ledger_by_when_it_was_spent(self):
+        def ledger(jobs: Path, run_id: str, *entries: tuple) -> None:
+            (jobs / run_id / app.runner.SPEND_LEDGER).write_text("".join(
+                json.dumps({"at": (datetime.now(timezone.utc) - age).isoformat(timespec="seconds"), "kind": kind,
+                            "trial": "t", "model": model, "usd": cost}) + "\n" for kind, model, cost, age in entries) + '{"at": "half')
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 50.0):
+            jobs = Path(d)
+            # Started two days ago, resumed now: what it spent today counts, not what it spent then.
+            self.add_run(jobs, "resumed", "a@x.co", phase="done", cost=999, age=timedelta(days=2))
+            ledger(jobs, "resumed", ("agent", "m", 30.0, timedelta(days=2)), ("agent", "m", 4.0, timedelta()),
+                   ("judge", "kimi", 0.5, timedelta()))
+            # An attempt that ran with no price counts as its model's cost per attempt, an unpriced judge UNKNOWN_JUDGE_COST.
+            self.add_run(jobs, "unpriced", "a@x.co", phase="done", cost=0)
+            ledger(jobs, "unpriced", ("agent", "m", None, timedelta()), ("agent", "new", None, timedelta()),
+                   ("judge", "gpt", None, timedelta()))
+            everyone = app.App(jobs).everyone()
+            spent, by_owner = app.spending(everyone, {"m": 2.0, "": 5.0})
+            self.assertEqual(by_owner, {"a@x.co": spent})
+            self.assertAlmostEqual(spent, 4.5 + 2.0 + 5.0 + app.UNKNOWN_JUDGE_COST)
+            self.assertEqual(app.App(jobs).unpriced(everyone)[""], app.UNKNOWN_ATTEMPT_COST)
+
+    def test_each_charge_is_one_line_in_its_runs_ledger(self):
+        with tempfile.TemporaryDirectory() as d:
+            trial_dir = Path(d) / "trials" / "t1"
+            trial_dir.mkdir(parents=True)
+            runner.charge(trial_dir, "agent", "m", 1.25)
+            runner.charge(trial_dir, "judge", "kimi", None)
+            lines = [json.loads(line) for line in (Path(d) / runner.SPEND_LEDGER).read_text().splitlines()]
+        self.assertEqual([(e["kind"], e["trial"], e["model"], e["usd"]) for e in lines],
+                         [("agent", "t1", "m", 1.25), ("judge", "t1", "kimi", None)])
+
     def test_going_runs_stop_once_their_owner_or_the_page_passes_its_limit(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 50.0), \
                 mock.patch.object(app, "SPEND_TOTAL", 100.0), mock.patch.object(app, "alive", return_value=True), \

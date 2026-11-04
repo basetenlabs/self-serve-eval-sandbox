@@ -229,8 +229,10 @@ def ask_chat(judge: Judge, system: str, user: str) -> dict:
                 data = json.loads(response.read())
             verdict = parse(data["choices"][0]["message"].get("content"))
             usage = data.get("usage") or {}
+            cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
             return {"verdict": verdict["verdict"], "reason": str(verdict.get("reason", "")).strip(),
-                    "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens")}
+                    "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
+                    "cost_usd": judge.price(usage.get("prompt_tokens"), usage.get("completion_tokens"), cached)}
         except urllib.error.HTTPError as exc:
             last_error = f"HTTP {exc.code}: {exc.read()[:200].decode(errors='replace')}"
             if exc.code < 500 and exc.code != 429:

@@ -83,10 +83,21 @@ class Judge:
     label: str | None = None  # how the page names it
     json_mode: bool = True  # ask for a JSON reply with response_format; the prompt asks for JSON either way
     max_concurrent: int | None = None  # requests at once, for a provider that rate-limits the key
+    # USD per million tokens (input, cached_input, output), for a Chat Completions judge: its answer
+    # reports tokens, not dollars. A Claude judge takes Claude Code's own figure.
+    prices: dict[str, float] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
         return self.label or self.model
+
+    def price(self, input_tokens: int | None, output_tokens: int | None, cached_tokens: int | None = 0) -> float | None:
+        """USD for one answer's tokens, or None without a price, so a missing rate never reads as free."""
+        if not self.prices or input_tokens is None or output_tokens is None:
+            return None
+        cached = min(cached_tokens or 0, input_tokens)
+        return ((input_tokens - cached) * self.prices["input"] + cached * self.prices.get("cached_input", self.prices["input"])
+                + output_tokens * self.prices["output"]) / 1e6
 
     @property
     def api_key(self) -> str | None:

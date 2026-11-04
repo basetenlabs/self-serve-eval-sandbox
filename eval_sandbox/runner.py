@@ -104,6 +104,26 @@ def write_json(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+# Every model call an attempt pays for, one JSON line each, in the run's folder: the hosted page's spending
+# limits add these up by when they were spent. Unlike the report, it keeps attempts that ended invalid or were
+# stopped, every judge, and attempts a resume runs again, each time they ran.
+SPEND_LEDGER = "spend.jsonl"
+_ledger_lock = threading.Lock()
+
+
+def charge(trial_dir: Path, kind: str, model: str, usd: float | None) -> None:
+    """Add one charge (`kind` "agent" or "judge") to the run's ledger; `usd` None means it ran but has no price."""
+    if trial_dir.parent.name != "trials":  # not in a run's folder (a check, or a test): no run to charge
+        return
+    line = json.dumps({"at": now(), "kind": kind, "trial": trial_dir.name, "model": model,
+                       "usd": None if usd is None else round(usd, 6)})
+    try:
+        with _ledger_lock, open(trial_dir.parent.parent / SPEND_LEDGER, "a") as ledger:
+            ledger.write(line + "\n")
+    except OSError as exc:  # the attempt's own records still hold it
+        print(f"(spend not recorded for {trial_dir.name}: {exc})", flush=True)
+
+
 @dataclass
 class Settings:
     image: str = DEFAULT_IMAGE
@@ -542,6 +562,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
 
     live = trial_dir / "stage.json"
     helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
+    charged = None  # None until the agent starts
     try:
         placeholder_env, routing = sandbox_credential(model, credential_env(model))
         if ready and ready.error:
@@ -562,10 +583,13 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         stage(live, "agent", started_at=result["started_at"])
+        charged = False  # the agent ran, so it spent: charged below, or unpriced in `finally` if this ends first
         agent = run_agent(container, model, placeholder_env, trial_dir / "agent.jsonl", agent_timeout)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         redact_file(trial_dir / "proxy.log")
         result["agent"] = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
+        charge(trial_dir, "agent", model.key, result["agent"].get("cost_usd"))
+        charged = True
         if "subtype" not in agent and not agent["timed_out"]:
             return finish("invalid", "agent-crashed")
         if agent.get("is_error") and PROVIDER_ERROR.search(agent.get("final_message", "")):
@@ -596,6 +620,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         (trial_dir / "error.log").write_text(str(exc))
         return finish("invalid", "sandbox-error")
     finally:
+        if charged is False:  # the agent started but no cost came back: a sandbox error, or the run was stopped
+            charge(trial_dir, "agent", model.key, None)
         # Ending early can leave the verifier mid-setup, which deleting it ends. One still
         # being created can't be deleted yet, so wait for that part.
         if verifier_ready:
@@ -633,6 +659,9 @@ def judge_attempt(judge: Panel, task: Task, patch: str, tests: dict, test_output
     started = time.monotonic()
     verdict = judge_mod.grade(judge, task, patch, tests, test_output)
     verdict["seconds"] = round(time.monotonic() - started, 1)
+    for vote in [*(verdict.get("panel") or []), *([verdict["chair"]] if verdict.get("chair") else [])]:
+        if vote.get("cost_usd") is not None or vote.get("input_tokens") is not None:  # it answered, so it was paid
+            charge(trial_dir, "judge", vote.get("model") or "", vote.get("cost_usd"))
     write_json(trial_dir / "judge.json", verdict)
     if verdict.get("error"):
         return verdict, "invalid", "judge-error"
