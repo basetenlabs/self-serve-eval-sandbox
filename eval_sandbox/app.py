@@ -134,6 +134,7 @@ class App:
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
                 "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True)),
+                          "names": list(tasks.sample(True)),
                           "ready": quick_collected()},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),

@@ -212,7 +212,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
           <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="No sign-in"
-              text={`Real fixes from ${plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
+              text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
               text={signedOut && !publicOpen ? "Sign in with GitHub, then paste pull request links or pick from a repository's latest merges."
                 : "Paste pull request links, or pick from a repository's latest merges."} />
