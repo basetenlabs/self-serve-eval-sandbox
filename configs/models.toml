@@ -49,6 +49,14 @@ model = "moonshotai/Kimi-K3"
 max_concurrent = 2
 prices."moonshotai/Kimi-K3" = { input = 3.00, cached_input = 0.30, output = 15.00 }
 
+[models."kimi-k3.1-pro"]
+label = "Kimi K3.1 Pro"
+kind = "open"
+provider = "baseten"
+model = "moonshotai/Kimi-K3.1-Pro"
+# Baseten list rates (baseten.co/pricing, 2026-11-04).
+prices."moonshotai/Kimi-K3.1-Pro" = { input = 2.00, cached_input = 0.20, output = 10.00 }
+
 [models.muse-spark]
 label = "Muse Spark Open"
 kind = "open"
