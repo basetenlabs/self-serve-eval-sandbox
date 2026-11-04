@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -276,12 +277,10 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(sum(map(len, sample.values())), 42)
         self.assertIn(1159, sample["go-chi/chi"])
 
-    def test_the_quick_sample_is_ten_sample_tasks(self):
-        sample, quick = tasks.sample(), tasks.sample(quick=True)
-        self.assertEqual(sum(map(len, quick.values())), 10)
-        self.assertGreaterEqual(len(quick), 6)
-        for repo, prs in quick.items():
-            self.assertLessEqual(set(prs), set(sample[repo]), repo)
+    def test_the_quick_sample_is_ten_posthog_pull_requests(self):
+        quick = tasks.sample(quick=True)
+        self.assertEqual(list(quick), ["PostHog/posthog"])
+        self.assertEqual(len(set(quick["PostHog/posthog"])), 10)
         self.assertEqual(pipeline.Request(quick=True).describe(), "the quick sample")
         self.assertTrue(pipeline.default_name(pipeline.Request(quick=True)).startswith("quick-"))
 
@@ -1120,9 +1119,9 @@ class AppTest(unittest.TestCase):
             self.assertNotIn("error", page.repo_info("o/r", "a@x.co"))
             self.assertEqual(gh.call_args.args, ("repos/o/r", "tok-a"))
             self.assertIn("Sign in with GitHub", page.repo_info("o/r", "b@x.co")["error"])  # only for the one who signed in
-            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": "ana"})
+            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "public": False, "login": "ana"})
             page.github["a@x.co"]["until"] = 0  # GitHub's token expired
-            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "login": None})
+            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "public": False, "login": None})
 
     def test_the_hosted_page_reads_github_only_with_the_visitors_own_sign_in(self):
         page = app.App(Path("/nonexistent"))
@@ -1132,6 +1131,31 @@ class AppTest(unittest.TestCase):
             with mock.patch.object(app, "quick_collected", return_value=False):  # the quick sample isn't collected yet
                 self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
         gh.assert_not_called()  # the page has no GitHub login of its own to fall back on
+
+    def test_the_pages_own_token_reads_public_repositories_without_a_github_sign_in(self):
+        jobs = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, jobs, True)
+        page = app.App(jobs)
+        answers = {"repos/o/public": {"private": False, "language": "Go"}}
+
+        def gh(endpoint, token=None):
+            if endpoint not in answers:
+                raise RuntimeError("gh api: HTTP 404")  # a public-only token can't see a private repository
+            return answers[endpoint]
+        with mock.patch.object(app.tasks, "gh", side_effect=gh) as asked, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+                mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
+                mock.patch.object(page, "spawn") as spawn, mock.patch.object(app.pipeline, "preflight"), \
+                mock.patch.object(page, "state", return_value={"blocked": None, "quick": {"tasks": 10}, "checks": {
+                    "blaxel": True, "bl_cli": True, "gh": False, "judge": {"problem": None}}}):
+            self.assertEqual(page.repo_info("o/public", "a@x.co")["language"], "Go")
+            self.assertEqual(asked.call_args.args, ("repos/o/public", "page-tok"))
+            self.assertIn("if it's private, sign in with GitHub", page.repo_info("o/private", "a@x.co")["error"])
+            self.assertTrue(page.github_state("a@x.co")["public"])
+            self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co"), {"id": mock.ANY})
+            self.assertEqual(spawn.call_args.args[2], "page-tok")
+            self.assertIn("private", page._start({"repo": "o/private", "models": ["a"]}, "b@x.co")["error"])
+            answers["repos/o/secret"] = {"private": True, "language": "Go"}  # even if the token could read one
+            self.assertIn("private repository", page.repo_info("o/secret", "a@x.co")["error"])
 
     def test_the_quick_sample_starts_without_github_once_its_tasks_are_collected(self):
         page = app.App(Path("/nonexistent"))
@@ -1178,7 +1202,7 @@ class AppTest(unittest.TestCase):
             self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down
             self.assertEqual(page.github_poll("a@x.co"), {"login": "ana"})
         self.assertEqual(page.token("a@x.co"), "tok")
-        self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "login": "ana"})  # no code waiting; no client id here
+        self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "public": False, "login": "ana"})  # no code waiting; no client id here
         self.assertIn("expired", page.github_poll("a@x.co")["error"])  # nothing is waiting any more
         with mock.patch.object(app.time, "time", return_value=app.time.time() + 8 * 3600):
             self.assertIsNone(page.token("a@x.co"))  # 8 hours by the clock, however long the sandbox slept

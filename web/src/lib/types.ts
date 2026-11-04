@@ -141,6 +141,8 @@ export interface AppState {
 /** Who reads GitHub for you. Hosted, `sign_in` offers your own GitHub sign-in; locally the `gh` CLI's login reads. */
 export interface GitHubAccount {
   sign_in: boolean;
+  /** Hosted: the page reads public repositories itself, so only private ones need your sign-in. */
+  public?: boolean;
   login: string | null;
   /** Where to choose which repositories the GitHub App may read. */
   install?: string;

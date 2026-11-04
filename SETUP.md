@@ -8,7 +8,7 @@ The finished setup runs the page at http://127.0.0.1:8765, where you pick merged
 
 ## What it costs and what it touches
 
-- **Model calls** go to Anthropic (the closed model, and one judge), Baseten Model APIs (the open models, and one judge) and OpenAI (one judge). The quick sample, 10 pull requests with two models, costs about $2 to $4 and takes 5 to 8 minutes.
+- **Model calls** go to Anthropic (the closed model, and one judge), Baseten Model APIs (the open models, and one judge) and OpenAI (one judge). The quick sample, 10 PostHog pull requests with two models, costs about $12 and takes about 35 minutes.
 - **Compute** runs in Blaxel sandboxes in a workspace used only for this. Nothing runs in Docker on your machine.
 - **Your code**: repository clones stay on your machine, in `data/repos/`. Each attempt uploads the code from before the change to a sandbox. The README's "Where your code goes" section has the details.
 

@@ -22,7 +22,7 @@ export function readiness(state: AppState, onSignIn?: () => void): Item[] {
   const login = state.github.login;
   const github: Item = hosted
     ? { ok: login ? true : null, label: login ? `GitHub: signed in as @${login}` : "GitHub: needed only for your own repos",
-        fix: state.quick.ready ? "The quick sample needs no sign-in." : "Sign in to start a run.",
+        fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in to start a run.",
         action: onSignIn && <Button type="button" size="sm" variant="outline" className="mt-2" onClick={onSignIn}><GitHubMark className="size-3.5" /> Sign in with GitHub</Button> }
     : { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
   return [

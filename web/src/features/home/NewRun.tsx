@@ -24,7 +24,7 @@ type Pick = "latest" | "choose";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 type Commands = { setup: string; test: string };
 const LIMITS = [5, 10, 20, 40];
-const QUICK_MINUTES = 8; // every quick-sample attempt starts at once; the slowest attempt sets the end
+const QUICK_MINUTES = 35; // every quick-sample attempt starts at once; the slowest attempt sets the end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
@@ -52,6 +52,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const form = React.useRef<HTMLFormElement>(null);
   const gitHubSignIn = React.useRef<{ signIn: () => void }>(null);
   const signedOut = state.github.sign_in && !state.github.login;
+  const publicOpen = !!state.github.public; // the page reads public repositories itself: sign-in is for private ones
   // The Environment panel's sign-in: the quick sample may not show the GitHub box, so open Your pull requests first.
   const [signInNext, setSignInNext] = React.useState(false);
   React.useEffect(() => {
@@ -140,8 +141,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
-  // The quick sample's tasks are already collected, so it runs without GitHub: an AE signed in to the page without a GitHub account can demo it.
-  const needsGitHub = signedOut && !(mode === "quick" && state.quick.ready);
+  // The quick sample's tasks are already collected, so it runs without GitHub, and public repositories need no
+  // sign-in when the page reads them itself: GitHub sign-in is for private repositories.
+  const needsGitHub = signedOut && !publicOpen && !(mode === "quick" && state.quick.ready);
   const blocked = !!state.blocked || needsGitHub || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
@@ -209,10 +211,10 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
       <div className="grid min-w-0 grid-cols-1 content-start gap-10 lg:pr-8">
         <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
           <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
-            <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="Fast"
-              text={`${state.quick.repos} open-source repos, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
+            <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="No sign-in"
+              text={`Real fixes from ${plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
-              text={signedOut ? "Sign in with GitHub, then paste pull request links or pick from a repository's latest merges."
+              text={signedOut && !publicOpen ? "Sign in with GitHub, then paste pull request links or pick from a repository's latest merges."
                 : "Paste pull request links, or pick from a repository's latest merges."} />
             <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
               text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
@@ -266,7 +268,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                     )}
                   />
                 </div>
-                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in}
+                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} publicOpen={publicOpen}
                   onSignIn={signedOut ? () => gitHubSignIn.current?.signIn() : undefined} />
               </div>
 
@@ -429,9 +431,9 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
 }
 
 /** What the box understood: a repository and whether it's ready, or how many pull requests. */
-function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, onSignIn }: {
+function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, publicOpen, onSignIn }: {
   id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
-  onSignIn?: () => void;
+  publicOpen: boolean; onSignIn?: () => void;
 }) {
   const danger = "text-[#AC0EB2] dark:text-[#FFA9FD]";
   let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{signIn ? "" : " Private ones work when your GitHub login can read them."}</span>;
@@ -452,7 +454,8 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, on
     // Signed out, the page reads no repository: say so, with the sign-in right here.
     else if (info?.error && info.repo && onSignIn) body = (
       <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className={danger}>Sign in with GitHub so the eval can read <span className="font-mono text-[12px]">{info.repo}</span>.</span>
+        <span className={danger}>{publicOpen ? <>Can't read <span className="font-mono text-[12px]">{info.repo}</span>. If it's private, sign in with GitHub.</>
+          : <>Sign in with GitHub so the eval can read <span className="font-mono text-[12px]">{info.repo}</span>.</>}</span>
         <Button type="button" size="sm" variant="outline" onClick={onSignIn}><GitHubMark />Sign in with GitHub</Button>
       </span>
     );
