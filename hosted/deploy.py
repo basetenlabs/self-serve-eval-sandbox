@@ -93,7 +93,7 @@ SECRETS = {
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
 # Optional: the page's own public-only GitHub token. Without it, public repositories need a GitHub sign-in too.
 GITHUB_TOKEN = ("PR_EVAL_GITHUB_TOKEN", "pr-eval-host-github-token")
-MAIL_FROM = os.environ.get("PR_EVAL_MAIL_FROM", "Eval Sandbox <eval-sandbox@blaxel.ai>")
+MAIL_FROM = os.environ.get("PR_EVAL_MAIL_FROM", "Eval Sandbox <eval-sandbox@notifications.blaxel.ai>")
 LEAK = trace.SECRET
 
 
