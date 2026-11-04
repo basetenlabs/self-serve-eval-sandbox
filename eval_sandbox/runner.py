@@ -21,9 +21,10 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import judge as judge_mod
-from . import runtime
+from . import meter, runtime
 from .config import BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, sandbox_credential
 from .tasks import TEST_FILE, Task, snapshot
 from .tasks import load as load_task
@@ -146,9 +147,11 @@ def trial_name(task: Task, model: Model, attempt: int) -> str:
     return f"{task.id}__{model.key}__{attempt}"
 
 
-def agent_script(model: Model) -> tuple[str, dict[str, str]]:
-    """The shell that starts Claude Code for this model, and the non-secret env it needs."""
+def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, dict[str, str]]:
+    """The shell that starts Claude Code for this model, and the non-secret env it needs. With
+    `meter_url`, its calls go to the provider through the key meter instead (see meter.py)."""
     env = dict(HARNESS_ENV)
+    upstream = meter.base_url(meter_url, model.provider) if meter_url else None
     # --include-partial-messages adds raw stream events; run_agent keeps only each
     # message's start and final usage, so a run stopped at the time limit still has its
     # output token counts (see rebuild_usage).
@@ -163,24 +166,28 @@ def agent_script(model: Model) -> tuple[str, dict[str, str]]:
             env[var] = model.model
         env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PROXY_PORT}"
         script = (
-            f"python3 /opt/eval/proxy.py --upstream {BASETEN_URL} --effort {shlex.quote(model.effort)} "
+            f"python3 /opt/eval/proxy.py --upstream {shlex.quote(upstream or BASETEN_URL)} --effort {shlex.quote(model.effort)} "
             f"--port {PROXY_PORT} --log-file /logs/proxy.log >/dev/null 2>&1 &\n"
             f"for i in $(seq 1 100); do (echo > /dev/tcp/127.0.0.1/{PROXY_PORT}) 2>/dev/null && break; sleep 0.1; done\n"
             'export ANTHROPIC_AUTH_TOKEN="$BASETEN_API_KEY"; unset BASETEN_API_KEY\n'
             f"exec {claude}\n")
     else:
         env["ANTHROPIC_MODEL"] = model.model
+        if upstream:
+            env["ANTHROPIC_BASE_URL"] = upstream
         script = f"exec {claude}\n"
     return script, env
 
 
-def run_agent(container: str, model: Model, placeholder_env: dict, log_path: Path, timeout: int) -> dict:
+def run_agent(container: str, model: Model, placeholder_env: dict, log_path: Path, timeout: int,
+              meter_url: str | None = None) -> dict:
     """Run Claude Code remotely and collect the durable stream log.
 
     `placeholder_env` holds the attempt's placeholder credential, never a real key: the
-    sandbox's egress proxy adds that (see config.sandbox_credential).
+    sandbox's egress proxy adds that, or the attempt's meter ticket (see config.sandbox_credential
+    and meter.admit).
     """
-    script, env_vars = agent_script(model)
+    script, env_vars = agent_script(model, meter_url)
     started = time.monotonic()
     result = runtime.execute(container, script, env={**env_vars, **placeholder_env}, timeout=timeout,
                              stdout_path="/logs/agent.jsonl", stderr_path="/logs/agent.stderr")
@@ -563,8 +570,16 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     live = trial_dir / "stage.json"
     helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
     charged = None  # None until the agent starts
+    meter_url, ticket = meter.url(), None
     try:
-        placeholder_env, routing = sandbox_credential(model, credential_env(model))
+        if meter_url:
+            # Hosted: the key stays on the page, and every call from the sandbox, the agent's or the
+            # repository's code's, is priced into the run's spend as it happens.
+            placeholder_env, routing, ticket = meter.admit(model, trial_dir, next(iter(credential_env(model))), meter_url)
+            domains = [urlsplit(meter_url).hostname]
+        else:
+            placeholder_env, routing = sandbox_credential(model, credential_env(model))
+            domains = [PROVIDER_DOMAINS[model.provider]]
         if ready and ready.error:
             raise ready.error
         if not ready:
@@ -578,17 +593,22 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
-        block_lookups(container, [PROVIDER_DOMAINS[model.provider]], routing)
+        block_lookups(container, domains, routing)
         prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         stage(live, "agent", started_at=result["started_at"])
-        charged = False  # the agent ran, so it spent: charged below, or unpriced in `finally` if this ends first
-        agent = run_agent(container, model, placeholder_env, trial_dir / "agent.jsonl", agent_timeout)
+        # The agent ran, so it spent: charged below, or unpriced in `finally` if this ends first. Through
+        # the meter every call is in the ledger already.
+        charged = ticket is not None
+        agent = run_agent(container, model, placeholder_env, trial_dir / "agent.jsonl", agent_timeout, meter_url)
+        if ticket:
+            ticket.unlink(missing_ok=True)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         redact_file(trial_dir / "proxy.log")
         result["agent"] = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
-        charge(trial_dir, "agent", model.key, result["agent"].get("cost_usd"))
+        if not ticket:
+            charge(trial_dir, "agent", model.key, result["agent"].get("cost_usd"))
         charged = True
         if "subtype" not in agent and not agent["timed_out"]:
             return finish("invalid", "agent-crashed")
@@ -620,6 +640,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         (trial_dir / "error.log").write_text(str(exc))
         return finish("invalid", "sandbox-error")
     finally:
+        if ticket:  # revoked before the sandbox is gone, whatever ended the attempt
+            ticket.unlink(missing_ok=True)
         if charged is False:  # the agent started but no cost came back: a sandbox error, or the run was stopped
             charge(trial_dir, "agent", model.key, None)
         # Ending early can leave the verifier mid-setup, which deleting it ends. One still

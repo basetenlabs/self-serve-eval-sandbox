@@ -10,6 +10,8 @@ runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy
 
     Sandbox  pr-eval-host, from the image in hosted/Dockerfile (bl push -d hosted, once)
     Preview  public HTTPS; hosted/server.mjs (@blaxel/sign-in) signs people in and is the only public door
+             for people. A second public preview, <prefix>-meter, is the key meter (eval_sandbox/meter.py):
+             trial sandboxes reach the models only through it, and it answers only an attempt's ticket
     Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/) and the
              sign-in state (/data/sign-in)
     Secrets  read on this Mac (Keychain) and handed to the page's process
@@ -56,6 +58,7 @@ IMAGE = "pr-eval-host"
 MEMORY = 8192
 PORT = 3000
 PAGE_PORT = 8765
+METER_PORT = 8766  # the key meter, in the page's process
 PREFIX = "eval"
 APP = "/data/app"
 LABELS = {"app": "pr-eval-host"}
@@ -142,7 +145,7 @@ def host():
         step(f"Creating sandbox {SANDBOX} with volume {VOLUME} at /data")
         sandbox = Sandbox.create({
             "name": SANDBOX, "image": image(), "memory": MEMORY, "region": REGION,
-            "ports": [{"target": PORT, "protocol": "HTTP"}],
+            "ports": [{"target": PORT, "protocol": "HTTP"}, {"target": METER_PORT, "protocol": "HTTP"}],
             "volumes": [{"name": VOLUME, "mount_path": "/data", "read_only": False}],
             "labels": LABELS,
         })
@@ -150,8 +153,10 @@ def host():
     # The sign-in server owns sign-in, so the preview itself is public.
     preview = sandbox.previews.create_if_not_exists({"metadata": {"name": "web"},
                                                      "spec": {"port": PORT, "public": True, "prefixUrl": PREFIX}})
-    url = preview.spec.url
-    return sandbox, url.rstrip("/")
+    # The meter checks every call's ticket itself; the sign-in has no part in it.
+    meter = sandbox.previews.create_if_not_exists({"metadata": {"name": "meter"},
+                                                   "spec": {"port": METER_PORT, "public": True, "prefixUrl": f"{PREFIX}-meter"}})
+    return sandbox, preview.spec.url.rstrip("/"), meter.spec.url.rstrip("/")
 
 
 def ready(sandbox) -> None:
@@ -239,7 +244,7 @@ def mail_key() -> str | None:
     return keychain(service) or os.environ.get(name)
 
 
-def start(sandbox, origin: str, keys: dict[str, str]) -> None:
+def start(sandbox, origin: str, meter: str, keys: dict[str, str]) -> None:
     for process in sandbox.process.list() or []:
         if (process.name or "").startswith(("pr-eval-page", "pr-eval-sign-in")) and process.status in ("running", "starting"):
             sandbox.process.kill(process.name)
@@ -247,6 +252,7 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
                 "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
                 "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin, **LIMITS, **RETENTION,
+                "PR_EVAL_METER_PORT": str(METER_PORT), "PR_EVAL_METER_URL": meter,
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
@@ -265,20 +271,21 @@ def start(sandbox, origin: str, keys: dict[str, str]) -> None:
                  "echo 'the page did not start' >&2; exit 1", timeout=90)
 
 
-def verify(origin: str) -> None:
-    """The signed-out answers a healthy deploy gives."""
+def verify(origin: str, meter: str) -> None:
+    """The signed-out answers a healthy deploy gives, and the meter refusing a call with no ticket."""
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args):
             return None
     opener = urllib.request.build_opener(NoRedirect)
 
-    def status(path: str, accept: str = "*/*") -> int:
+    def status(path: str, accept: str = "*/*", base: str = origin) -> int:
         try:
-            return opener.open(urllib.request.Request(origin + path, headers={"accept": accept}), timeout=30).status
+            return opener.open(urllib.request.Request(base + path, headers={"accept": accept}), timeout=30).status
         except urllib.error.HTTPError as exc:
             return exc.code
-    got = {"login": status("/login"), "page": status("/", "text/html"), "api": status("/api/state", "application/json")}
-    if got != {"login": 200, "page": 303, "api": 401}:
+    got = {"login": status("/login"), "page": status("/", "text/html"), "api": status("/api/state", "application/json"),
+           "meter": status("/anthropic/v1/models", base=meter)}
+    if got != {"login": 200, "page": 303, "api": 401, "meter": 401}:
         raise SystemExit(f"unexpected signed-out answers {got}; see: bl logs sandbox {SANDBOX} -w {WORKSPACE}")
     print(f"signed-out answers ok: {got}")
 
@@ -335,8 +342,8 @@ def main() -> int:
         return 0
     keys = secrets()
     step(f"Sandbox and preview in {WORKSPACE}")
-    sandbox, origin = host()
-    print(origin)
+    sandbox, origin, meter = host()
+    print(origin, meter)
     step("Uploading the app")
     files = release_files()
     run(sandbox, f"mkdir -p {APP} {AUTH} && chmod 700 {AUTH} && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))
@@ -347,8 +354,8 @@ def main() -> int:
         step(f"Copying {len(args.seed)} run summaries")
         upload(sandbox, seed_files(args.seed, keys), APP)
     step("Starting the page and the sign-in server")
-    start(sandbox, origin, keys)
-    verify(origin)
+    start(sandbox, origin, meter, keys)
+    verify(origin, meter)
     print(f"\nOpen {origin}/ and sign in with a @baseten.co or @blaxel.ai Blaxel account.")
     return 0
 

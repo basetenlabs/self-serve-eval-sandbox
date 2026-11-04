@@ -83,7 +83,7 @@ class OverlapTests(unittest.TestCase):
         """
         checked, results = [], []
 
-        def run_agent(name, model, secrets, path, timeout):
+        def run_agent(name, model, secrets, path, timeout, *_):
             path.write_text("")
             fake.log("agent", name)
             if agent:

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from . import config, pipeline, report, runner, runtime, tasks, trace
+from . import config, meter, pipeline, report, runner, runtime, tasks, trace
 
 PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -990,6 +990,8 @@ def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     # restarted, and private runs' transcripts once they're past keeping; again every hour while the page runs.
     threading.Thread(target=sweep_hourly, args=(jobs_dir,), daemon=True).start()
     threading.Thread(target=watch_spending, args=(page,), daemon=True).start()
+    if meter_port := os.environ.get("PR_EVAL_METER_PORT"):  # hosted: the key meter attempts call through
+        meter.serve(jobs_dir, int(meter_port))
     handler = type("BoundHandler", (Handler,), {"app": page})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
