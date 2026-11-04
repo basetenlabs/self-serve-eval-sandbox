@@ -23,6 +23,14 @@ folder can't be deployed outside Baseten as it is.
   someone removed is signed out on their next request.
 - **Keys:** the page's process gets the judges', models' and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
+- **Key meter:** trial sandboxes never get a model key, and hosted they can't reach a provider
+  either: their one destination is the meter, a second public preview (`<prefix>-meter`) served by
+  the page's process (`eval_sandbox/meter.py`). Blaxel's egress proxy puts the attempt's ticket on
+  each request; the meter checks it, adds the real key, forwards the call and writes what its usage
+  cost to the run's `spend.jsonl`. So a call made by the repository's code during an attempt counts
+  like the agent's own. It refuses a call with no live ticket, from a run with no owner or one
+  stopped for spending, for another provider, for a model with no price, or to an endpoint whose
+  usage it can't read. A ticket ends when its attempt's agent stops.
 - **GitHub:** the page has no GitHub login of its own. Before starting a run, each person
   **Signs in with GitHub** on the page, public repositories included. The one exception is the
   quick sample: `deploy.py` copies its task folders to the volume, and its runs only read them, so
@@ -45,9 +53,9 @@ folder can't be deployed outside Baseten as it is.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
   would clone it and check its pull requests at once), except two quick samples. Runs in
   the last 24 hours may spend $1,000 in all and $500 per person on models. Each run keeps a
-  ledger (`spend.jsonl`) of every model call it pays for, written as each finishes: every agent
-  attempt, including ones that ended invalid, were stopped or run again on resume, and every
-  judge's answer. The limits add up the entries from the last 24 hours, by when each was spent,
+  ledger (`spend.jsonl`) of every model call it pays for, written as each finishes: every call
+  through the key meter, including from attempts that ended invalid, were stopped or run again on
+  resume, and every judge's answer. The limits add up the entries from the last 24 hours, by when each was spent,
   so a run resumed days later counts too. Blaxel compute isn't included. A charge with no price
   never counts as free: an agent attempt counts its model's latest cost per attempt (else $5,
   or the dearest attempt seen if more), a judge's answer $0.25. A run (or a resume) whose estimate

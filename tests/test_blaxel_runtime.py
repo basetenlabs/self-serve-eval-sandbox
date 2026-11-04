@@ -295,9 +295,9 @@ class TrialBoundaryTests(unittest.TestCase):
         """run_trial with every sandbox step mocked; the agent's sandbox is "agent", the verifier "verifier"."""
         task = SimpleNamespace(id="public-task", instruction="Fix the public example.",
                                meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}}, path=d)
-        model = SimpleNamespace(key="model", model="model", provider="anthropic")
+        model = SimpleNamespace(key="model", model="model", provider="anthropic", prices={"model": {"input": 1, "output": 1}})
 
-        def finished(name, model, secrets, path, timeout):
+        def finished(name, model, secrets, path, timeout, *_):
             path.write_text("")
             events.append(("agent", name))
             return {"subtype": "success", "timed_out": False}
@@ -306,10 +306,10 @@ class TrialBoundaryTests(unittest.TestCase):
             events.append(("hidden", name))
             return {"passed": True, "timed_out": False, "output": "ok"}
         with mock.patch.object(runner, "container_name", side_effect=["agent", "verifier"]), \
-                mock.patch.object(runner, "credential_env", return_value={}), \
+                mock.patch.object(runner, "credential_env", return_value={"ANTHROPIC_API_KEY": "real"}), \
                 mock.patch.object(runner, "start_container", side_effect=lambda name, *_: events.append(("create", name))), \
                 mock.patch.object(runner, "prepare_workspace", side_effect=prepare), \
-                mock.patch.object(runner, "block_lookups"), \
+                mock.patch.object(runner, "block_lookups", side_effect=lambda *a: events.append(("network", *a))), \
                 mock.patch.object(runtime, "upload", side_effect=lambda name, *_: events.append(("upload", name))), \
                 mock.patch.object(runtime, "download"), \
                 mock.patch.object(runtime, "delete", side_effect=lambda name: (events.append(("delete", name)), on_delete(name))), \
@@ -346,6 +346,29 @@ class TrialBoundaryTests(unittest.TestCase):
             charges = [json.loads(line) for line in (Path(d) / runner.SPEND_LEDGER).read_text().splitlines()]
         self.assertEqual(result["invalid_reason"], "sandbox-error")
         self.assertEqual([(c["kind"], c["model"], c["usd"]) for c in charges], [("agent", "model", None)])
+
+    def test_a_metered_attempt_reaches_only_the_meter_and_leaves_its_charges_to_it(self):
+        """Hosted: the sandbox's one destination is the meter, with the attempt's ticket; the ticket is revoked
+        once the agent stops, and the run's ledger gets no second, whole-attempt charge."""
+        events, seen = [], {}
+
+        def agent(name, model, secrets, path, timeout, meter_url):
+            seen.update(secrets=secrets, meter_url=meter_url, tickets=list((path.parents[2] / "meter").iterdir()))
+            path.write_text("")
+            return {"subtype": "success", "timed_out": False, "cost_usd": 3.0}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"PR_EVAL_METER_URL": "https://m.example/"}):
+            trial_dir = Path(d) / "trials" / "t1"
+            trial_dir.mkdir(parents=True)
+            result = self.trial(Path(d), events, lambda *_: (None, {"baseline": "a" * 40}), agent=agent, trial_dir=trial_dir)
+            left = list((Path(d) / "meter").iterdir())
+            ledger = (Path(d) / runner.SPEND_LEDGER).is_file()
+        [(_, container, domains, routing)] = [e for e in events if e[0] == "network"]
+        self.assertEqual((container, domains, routing[0]["destinations"]), ("agent", ["m.example"], ["m.example"]))
+        self.assertTrue(routing[0]["secrets"]["meter-ticket"].startswith(Path(d).name + "."))
+        self.assertNotIn("real", json.dumps(routing) + json.dumps(seen["secrets"]))  # the key stays on the page
+        self.assertEqual((seen["meter_url"], len(seen["tickets"]), left), ("https://m.example", 1, []))
+        self.assertFalse(ledger)
+        self.assertEqual(result["outcome"], "solved")
 
     def test_an_attempt_that_ends_early_deletes_the_verifier_mid_setup(self):
         events, deleted, finished = [], threading.Event(), threading.Event()
