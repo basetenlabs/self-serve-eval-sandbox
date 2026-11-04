@@ -1035,7 +1035,7 @@ class AppTest(unittest.TestCase):
             found = app.App(jobs).estimates([{"id": "big"}, {"id": "quick"}])  # newest first
         self.assertEqual(found["m"]["cost_per_attempt"], 2.0)  # with nothing closer, the most recent run
         self.assertEqual(found["m"]["by_scope"], {"o/big": {"cost_per_attempt": 2.0, "seconds_per_attempt": 60},
-                                                  "quick": {"cost_per_attempt": 0.2, "seconds_per_attempt": 60}})
+                                                  "o/r,o/s": {"cost_per_attempt": 0.2, "seconds_per_attempt": 60}})
 
     def test_the_board_shows_each_attempt_live(self):
         with tempfile.TemporaryDirectory() as d:

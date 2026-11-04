@@ -91,6 +91,11 @@ alive = pipeline.alive
 repo_of = pipeline.repo_of
 
 
+def quick_scope() -> str:
+    """The quick sample's repositories as an estimate's scope: lower case, sorted, comma-joined."""
+    return ",".join(sorted(r.lower() for r in tasks.sample(True)))
+
+
 class App:
     def __init__(self, jobs_dir: Path, models_config: Path = config.DEFAULT_MODELS):
         self.jobs_dir = jobs_dir
@@ -391,8 +396,8 @@ class App:
         for run in runs:  # newest first
             job_dir = self.jobs_dir / run["id"]
             meta = read_json(job_dir / "run.json")
-            scope = "quick" if (meta.get("request") or {}).get("quick") \
-                else ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
+            # By repositories, the quick sample's too: its set of repositories changes over time.
+            scope = ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
             for key, s in (read_json(job_dir / "report.json").get("summary") or {}).items():
                 if s.get("valid") and s.get("cost_per_attempt") is not None:
                     each = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
@@ -529,7 +534,7 @@ class App:
         claim = None if quick else {name.lower() for name in repos}
         if problem := self.taken(claim) or self.over_budget(state, keys, state["quick"]["tasks"] if quick else
                                                             sum(map(len, pulls.values())) or limit,
-                                                            "quick" if quick else ",".join(sorted(claim)), user):
+                                                            quick_scope() if quick else ",".join(sorted(claim)), user):
             return {"error": problem}
         run_id = named = f"{repos[0].split('/')[-1] if repos else 'quick'}-{datetime.now():%Y%m%d-%H%M%S}"
         for n in range(2, 100):  # two people may start the same kind of run in the same second
@@ -635,7 +640,7 @@ class App:
         # What it has left to run must fit what's left of the limits, as a new run's would.
         keys = [m["key"] for m in run["models"]]
         left = run["progress"]["total"] - run["progress"]["done"] + run["lost"]
-        scope = "quick" if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
+        scope = quick_scope() if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
         if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user)):
             return {"error": problem}
         if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):

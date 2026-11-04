@@ -127,8 +127,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     : mode === "repo" && !info?.error ? (pick === "choose" ? chosen.length : limit) : 0;
 
   // Price from a run over the same repositories when there is one: a large repository costs far more per attempt.
-  const scope = mode === "quick" ? "quick"
-    : (mode === "suite" ? Object.keys(suitePulls) : mode === "pasted" ? Object.keys(pastedPulls) : repo ? [repo] : [])
+  const scope = (mode === "quick" ? state.quick.names ?? []
+    : mode === "suite" ? Object.keys(suitePulls) : mode === "pasted" ? Object.keys(pastedPulls) : repo ? [repo] : [])
       .map((r) => r.toLowerCase()).sort().join(",");
   const catalog = state.models.map((m) => ({ ...m, ...m.by_scope?.[scope] }));
   const models = catalog.filter((m) => chosenModels.includes(m.key));
