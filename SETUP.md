@@ -123,6 +123,7 @@ Go and Python repositories need nothing more. For other languages, give the inst
 | A model shows "Needs its API key" | Export that model's key (step 5) in the shell that runs `pr-eval serve`, then restart it. |
 | A judge problem in the checklist | That judge's key is missing, or Claude Code isn't installed (step 5). `--judge none` scores on tests alone. |
 | A pull request is "left out" | Its tests didn't fail before the change and pass after it, in the trial image. That's a setup problem, not the model's. |
+| Left out: "its tests need what its request never says" | The chair judge compared the PR's text with its merged diff and tests and found the tests check behavior or names the text never states. The verdict is in the task folder's `screen.json`; delete it to ask again. |
 | A run was stopped or its process killed | **Resume** on the page, or `pr-eval run --resume jobs/<run>`. |
 
 ## Remove it

@@ -150,6 +150,10 @@ class ParsingTest(unittest.TestCase):
 
     def test_test_summary_lines(self):
         self.assertIn("2 failed", runner.test_summary("x\n== 2 failed, 10 passed in 1.2s ==\n"))
+        # pytest -q has no ===, and stderr comes after it: the verdict, not stderr's last line
+        self.assertEqual(runner.test_summary("FAILED t.py::a\n1 failed, 3 passed in 2.10s\n  return result\n"),
+                         "1 failed, 3 passed in 2.10s")
+        self.assertEqual(runner.test_summary("ERROR t.py\n1 error in 0.50s\n  return result\n"), "1 error in 0.50s")
         self.assertEqual(runner.test_summary("ok  \tgithub.com/x/y\t0.1s\nok  \tgithub.com/x/z\t0.1s\n"), "2 packages ok")
         self.assertTrue(runner.test_summary("ok  \tx/y\t0.1s\nFAIL\tx/z\t0.2s\n").startswith("1 of 2 packages failed"))
         # vitest prints its summary above the failure details, in color
@@ -385,6 +389,8 @@ class CollectTest(unittest.TestCase):
         self.assertIn("- `lib.py`: `def _scale(x, by)`", names)  # new, and the tests call it
         self.assertNotIn("label", names)  # only its return type changed, which is the behavior under test
         self.assertNotIn("return", names)
+        self.assertEqual(list(tasks.signatures(["ROW_LIMIT = 31", "LIMIT: int = 5", "x = 1", "if A == b:"])),
+                         [("ROW_LIMIT", "ROW_LIMIT"), ("LIMIT", "LIMIT: int")])  # Python constants, never their value
         self.assertEqual(list(tasks.signatures(['var Host = "https://example.com"', "func (t *T) add(ctx context.Context,",
                                                 "\tname string) error {"])),
                          [("Host", "var Host"), ("add", "func (t *T) add(ctx context.Context, name string) error")])
@@ -1749,6 +1755,68 @@ def judged_task(d: str) -> tasks.Task:
 
 def chat_reply(content: str):
     return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
+
+
+class TaskScreenTest(unittest.TestCase):
+    """A task whose tests need what its request never states is the task's fault, not a model's."""
+    PATCH = ("diff --git a/src/lib.py b/src/lib.py\n--- a/src/lib.py\n+++ b/src/lib.py\n@@ -1 +1,2 @@\n"
+             "+ROW_LIMIT = 31\n+def page(n):\ndiff --git a/tests/test_lib.py b/tests/test_lib.py\n"
+             "+++ b/tests/test_lib.py\n+from src.lib import ROW_LIMIT, Helper\n")
+
+    def task(self, d: str, instruction: str = "Page the campaigns.") -> tasks.Task:
+        (Path(d) / "solution").mkdir(exist_ok=True)
+        (Path(d) / "solution" / "reference.patch").write_text(self.PATCH)
+        return tasks.Task(id="o__r-1", path=Path(d), meta={"task": {"repo": "o/r"}, "environment": {}},
+                          instruction=instruction)
+
+    def test_a_test_that_cannot_import_an_unstated_name_is_the_tasks_fault(self):
+        out = "ERROR tests/test_lib.py\nE   ImportError: cannot import name 'ROW_LIMIT' from 'src.lib'\n1 error in 1s\n"
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(runner.unstated_name(out, self.task(d)), "ROW_LIMIT")
+        with tempfile.TemporaryDirectory() as d:  # the request gave the name: the model's miss
+            self.assertIsNone(runner.unstated_name(out, self.task(d, "Add `ROW_LIMIT`.")))
+        with tempfile.TemporaryDirectory() as d:  # the merged code never defines it: not the task's doing
+            self.assertIsNone(runner.unstated_name(out.replace("ROW_LIMIT", "Helper"), self.task(d)))
+            self.assertIsNone(runner.unstated_name("1 failed in 1s", self.task(d)))
+
+    def test_the_check_leaves_out_a_task_the_screen_fails_without_a_sandbox(self):
+        panel = Panel([Judge(model="j")])
+        with tempfile.TemporaryDirectory() as d:
+            task = self.task(d)
+            verdict = {"verdict": "fail", "reason": "tests want a message the request never gives"}
+            with mock.patch.object(judge, "ask", return_value=verdict) as asked, \
+                    mock.patch.object(runner, "start_container") as started:
+                record = runner.validate_task(task, runner.Settings(workspace="eval-only", judge=panel))
+                self.assertEqual(record["status"], runner.UNSTATED)
+                self.assertIn("never gives", record["screen"]["reason"])
+                started.assert_not_called()
+                self.assertFalse(runner.needs_check(task, runner.Settings(workspace="eval-only", judge=panel)))
+                runner.validate_task(task, runner.Settings(workspace="eval-only", judge=panel))
+                self.assertEqual(asked.call_count, 1)  # kept in the task folder, asked once
+            self.assertIn(runner.UNSTATED, pipeline.LEFT_OUT)  # the page says why it was left out
+
+    def test_a_task_checked_before_the_screen_is_screened_without_a_new_sandbox(self):
+        panel = Panel([Judge(model="j")])
+        settings = runner.Settings(workspace="eval-only", judge=panel)
+        with tempfile.TemporaryDirectory() as d:
+            task = self.task(d)
+            (Path(d) / "validation").mkdir()
+            runner.write_json(Path(d) / "validation" / "result.json",
+                              {"status": "valid", **runner.environment_identity(settings)})
+            self.assertTrue(runner.needs_check(task, settings))
+            self.assertFalse(runner.needs_check(task, runner.Settings(workspace="eval-only")))  # tests only
+            with mock.patch.object(judge, "ask", return_value={"verdict": "pass", "reason": "ok"}), \
+                    mock.patch.object(runner, "start_container") as started:
+                self.assertEqual(runner.validate_task(task, settings)["status"], "valid")
+            started.assert_not_called()
+            self.assertFalse(runner.needs_check(task, settings))
+
+    def test_a_screen_that_errs_does_not_block_the_task(self):
+        with tempfile.TemporaryDirectory() as d:
+            task = self.task(d)
+            with mock.patch.object(judge, "ask", return_value={"error": "no key"}):
+                self.assertEqual(runner.screen_task(task, Panel([Judge(model="j")]))["error"], "no key")
+            self.assertFalse((Path(d) / "screen.json").exists())  # asked again next time
 
 
 class JudgeTest(unittest.TestCase):

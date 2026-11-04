@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from . import judge as judge_mod
 from . import meter, runtime
 from .config import BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, sandbox_credential
-from .tasks import TEST_FILE, Task, snapshot
+from .tasks import TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
@@ -636,6 +636,9 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         result["tests"] = {**tests, "set_aside": set_aside}
         if tests["timed_out"]:
             return finish("invalid", "verifier-timeout")
+        if not tests["passed"] and (name := unstated_name(test_output, task)):
+            result["tests"]["unstated_name"] = name
+            return finish("invalid", "task-unstated-name")
     except (runtime.RuntimeError, OSError) as exc:
         (trial_dir / "error.log").write_text(str(exc))
         return finish("invalid", "sandbox-error")
@@ -701,6 +704,16 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
     log_dir.mkdir(exist_ok=True)
     container = container_name(run_id)
     record = {"task_id": task.id, **environment_identity(settings), "checked_at": now(), "status": None}
+    screened = screen_task(task, settings.judge)
+    if screened and screened.get("verdict") == "fail":  # no sandbox needed to know
+        record.update(status=UNSTATED, screen=screened)
+        write_json(log_dir / "result.json", record)
+        return record
+    if screened and screened.get("error"):
+        print(f"  {task.id}: couldn't check its request against its tests ({screened['error']}); checking its tests anyway")
+    earlier = validation_status(task, settings)
+    if settings.judge and earlier and earlier != UNSTATED and not earlier.startswith(PASSING_CHECK_FAILURES):
+        return json.loads((log_dir / "result.json").read_text())  # checked in this image before; only the screen was new
     live = log_dir / "stage.json"
     try:
         stage(live, "sandboxes", run_id=run_id)
@@ -747,11 +760,56 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
 
 # Check results that say nothing about the task itself; such a task is checked again.
 PASSING_CHECK_FAILURES = ("sandbox-error", "docker-error", "setup-timeout", "timeout", "workspace-error")
+# The check's status for a task whose tests need what its request never states (judge.screen).
+UNSTATED = "request-misses-tests"
 
 
 def needs_check(task: Task, settings: Settings) -> bool:
-    """Not yet checked in this image, or its check failed for a passing reason."""
-    return (validation_status(task, settings) or "sandbox-error").startswith(PASSING_CHECK_FAILURES)
+    """Not yet checked in this image, its check failed for a passing reason, or a judge
+    has yet to compare its request with its tests."""
+    status = validation_status(task, settings)
+    return ((status or "sandbox-error").startswith(PASSING_CHECK_FAILURES)
+            or (settings.judge is not None and status != UNSTATED and not saved_screen(task)))
+
+
+def saved_screen(task: Task) -> dict | None:
+    path = task.path / "screen.json"
+    record = json.loads(path.read_text()) if path.is_file() else None
+    return record if record and record.get("prompt_version") == judge_mod.SCREEN_VERSION else None
+
+
+def screen_task(task: Task, panel: Panel | None) -> dict | None:
+    """Whether the task's request says enough to pass its tests (judge.screen), asked once of the
+    panel's chair, or its one judge, and kept in the task folder. None without a judge."""
+    if (record := saved_screen(task)) or panel is None:
+        return record
+    record = judge_mod.screen(panel.chair or panel.judges[0], task)
+    if not record.get("error"):  # an error isn't kept, so the next check asks again
+        write_json(task.path / "screen.json", record)
+    return record
+
+
+# A name the tests can't load: Python's import, Go's compiler.
+MISSING_NAME = re.compile(r"ImportError: cannot import name '(\w+)'|^\S+\.go:\d+:\d+: undefined: (\w+)", re.M)
+
+
+def unstated_name(output: str, task: Task) -> str | None:
+    """A name the hidden tests couldn't load that the merged change defines and the request never
+    gives. Those tests can't even run, whatever the agent wrote: the task is at fault, not the model."""
+    missing = {a or b for a, b in MISSING_NAME.findall(output)}
+    if not missing:
+        return None
+    reference = (task.path / "solution" / "reference.patch").read_text(errors="replace")
+    defined = set()
+    for part in re.split(r"(?m)^(?=diff --git )", reference):
+        path = re.match(r"diff --git a/(\S+)", part)
+        if path and not TEST_FILE.search(path[1]):
+            added = [line[1:] for line in part.splitlines() if line.startswith("+") and not line.startswith("+++")]
+            defined |= {name for name, _ in signatures(added)}
+    for name in sorted(missing & defined):
+        if not re.search(rf"\b{re.escape(name)}\b", task.instruction):
+            return name
+    return None
 
 
 def validate_all(tasks: list[Task], settings: Settings, run_id: str, on_result=None) -> None:
@@ -789,7 +847,9 @@ def test_summary(output: str) -> str:
     """One line: pytest's, vitest's or go test's own verdict."""
     lines = ANSI.sub("", output).strip().splitlines()
     # vitest prints its summary before the failure details, so search the whole log.
-    for pattern in (r"=+ .*(passed|failed|error).* =+", r"^\s*Tests\s+\d", r"^(ok|FAIL)\s"):
+    # pytest's line: "=== 2 failed, 9 passed in 1.2s ===", or with -q only "2 failed, 9 passed in 1.2s".
+    for pattern in (r"=+ .*(passed|failed|error).* =+|^\d+ (passed|failed|errors?|skipped)\b.* in [\d.]+s|^no tests ran in",
+                    r"^\s*Tests\s+\d", r"^(ok|FAIL)\s"):
         hits = [line.strip() for line in lines if re.search(pattern, line)]
         if hits:
             if pattern.startswith("^(ok"):  # go: one line per package; report the first failure

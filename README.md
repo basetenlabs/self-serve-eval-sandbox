@@ -89,7 +89,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## How it works
 
-1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request. The merged diff and the PR's tests are kept aside as the answer. Before any model runs, the PR's tests must fail without the change and pass with it; PRs that don't are left out.
+1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request. The merged diff and the PR's tests are kept aside as the answer. Before any model runs, the PR's tests must fail without the change and pass with it, and the chair judge must find that the request says enough to pass them (the text is often written before the PR's final code); PRs that don't are left out. A test that can't import a name the request never gives makes the attempt not scored, not a model failure.
 2. **Run.** Claude Code works on the request with the model under test. Open models on Baseten go through a small proxy in the sandbox that sets the same reasoning effort on every request.
 3. **Grade.** The PR's hidden tests run against the agent's code. Then three LLM judges (Claude Opus 5.5, GPT-6.1 Sol and Kimi K3) each compare its diff with the merged one, and Kimi K3 writes the final verdict. Solved means the tests pass and the judges agree.
 4. **Report.** One HTML page per run, plus `report.json`.
