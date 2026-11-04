@@ -86,7 +86,7 @@ export function HomePage({ state, error, go, hurry }: {
         </div>
         {!state ? <div className="h-40 animate-pulse bg-node" />
           : state.runs.length ? <History runs={state.runs} go={go} />
-            : <Empty title="No runs yet">Start the quick sample above. Results land in a few minutes.</Empty>}
+            : <Empty title="No runs yet">Start the quick sample above. Results land in about half an hour.</Empty>}
       </section>
     </>
   );

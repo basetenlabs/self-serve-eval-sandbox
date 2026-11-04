@@ -43,8 +43,10 @@ QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models star
 # sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the page that adds repositories to it
-# Hosted (GitHub sign-in on), the page has no GitHub login of its own: each person reads repositories and runs
-# on their own GitHub sign-in, public repositories included.
+# Hosted, the page reads public repositories with its own token: a fine-grained token that can read public
+# repositories only, so nobody needs to sign in with GitHub for them. A person's own GitHub sign-in is for
+# their private repositories. Without the token, every run reads with its starter's own sign-in.
+PAGE_GITHUB_TOKEN = os.environ.get("PR_EVAL_GITHUB_TOKEN")
 SIGN_IN_FIRST = "Sign in with GitHub to start a run: the eval reads repositories with your own GitHub login."
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
@@ -132,6 +134,7 @@ class App:
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
                 "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True)),
+                          "names": list(tasks.sample(True)),
                           "ready": quick_collected()},
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
@@ -400,18 +403,21 @@ class App:
         repo = parse_repo(text)
         if not repo:
             return {"error": "Use owner/repo or a GitHub link."}
-        token = self.token(user)
+        token = self.reader(user)
         if GITHUB_CLIENT_ID and not token:
             return {"repo": repo, "error": f"Sign in with GitHub so the eval can read {repo}."}
+        own = token == self.token(user)  # their own sign-in, not the page's public-only token
         # The page asks about a repository several times as it's picked (its pull requests, the saved
         # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept: after
         # adding the repository to the GitHub App, the person comes back and the page looks again.
-        key = f"{user if token else ''}|{repo.lower()}"
+        key = f"{user if own else ''}|{repo.lower()}"
         when, data = self.repos.get(key, (0.0, None))
         if not data or time.monotonic() - when > 60:
             try:
                 data = tasks.gh(f"repos/{repo}", token)
             except (RuntimeError, SystemExit) as exc:
+                if not own:  # the page's token reads public repositories only: a private one reads as missing
+                    return {"repo": repo, "error": f"Can't read {repo}: if it's private, sign in with GitHub."}
                 if token and "HTTP 401" in str(exc):  # their sign-in ran out, or they revoked it on GitHub
                     self.github.pop(user, None)
                     return {"repo": repo, "error": "Your GitHub sign-in ran out. Sign in with GitHub again."}
@@ -421,7 +427,7 @@ class App:
                 return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
             self.repos[key] = (time.monotonic(), data)
         # Without GitHub sign-in, a page that runs public repositories only never reads private code.
-        if data.get("private") and os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") and not token:
+        if data.get("private") and (os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not own) and not self.token(user):
             return {"repo": repo, "error": "Sign in with GitHub to use a private repository." if GITHUB_CLIENT_ID
                     else "This hosted page runs public repositories only."}
         language = data.get("language") or "unknown"
@@ -437,8 +443,8 @@ class App:
         finds for these words, or the latest `count` merged."""
         repo, wanted = parse_repo(text), [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
         latest = min(max(int(count) if count.isdigit() else PICK_COUNT, 1), MAX_PICK_COUNT)
-        token = self.token(user)
-        key = f"{user if token else ''}|{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
+        token = self.reader(user)
+        key = f"{user if self.token(user) else ''}|{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
         when, found = self.browsed.get(key, (0.0, None))
         if found and time.monotonic() - when < 300:  # a listing found a moment ago: GitHub isn't asked at all
             return found
@@ -486,8 +492,9 @@ class App:
         repo = None if quick or pulls else parse_repo(str(form.get("repo") or ""))
         if not (quick or pulls or repo):
             return {"error": "Enter a GitHub repository as owner/repo, or paste pull request links."}
-        # The quick sample's tasks, once collected, are only read: a run of them needs no GitHub sign-in.
-        if GITHUB_CLIENT_ID and not self.token(user) and not (quick and quick_collected()):
+        # The quick sample's tasks, once collected, are only read: a run of them needs no GitHub sign-in. Public
+        # repositories need none either when the page has its own token; the checks below refuse a private one.
+        if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):
             return {"error": SIGN_IN_FIRST}
         if not GITHUB_CLIENT_ID and not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
@@ -538,7 +545,7 @@ class App:
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
             (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
         self.claims[run_id] = claim
-        self.spawn(run_id, argv, self.token(user))
+        self.spawn(run_id, argv, self.reader(user))
         return {"id": run_id}
 
     def taken(self, claim: set[str] | None, resuming: str | None = None) -> str | None:
@@ -631,12 +638,12 @@ class App:
         scope = "quick" if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
         if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user)):
             return {"error": problem}
-        if GITHUB_CLIENT_ID and not self.token(user) and not (quick and quick_collected()):
+        if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):
             return {"error": "Sign in with GitHub to resume a run: the eval reads repositories with your own GitHub login."}
         if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
             return {"error": "Sign in with GitHub to resume a run on a private repository."}
         (self.jobs_dir / run_id / OVER_LIMIT).unlink(missing_ok=True)
-        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.token(user))
+        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.reader(user))
         return {"id": run_id}
 
     def find(self, run_id: str, user: str | None = None) -> dict | None:
@@ -685,11 +692,15 @@ class App:
             return None
         return signed_in and signed_in["token"]
 
+    def reader(self, user: str | None) -> str | None:
+        """The GitHub token that reads for this person: their own sign-in, else the page's public-only token."""
+        return self.token(user) or PAGE_GITHUB_TOKEN
+
     def github_state(self, user: str | None) -> dict:
         """Who reads GitHub for this person: their own sign-in, or the page's login."""
         device = self.devices.get(user) if user else None
         waiting = device and time.time() < device["until"]
-        return {"sign_in": bool(GITHUB_CLIENT_ID and user),
+        return {"sign_in": bool(GITHUB_CLIENT_ID and user), "public": bool(PAGE_GITHUB_TOKEN),
                 "login": self.github[user]["login"] if self.token(user) else None,
                 **({"install": install_url()} if GITHUB_APP and self.token(user) else {}),
                 # a sign-in still waiting for GitHub, so a reloaded page shows its code again

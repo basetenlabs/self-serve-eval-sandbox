@@ -31,10 +31,13 @@ folder can't be deployed outside Baseten as it is.
   like the agent's own. It refuses a call with no live ticket, from a run with no owner or one
   stopped for spending, for another provider, for a model with no price, or to an endpoint whose
   usage it can't read. A ticket ends when its attempt's agent stops.
-- **GitHub:** the page has no GitHub login of its own. Before starting a run, each person
-  **Signs in with GitHub** on the page, public repositories included. The one exception is the
-  quick sample: `deploy.py` copies its task folders to the volume, and its runs only read them, so
-  someone signed in to the page without a GitHub account (an AE giving a demo) starts it directly. Sign-in is GitHub's device flow through
+- **GitHub:** public repositories and the quick sample need no GitHub sign-in. The page reads
+  public repositories with its own fine-grained token, which can read public repositories only
+  (`PR_EVAL_GITHUB_TOKEN`, from the Keychain item `pr-eval-host-github-token`; create it on
+  GitHub with "Public repositories" access and no permissions). Without that token, every run but
+  the quick sample needs the person's own GitHub sign-in. The quick sample's task folders are on
+  the volume (`deploy.py` copies the missing ones), and its runs only read them. A run on a private
+  repository needs the person's own **Sign in with GitHub**: GitHub's device flow through
   the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
   (read-only Contents, Pull requests and Metadata; no webhooks; its client id is in `deploy.py`,
   and the page needs no secret). Private repositories need the app added to them: a

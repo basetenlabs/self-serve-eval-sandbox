@@ -123,7 +123,7 @@ export interface AppState {
   models: CatalogModel[];
   runs: Run[];
   /** `ready`: its tasks are collected, so it starts without a GitHub sign-in. */
-  quick: { tasks: number; repos: number; ready?: boolean };
+  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean };
   default_limit: number;
   max_limit: number;
   /** Some run is going, anyone's: the page polls faster. */
@@ -141,6 +141,8 @@ export interface AppState {
 /** Who reads GitHub for you. Hosted, `sign_in` offers your own GitHub sign-in; locally the `gh` CLI's login reads. */
 export interface GitHubAccount {
   sign_in: boolean;
+  /** Hosted: the page reads public repositories itself, so only private ones need your sign-in. */
+  public?: boolean;
   login: string | null;
   /** Where to choose which repositories the GitHub App may read. */
   install?: string;

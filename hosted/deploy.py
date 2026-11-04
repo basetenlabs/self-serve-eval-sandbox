@@ -25,11 +25,14 @@ Keys come from the Keychain items in SECRETS below, else from the environment:
     PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the
                             refused sign-in page offers "Request access", which emails the admins; it reaches
                             the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
+    PR_EVAL_GITHUB_TOKEN    a fine-grained GitHub token with "Public repositories" read-only access and nothing
+                            else (Keychain pr-eval-host-github-token). With it the page reads and runs public
+                            repositories for everyone, no GitHub sign-in needed; without it, every run needs one.
 
-The page has no GitHub login of its own: everyone signs in with GitHub through the GitHub App
-"Baseten Eval Sandbox" (device flow; read-only Contents, Pull requests and Metadata) before a run,
-and the run reads and clones with their token. Its client id is public and the page needs nothing else: the
-app's client secret and private key never reach it. Their tokens stay in the page's memory.
+For private repositories, a person signs in with GitHub through the GitHub App "Baseten Eval Sandbox"
+(device flow; read-only Contents, Pull requests and Metadata), and the run reads and clones with their
+token. Its client id is public: the app's client secret and private key never reach the page. Their tokens
+stay in the page's memory.
 """
 from __future__ import annotations
 
@@ -65,7 +68,7 @@ LABELS = {"app": "pr-eval-host"}
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # One workspace and one set of keys serve everyone: runs going at once, in all and per person, and what runs
-# spent on models in the last 24 hours, in all and per person (a quick sample is about $2 with its judges).
+# spent on models in the last 24 hours, in all and per person (a quick sample is about $12 with its judges).
 LIMITS = {name: os.environ.get(name, default) for name, default in {
     "PR_EVAL_MAX_RUNS": "2", "PR_EVAL_RUNS_PER_PERSON": "1",
     "PR_EVAL_SPEND_TOTAL": "1000", "PR_EVAL_SPEND_PER_PERSON": "500"}.items()}
@@ -88,6 +91,8 @@ SECRETS = {
 }
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
+# Optional: the page's own public-only GitHub token. Without it, public repositories need a GitHub sign-in too.
+GITHUB_TOKEN = ("PR_EVAL_GITHUB_TOKEN", "pr-eval-host-github-token")
 MAIL_FROM = os.environ.get("PR_EVAL_MAIL_FROM", "Eval Sandbox <eval-sandbox@blaxel.ai>")
 LEAK = trace.SECRET
 
@@ -203,15 +208,19 @@ def release_files() -> dict[str, bytes]:
     return out
 
 
-def quick_task_files() -> dict[str, bytes]:
+def copy_quick_tasks(sandbox) -> None:
     """The quick sample's task folders, collected here first where missing (this Mac's `gh` login). On the
-    page they let a signed-in person with no GitHub account run the quick sample: its runs only read them."""
-    out = {}
+    page they let a signed-in person with no GitHub account run the quick sample: its runs only read them.
+    Each holds its repository's source (about 200 MB for a large one), so only folders the page lacks go,
+    one at a time."""
+    have = set(run(sandbox, f"mkdir -p {APP}/tasks && cd {APP}/tasks && ls -d */task.toml 2>/dev/null | cut -d/ -f1 || true").split())
     for repo, prs in tasks.sample(True).items():
         for folder in tasks.collect(repo, prs=prs):
-            for file in sorted(f for f in folder.rglob("*") if f.is_file()):
-                out[str(file.relative_to(tasks.DEFAULT_TASKS.parent))] = file.read_bytes()
-    return out
+            if folder.name in have:
+                continue
+            print(f"  {folder.name}", flush=True)
+            upload(sandbox, {str(file.relative_to(tasks.DEFAULT_TASKS.parent)): file.read_bytes()
+                             for file in sorted(f for f in folder.rglob("*") if f.is_file())}, APP)
 
 
 def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
@@ -256,6 +265,10 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str]) -> None:
                 "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
+    name, service = GITHUB_TOKEN
+    if token := keychain(service) or os.environ.get(name):
+        page_env[name] = token
+    print(f'Public repositories without a GitHub sign-in: {"on" if token else "off (no " + service + ")"}')
     if key := mail_key():
         sign_in_env |= {MAIL_KEY[0]: key, "PR_EVAL_MAIL_FROM": MAIL_FROM}
     print(f'"Request access": {"on" if key else "off (no " + MAIL_KEY[1] + ")"}')
@@ -349,7 +362,7 @@ def main() -> int:
     run(sandbox, f"mkdir -p {APP} {AUTH} && chmod 700 {AUTH} && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))
     upload(sandbox, files, APP)
     step("Copying the quick sample's tasks")
-    upload(sandbox, quick_task_files(), APP)
+    copy_quick_tasks(sandbox)
     if args.seed:
         step(f"Copying {len(args.seed)} run summaries")
         upload(sandbox, seed_files(args.seed, keys), APP)

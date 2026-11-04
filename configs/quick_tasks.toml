@@ -1,13 +1,8 @@
-# The quick sample: ten of the sample tasks, picked because every model's attempt on them
-# finished in a few minutes in earlier runs, across Go, TypeScript and Python repositories.
-# The page's default, so a first run shows results fast. (No stretchr/testify: its suite
-# package fails even with the merged change in the current trial image.)
+# The quick sample: ten merged pull requests from PostHog, a large Python codebase, so a first run shows
+# how models do on real product work: data-warehouse sources, retries and error handling. Each one's tests
+# fail before its change and pass after it in the trial image. The page's default; every attempt starts
+# at once.
 #
 # repository = [PR numbers]
 
-"go-chi/chi" = [1217, 1220]
-"honojs/hono" = [5514]
-"more-itertools/more-itertools" = [1251, 1279]
-"pallets/click" = [3769, 3884]
-"spf13/cobra" = [2356]
-"spf13/pflag" = [484, 507]
+"PostHog/posthog" = [124452, 124483, 124535, 124630, 124657, 124740, 124782, 124892, 124907, 124921]

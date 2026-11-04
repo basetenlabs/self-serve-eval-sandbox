@@ -141,8 +141,8 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
     body = (
       <>
         <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="text-[15px] font-medium">Sign in with GitHub to start a run.</span>
-          <span className="text-muted-foreground">The eval reads repos, public ones too, with your own GitHub login. Only you and the page's admins see your runs.</span>
+          <span className="text-[15px] font-medium">{github.public ? "Public repos need no sign-in." : "Sign in with GitHub to start a run."}</span>
+          <span className="text-muted-foreground">{github.public ? "Sign in with GitHub to use your private repos." : "The eval reads repos, public ones too, with your own GitHub login."} Only you and the page's admins see your runs.</span>
         </span>
         <Button type="button" onClick={signIn} disabled={busy}>
           {busy ? <LoaderIcon className="animate-spin" /> : <GitHubMark />} {busy ? "Asking GitHub" : "Sign in with GitHub"}

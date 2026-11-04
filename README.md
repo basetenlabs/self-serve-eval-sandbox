@@ -19,7 +19,7 @@ Setting it up with a coding agent? Give it this repository's link and [SETUP.md]
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Claude models, and the Claude Opus 5.5 judge (install `claude` too) |
 | `OPENAI_API_KEY` | the GPT-6.1 Sol judge |
 
-Model calls and Blaxel compute cost money. The quick sample costs about $2.
+Model calls and Blaxel compute cost money. The quick sample costs about $12.
 
 ## Quickstart
 
@@ -43,7 +43,7 @@ pr-eval serve
 
 It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then:
 
-1. Pick the **Quick sample** (10 merged PRs from 6 public repositories, a few minutes) or **Your pull requests**: paste links, or type a repository and pick from its merges.
+1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes) or **Your pull requests**: paste links, or type a repository and pick from its merges.
 2. Choose the models to compare (Claude Opus 5.5 and DeepSeek V4.1 Flash to start).
 3. Press **Start run**. When it finishes, **Open report** shows solve rate, cost per solved task and time per task, with every attempt's diff, trace, test output and the judges' verdicts.
 
