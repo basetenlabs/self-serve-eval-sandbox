@@ -1570,6 +1570,11 @@ class AppTest(unittest.TestCase):
                 self.assertEqual(get("/r2/report.json", {"x-pr-eval-user": "a@x.co"})[0], 404)
                 self.assertEqual(get("/r1/trials/t__m__1/agent.jsonl")[0], 404)
                 self.assertEqual(get("/r1/run.json")[0], 404)
+                # HEAD says nothing about files, not even whether another person's run has them.
+                for path in ("/r2/report.json", "/r2/", "/r1/run.json"):
+                    conn = http.client.HTTPConnection("127.0.0.1", port)
+                    conn.request("HEAD", path, headers={"x-forwarded-email": "b@x.co"})
+                    self.assertEqual(conn.getresponse().status, 405)
                 status, body = get("/api/trace?run=r1&trial=t__m__1")
                 self.assertEqual((status, json.loads(body)["steps"]), (200, []))
                 self.assertEqual(get("/api/trace?run=..&trial=r1")[0], 400)
@@ -1733,7 +1738,7 @@ class ReportTest(unittest.TestCase):
                 trial_dir = job / "trials" / f"x__{model}__1"
                 trial_dir.mkdir(parents=True)
                 (trial_dir / "result.json").write_text(json.dumps(self.trial("x", model, outcome, 0.5)))
-                (trial_dir / "agent.patch").write_text("diff --git a/x b/x\n+</script><b>\n+" + KEY)
+                (trial_dir / "agent.patch").write_text("diff --git a/x b/x\n+</script><b>\n+<!--<script>\n+" + KEY)
             (job / "run.json").write_text(json.dumps({
                 "run_id": "r1", "created_at": "2026-10-16T00:00:00+00:00", "attempts": 1, "tasks": ["x"],
                 "tasks_dir": str(Path(d) / "tasks"), "image": "img", "harness_version": "2.1.296", "judge": None,
@@ -1745,6 +1750,10 @@ class ReportTest(unittest.TestCase):
             self.assertTrue(data["complete"])
             self.assertEqual(data["summary"]["claude-opus"]["solved"], 1)
             self.assertNotIn("+</script><b>", html)  # an agent's diff can't end the data block
+            self.assertNotIn("<!--<script>", html)  # nor keep the real end tag from closing it
+            block = html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0]
+            self.assertNotIn("<", block)
+            self.assertEqual(json.loads(block)["summary"]["claude-opus"]["solved"], 1)  # still valid JSON
 
 
 def judged_task(d: str) -> tasks.Task:

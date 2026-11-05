@@ -204,8 +204,10 @@ def build(job_dir: Path) -> Path:
     # No credential is ever in a run's files; masking by value makes sure none reaches a reader.
     write_atomic(job_dir / "report.json", redact_known(json.dumps(data, indent=1)))
     html = TEMPLATE.read_text()
-    payload = redact_known(json.dumps(data)).replace("</", "<\\/")  # never close the script tag early
-    html = html.replace("__REPORT_DATA__", payload).replace("__REPORT_TITLE__", f"Eval Sandbox · {data['run']['run_id']}")
+    # No "<" at all inside the script: "</script" would end it early, and "<!--<script" would keep the
+    # real end tag from closing it. PR titles and diffs come from anyone's public repository.
+    payload = redact_known(json.dumps(data)).replace("<", "\\u003c")
+    html = html.replace("__REPORT_TITLE__", f"Eval Sandbox · {data['run']['run_id']}").replace("__REPORT_DATA__", payload)
     target = job_dir / "report.html"
     write_atomic(target, html)
     return target

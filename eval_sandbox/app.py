@@ -928,6 +928,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return super().do_GET()
         return self.send_error(404)
 
+    def do_HEAD(self):
+        # SimpleHTTPRequestHandler's own HEAD answers for any file under jobs/, past the checks above:
+        # whether another person's run, log or transcript exists, its size and when it changed.
+        return self.send_error(405)
+
     def do_POST(self):
         # Only this page may start or stop runs: they spend money. A JSON body from another
         # site needs a CORS preflight this server never answers, and the origin must be ours.
