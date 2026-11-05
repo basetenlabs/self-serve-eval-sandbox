@@ -7,11 +7,11 @@ export default {
   // server.mjs creates it on first start (see SEED in access.mjs).
   access: { file: '../data/access.json' },
   brand: {
-    name: 'Eval Sandbox',
+    name: 'Self-Serve Model Eval Sandbox',
     askForAccess: 'Ask an Eval Sandbox admin, such as Michael Stolarz, on Slack to add you.',
     company: 'Baseten',
     tagline: 'Run coding models on real pull requests and compare what they solve and what it costs.',
-    login: { eyebrow: 'Internal preview', title: 'Sign in to Eval Sandbox' },
+    login: { eyebrow: 'Internal preview', title: 'Sign in to Self-Serve Model Eval Sandbox' },
     mark: 'mark.svg',
     // The link-preview image (Slack, X, LinkedIn): 1200 x 630, served to signed-out crawlers.
     card: 'card.png',
