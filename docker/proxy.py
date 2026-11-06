@@ -1,8 +1,8 @@
 """Translating proxy: whatever shape a coding CLI speaks -> Baseten Chat Completions.
 
-Chat Completions is the only Baseten endpoint that honors reasoning effort, so every request is converted to that
-shape, the forced effort is set on it, and the answer is converted back. One place owns effort instead of three
-per-CLI ceilings.
+The proxy sets reasoning effort on the Chat Completions endpoint, so every request is converted to that shape, the
+run's effort is set on it, and the answer is converted back. Every model on Baseten then runs at the same effort,
+whichever API shape the agent speaks (Anthropic Messages, OpenAI Responses or Chat Completions).
 
 Runs inside each trial's sandbox beside the agent, for models on Baseten (the image has it at /opt/eval/proxy.py).
 Stdlib only. Flags and env vars are interchangeable.
@@ -110,7 +110,7 @@ _turn = 0
 
 
 def log(line: str) -> None:
-    """Write one line to stdout and, if configured, to the log file harbor collects."""
+    """Write one line to stdout and, if configured, to the log file the run collects."""
     with _lock:
         print(line, flush=True)
         if CONFIG.log_file:
@@ -289,9 +289,8 @@ def usage_to_anthropic(usage: dict[str, Any] | None) -> dict[str, int]:
     """Convert OpenAI usage to Anthropic usage.
 
     The one conversion that can silently corrupt a cost report: OpenAI's `prompt_tokens` INCLUDES cache reads,
-    Anthropic's `input_tokens` excludes them. harbor's claude-code agent adds these back up and
-    shims/claude_code_custom_rates.patch bills the remainder at the full input rate, so leaving cached tokens inside
-    `input_tokens` double-charges every one.
+    Anthropic's `input_tokens` excludes them. Cost is computed from the Anthropic fields, with cache reads priced
+    on their own, so leaving cached tokens inside `input_tokens` would charge every one twice.
     """
     usage = usage or {}
     prompt = usage.get("prompt_tokens") or 0
@@ -408,7 +407,7 @@ def _responses_items(items: list[Any] | None) -> list[dict[str, Any]]:
             if reasoning:
                 out[-1]["reasoning_content"], reasoning = reasoning, ""
         elif kind == "function_call_output":
-            # codex sends `output` as a plain string; the spec also allows a block list.
+            # `output` is usually a plain string; the spec also allows a block list.
             result = item.get("output")
             content = result if isinstance(result, str) else text_of(result) or json.dumps(result)
             out.append({"role": "tool", "tool_call_id": item.get("call_id") or "", "content": content})
@@ -470,7 +469,7 @@ def usage_to_responses(usage: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def render_responses_sse(resp: dict[str, Any]) -> bytes:
-    """Render a complete Responses event stream. codex reads the finished answer off `response.completed`."""
+    """Render a complete Responses event stream. Clients read the finished answer off `response.completed`."""
     out: list[str] = []
     sequence = 0
 
@@ -711,8 +710,8 @@ class Proxy(BaseHTTPRequestHandler):
     def _verbatim(self, turn: int, started: float, path: str, chat: dict[str, Any]) -> None:
         """Send a Chat Completions body as-is and relay the answer, streaming it through as it arrives."""
         if chat.get("stream"):
-            # `include_usage` is the only way token counts come out of a streamed call, and opencode and pi
-            # both price a run from what they recorded - without it `make eval` reports $0.00 for both.
+            # `include_usage` is the only way token counts come out of a streamed call; without it the
+            # call's cost can't be computed.
             options = chat.get("stream_options")
             options = options if isinstance(options, dict) else {}
             chat["stream_options"] = {**options, "include_usage": True}

@@ -8,7 +8,7 @@ A task folder is what one trial needs and nothing more:
       environment/source.tar.gz  the repository at the PR's base commit, no .git
       tests/files/...            the PR's test files at the merged commit   (hidden)
       tests/deleted.txt          test files the PR removed                  (hidden)
-      tests/test.sh              runs the hidden tests, Harbor-style reward  (hidden)
+      tests/test.sh              runs the hidden tests, writes the reward   (hidden)
       solution/reference.patch   the merged diff, for the judge             (hidden)
 
 Only `environment/` and `instruction.md` ever reach the agent. The rest is copied into
@@ -419,7 +419,7 @@ def interface(mirror: Path, base: str, reference: str, paths: list[str], tests: 
 
 
 TEST_SH = """#!/usr/bin/env bash
-# Harbor-style verifier: overlay the PR's tests, run the suite, write the reward.
+# The verifier: overlay the PR's tests, run the suite, write the reward (1 pass, 0 fail).
 set -uo pipefail
 cd /workspace
 while IFS= read -r path; do [ -n "$path" ] && rm -f -- "$path"; done < /tests/deleted.txt

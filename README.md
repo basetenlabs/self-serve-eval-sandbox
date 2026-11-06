@@ -1,8 +1,10 @@
-# self-serve-eval-sandbox
+# Self-Serve Model Eval Sandbox
 
 Can an open model do your team's real coding work? `pr-eval` takes pull requests your team already merged and hands each one to Claude Code twice: once with a closed model, once with an open model. It grades both and reports how many tasks each model solves and what each solved task costs.
 
-Status: v0. Claude Code is the only harness. MIT licensed.
+The command-line tool and the local page are both called `pr-eval`. Status: v0. Claude Code is the only harness. MIT licensed.
+
+Trials run in [Blaxel](https://blaxel.ai) sandboxes, so the agent works in an isolated machine that can reach only the model provider.
 
 Setting it up with a coding agent? Give it this repository's link and [SETUP.md](SETUP.md), a step-by-step guide with a check after each step.
 
@@ -37,6 +39,7 @@ printf '%s\n' '{"workspace":"dedicated-eval-workspace"}' > ~/.config/pr-eval/bla
 Install and start the page:
 
 ```bash
+git clone https://github.com/basetenlabs/self-serve-eval-sandbox.git && cd self-serve-eval-sandbox
 python3.13 -m venv .venv && source .venv/bin/activate && pip install -e .
 pr-eval serve
 ```
@@ -89,9 +92,9 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## How it works
 
-1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request. The merged diff and the PR's tests are kept aside as the answer. Before any model runs, the PR's tests must fail without the change and pass with it, and the chair judge must find that the request says enough to pass them (the text is often written before the PR's final code); PRs that don't are left out. A test that can't import a name the request never gives makes the attempt not scored, not a model failure.
+1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request. The merged diff and the PR's tests are kept aside as the answer. Before any model runs, the PR's tests must fail without the change and pass with it, and the chair judge checks that the request says enough to pass them (the text is often written before the PR's final code); PRs that fail either check are left out. If the judge can't be reached, the task goes ahead on its tests alone. A test that can't import a name the request never gives makes the attempt not scored, not a model failure.
 2. **Run.** Claude Code works on the request with the model under test. Open models on Baseten go through a small proxy in the sandbox that sets the same reasoning effort on every request.
-3. **Grade.** The PR's hidden tests run against the agent's code. Then three LLM judges (Claude Opus 5.5, GPT-6.1 Sol and Kimi K3) each compare its diff with the merged one, and Kimi K3 writes the final verdict. Solved means the tests pass and the judges agree.
+3. **Grade.** The PR's hidden tests run against the agent's code. Then three LLM judges (Claude Opus 5.5, GPT-6.1 Sol and Kimi K3) each compare its diff with the merged one, and Kimi K3 writes the final verdict. Solved means the tests pass and the final verdict is a pass. If the chair can't answer, a unanimous panel decides.
 4. **Report.** One HTML page per run, plus `report.json`.
 
 ## What the numbers mean
@@ -121,4 +124,4 @@ npm run dev        # live reload at http://localhost:5173, against `pr-eval serv
 npm run build      # rebuilds the two HTML files; commit them with the source change
 ```
 
-`hosted/` deploys Baseten's hosted copy of the page. It depends on a sign-in package that isn't public, and you don't need it to run pr-eval.
+`hosted/` deploys Baseten's hosted copy of the page. It depends on Blaxel's sign-in package, which isn't public, and you don't need it to run pr-eval.

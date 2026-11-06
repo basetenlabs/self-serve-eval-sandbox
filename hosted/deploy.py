@@ -1,23 +1,33 @@
-"""Deploy the eval page to a Blaxel sandbox behind "Sign in with Blaxel".
+"""Deploy the eval page to a Baseten sandbox behind "Sign in with Blaxel".
 
     .venv/bin/python hosted/deploy.py                  create or update, then check the signed-out answers
     .venv/bin/python hosted/deploy.py --seed jobs/x    also copy finished runs' reports and traces to the hosted page
     .venv/bin/python hosted/deploy.py --delete         remove the sandbox (add --volume to drop its data too)
     .venv/bin/python hosted/deploy.py --name pr-eval-staging    a copy beside the live page, to try a release on first
+    .venv/bin/python hosted/deploy.py --renew          recreate the sandbox when Baseten's 7-day limit is near
 
-Where it runs: the dedicated trial workspace, so the page can start trials there. It is set like local
-runs' (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy stops if neither is.
+Where it runs: Baseten Sandboxes, in the team of the sandbox key below. Trials still run in the dedicated
+Blaxel trial workspace (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy stops if
+neither is set.
 
-    Sandbox  pr-eval-host, from the image in hosted/Dockerfile (bl push -d hosted, once)
-    Preview  public HTTPS; hosted/server.mjs (@blaxel/sign-in) signs people in and is the only public door
-             for people. A second public preview, <prefix>-meter, is the key meter (eval_sandbox/meter.py):
-             trial sandboxes reach the models only through it, and it answers only an attempt's ticket
+    Image    pr-eval-host-<hash of hosted/Dockerfile>, built on Baseten when missing
+    Sandbox  pr-eval-host. Baseten deletes every sandbox 7 days after it was created, whatever its lifecycle
+             says, so `--renew` (daily) recreates it once it is 5 days old and no run is going; the data stays
+             on the volume. A recreated sandbox can get new preview URLs: the deploy prints them.
+    Preview  public HTTPS at a random Baseten host; hosted/server.mjs (@blaxel/sign-in) signs people in and
+             is the only public door for people. A second public preview, "meter", is the key meter
+             (eval_sandbox/meter.py): trial sandboxes reach the models only through it, and it answers only
+             an attempt's ticket
     Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/) and the
              sign-in state (/data/sign-in)
-    Secrets  read on this Mac (Keychain) and handed to the page's process
-             environment only; never written to the volume, the image or this repository
+    Secrets  read on the deploying machine (macOS Keychain or environment) and handed to the page's
+             process environment only; never written to the volume, the image or this repository
 
-Keys come from the Keychain items in SECRETS below, else from the environment:
+The deploy itself manages the sandbox with BASETEN_SANDBOX_API_KEY (else the Keychain item in SANDBOX_KEY):
+a personal key or a team creator service account key, since other Baseten keys can't mint sandbox tokens.
+
+Keys come from the Keychain items in SECRETS below, else from the environment. <NAME>_KEYCHAIN_ITEM names
+another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key:
     BASETEN_API_KEY         open models and the Kimi K3 judge
     ANTHROPIC_API_KEY       Claude models and the Opus judge
     OPENAI_API_KEY          the GPT-6.1 Sol judge
@@ -25,6 +35,8 @@ Keys come from the Keychain items in SECRETS below, else from the environment:
     PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the
                             refused sign-in page offers "Request access", which emails the admins; it reaches
                             the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
+    PR_EVAL_ADMINS          optional: comma-separated emails of the first admins, used only when the volume
+                            has no access list yet (the first deploy).
     PR_EVAL_GITHUB_TOKEN    a fine-grained GitHub token with "Public repositories" read-only access and nothing
                             else (Keychain pr-eval-host-github-token). With it the page reads and runs public
                             repositories for everyone, no GitHub sign-in needed; without it, every run needs one.
@@ -37,6 +49,7 @@ stay in the page's memory.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -47,24 +60,27 @@ import sys
 import tarfile
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from eval_sandbox import runtime, tasks, trace  # noqa: E402
+from eval_sandbox import baseten, runtime, tasks, trace  # noqa: E402
 WORKSPACE = ""  # set in main() from the same setting local runs use
 REGION = "us-pdx-1"
 SANDBOX = "pr-eval-host"
 VOLUME = "pr-eval-host-data"
-VOLUME_MB = 20480
+VOLUME_SIZE = "30Gi"
 IMAGE = "pr-eval-host"
 MEMORY = 8192
+SANDBOX_KEY = ("BASETEN_SANDBOX_API_KEY", "pr-eval-host-baseten-sandbox-key")
+RENEW_AFTER_DAYS = 5  # Baseten deletes a sandbox 7 days after creation
 PORT = 3000
 PAGE_PORT = 8765
 METER_PORT = 8766  # the key meter, in the page's process
-PREFIX = "eval"
 APP = "/data/app"
 LABELS = {"app": "pr-eval-host"}
+# The GitHub App's client id is public by design (device flow); it is not a secret.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # One workspace and one set of keys serve everyone: runs going at once, in all and per person, and what runs
@@ -86,7 +102,7 @@ AUTH = "/data/sign-in"
 SECRETS = {
     "BASETEN_API_KEY": "pr-eval-host-baseten-api-key",
     "ANTHROPIC_API_KEY": "pr-eval-host-anthropic-api-key",
-    "OPENAI_API_KEY": "baseten-openai-api-key",
+    "OPENAI_API_KEY": "pr-eval-host-openai-api-key",
     "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
@@ -101,6 +117,11 @@ def step(message: str) -> None:
     print(f"\n▸ {message}", flush=True)
 
 
+def item(name: str, default: str) -> str:
+    """The Keychain item that holds a key: its default name, or the one <NAME>_KEYCHAIN_ITEM sets."""
+    return os.environ.get(f"{name}_KEYCHAIN_ITEM") or default
+
+
 def keychain(service: str) -> str | None:
     try:
         p = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, text=True)
@@ -111,79 +132,119 @@ def keychain(service: str) -> str | None:
 
 def secrets() -> dict[str, str]:
     # The page's own Keychain items come first, so a key exported in the shell for local runs never reaches it.
-    found = {name: keychain(service) or os.environ.get(name) for name, service in SECRETS.items()}
+    found = {name: keychain(item(name, service)) or os.environ.get(name) for name, service in SECRETS.items()}
     if missing := [name for name, value in found.items() if not value]:
         raise SystemExit(f"missing {', '.join(missing)}: see the top of hosted/deploy.py")
     return found
 
 
-def sdk():
-    # The deploy itself acts as the person running it (their `bl login`), in the trial workspace.
-    os.environ["BL_WORKSPACE"] = WORKSPACE
-    os.environ.setdefault("BL_REGION", REGION)
-    from blaxel.core import SyncSandboxInstance, SyncVolumeInstance
-    return SyncSandboxInstance, SyncVolumeInstance
+CLIENT: baseten.Client | None = None
 
 
-def run(sandbox, command: str, timeout: int = 300) -> str:
-    result = sandbox.process.exec({"command": f"set -eu\n{command}", "waitForCompletion": True, "timeout": timeout})
-    if result.exit_code:
-        raise SystemExit(f"sandbox command failed ({result.exit_code}): {(result.stderr or result.stdout or '')[-2000:]}")
-    return result.stdout or ""
+def client() -> baseten.Client:
+    global CLIENT
+    if CLIENT is None:
+        name, service = SANDBOX_KEY
+        key = os.environ.get(name) or keychain(item(name, service))
+        if not key:
+            raise SystemExit(f"missing {name} (Keychain {item(name, service)}): a Baseten personal key or team creator "
+                             "service account key, which can mint sandbox tokens")
+        CLIENT = baseten.Client(key, os.environ.get("BASETEN_TEAM_ID") or None)
+    return CLIENT
+
+
+def run(sandbox: dict, command: str, timeout: int = 300) -> str:
+    code, out, err = client().exec(sandbox, f"sh -c {shlex.quote('set -eu' + chr(10) + command)}", timeout=timeout)
+    if code:
+        raise SystemExit(f"sandbox command failed ({code}): {(err or out or '')[-2000:]}")
+    return out
 
 
 def image() -> str:
-    out = subprocess.run(["bl", "--skip-version-warning", "get", "image", f"sandbox/{IMAGE}", "--latest", "-w", WORKSPACE],
-                         capture_output=True, text=True)
-    refs = re.findall(rf"^sandbox/{IMAGE}:[A-Za-z0-9._-]+$", out.stdout + "\n" + out.stderr, re.M)
-    if not refs:
-        raise SystemExit(f"no {IMAGE} image yet: bl push -d hosted --name {IMAGE} --type sandbox -w {WORKSPACE}")
-    return refs[0]
+    """The page's image, named by a hash of hosted/Dockerfile, built on Baseten when it isn't yet."""
+    dockerfile = (ROOT / "hosted" / "Dockerfile").read_bytes()
+    name = f"{IMAGE}-{hashlib.sha256(dockerfile).hexdigest()[:10]}"
+    if client().image_status(name) == "BUILT":
+        return f"sandbox/{name}:latest"
+    step(f"Building image {name} on Baseten (a few minutes, once)")
+    return client().build_image(name, {"Dockerfile": dockerfile}, memory=MEMORY)
 
 
-def host():
-    Sandbox, Volume = sdk()
-    Volume.create_if_not_exists({"name": VOLUME, "size": VOLUME_MB, "region": REGION, "labels": LABELS})
-    try:
-        sandbox = Sandbox.get(SANDBOX)
-    except Exception:  # noqa: BLE001 - not there yet
+def host(renew: bool = False):
+    client().volume(VOLUME, VOLUME_SIZE, REGION)
+    sandbox = client().get(SANDBOX)
+    created = False
+    if sandbox and renew:
+        age = (time.time() - datetime.fromisoformat(sandbox["created_at"].replace("Z", "+00:00")).timestamp()) / 86400
+        if age < RENEW_AFTER_DAYS:
+            print(f"sandbox {SANDBOX} is {age:.1f} days old; renewing after {RENEW_AFTER_DAYS}")
+        elif busy(sandbox):
+            print(f"sandbox {SANDBOX} is {age:.1f} days old but a run is going; renewing on the next try")
+        else:
+            step(f"Recreating sandbox {SANDBOX} ({age:.1f} days old; Baseten deletes it at 7)")
+            delete(volume=False)
+            sandbox = None
+    if not sandbox:
         step(f"Creating sandbox {SANDBOX} with volume {VOLUME} at /data")
-        sandbox = Sandbox.create({
-            "name": SANDBOX, "image": image(), "memory": MEMORY, "region": REGION,
-            "ports": [{"target": PORT, "protocol": "HTTP"}, {"target": METER_PORT, "protocol": "HTTP"}],
+        sandbox = client().create({
+            "name": SANDBOX, "image": image(), "memory": MEMORY, "region": REGION, "labels": LABELS,
+            "ports": [{"name": "web", "protocol": "HTTP", "target": PORT},
+                      {"name": "meter", "protocol": "HTTP", "target": METER_PORT}],
             "volumes": [{"name": VOLUME, "mount_path": "/data", "read_only": False}],
-            "labels": LABELS,
+            "lifecycle": {"expiration_policies": [{"type": "TTL_IDLE", "value": "30d", "action": "DELETE"},
+                                                  {"type": "TTL_MAX_AGE", "value": "52w", "action": "DELETE"}]},
         })
         ready(sandbox)
+        created = True
     # The sign-in server owns sign-in, so the preview itself is public.
-    preview = sandbox.previews.create_if_not_exists({"metadata": {"name": "web"},
-                                                     "spec": {"port": PORT, "public": True, "prefixUrl": PREFIX}})
+    origin = client().preview(SANDBOX, "web", PORT)
     # The meter checks every call's ticket itself; the sign-in has no part in it.
-    meter = sandbox.previews.create_if_not_exists({"metadata": {"name": "meter"},
-                                                   "spec": {"port": METER_PORT, "public": True, "prefixUrl": f"{PREFIX}-meter"}})
-    return sandbox, preview.spec.url.rstrip("/"), meter.spec.url.rstrip("/")
+    meter = client().preview(SANDBOX, "meter", METER_PORT)
+    return sandbox, origin, meter, created
 
 
-def ready(sandbox) -> None:
-    """A new sandbox can refuse commands for a while after it is created (WORKLOAD_UNAVAILABLE)."""
+# Prints yes when a process's argv is `python -m eval_sandbox run ...` (what the page starts), the way
+# hosted/server.mjs checks; matching command-line text would also match the check itself.
+BUSY = """import os
+def argv(pid):
+    try:
+        return open(f"/proc/{pid}/cmdline", "rb").read().split(b"\\0")[1:4]
+    except OSError:
+        return []
+print("yes" if any(argv(p) == [b"-m", b"eval_sandbox", b"run"] for p in os.listdir("/proc") if p.isdigit()) else "no")
+"""
+
+
+def busy(sandbox: dict) -> bool:
+    """Whether a `pr-eval run` is going in the sandbox."""
+    try:
+        return "yes" in run(sandbox, f"/opt/venv/bin/python -c {shlex.quote(BUSY)}", timeout=60)
+    except SystemExit:
+        return False
+
+
+def ready(sandbox: dict) -> None:
+    """A new sandbox can refuse commands for a while after it is created."""
     for wait in (1, 2, 4, 8, 15, 30, 30):
         try:
-            sandbox.process.exec({"command": "true", "waitForCompletion": True, "timeout": 30})
-            return
-        except Exception:  # noqa: BLE001 - the platform says to retry until the workload is up
-            time.sleep(wait)
-    raise SystemExit(f"sandbox {SANDBOX} didn't start; see: bl logs sandbox {SANDBOX} -w {WORKSPACE}")
+            if client().exec(sandbox, "true", timeout=30)[0] == 0:
+                return
+        except baseten.SandboxError:
+            pass
+        time.sleep(wait)
+    raise SystemExit(f"sandbox {SANDBOX} didn't start")
 
 
-def upload(sandbox, files: dict[str, bytes], remote: str) -> None:
+def upload(sandbox: dict, files: dict[str, bytes], remote: str) -> None:
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w:gz") as tar:
         for name, content in files.items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(content), 0o644, int(time.time())
             tar.addfile(info, io.BytesIO(content))
-    target = f"/tmp/upload-{os.getpid()}-{int(time.time())}.tgz"
-    sandbox.fs.write_binary(target, archive.getvalue())
+    # The sandbox's own filesystem is held in memory: stage on the volume.
+    target = f"/data/.upload-{os.getpid()}-{int(time.time())}.tgz"
+    client().write(sandbox, target, archive.getvalue())
     run(sandbox, f"mkdir -p {shlex.quote(remote)} && tar -xzf {target} -C {shlex.quote(remote)} && rm {target}")
 
 
@@ -209,7 +270,7 @@ def release_files() -> dict[str, bytes]:
 
 
 def copy_quick_tasks(sandbox) -> None:
-    """The quick sample's task folders, collected here first where missing (this Mac's `gh` login). On the
+    """The quick sample's task folders, collected here first where missing (with the local `gh` login). On the
     page they let a signed-in person with no GitHub account run the quick sample: its runs only read them.
     Each holds its repository's source (about 200 MB for a large one), so only folders the page lacks go,
     one at a time."""
@@ -250,13 +311,13 @@ def seed_files(jobs: list[Path], keys: dict[str, str]) -> dict[str, bytes]:
 
 def mail_key() -> str | None:
     name, service = MAIL_KEY
-    return keychain(service) or os.environ.get(name)
+    return keychain(item(name, service)) or os.environ.get(name)
 
 
 def start(sandbox, origin: str, meter: str, keys: dict[str, str]) -> None:
-    for process in sandbox.process.list() or []:
-        if (process.name or "").startswith(("pr-eval-page", "pr-eval-sign-in")) and process.status in ("running", "starting"):
-            sandbox.process.kill(process.name)
+    for process in client().processes(sandbox):
+        if (process.get("name") or "").startswith(("pr-eval-page", "pr-eval-sign-in")) and process.get("status") in ("running", "starting"):
+            client().kill(sandbox, process["name"])
     stamp = time.strftime("%Y%m%d-%H%M%S")
     page_env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
                 "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
@@ -266,19 +327,18 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str]) -> None:
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
     name, service = GITHUB_TOKEN
-    if token := keychain(service) or os.environ.get(name):
+    if token := keychain(item(name, service)) or os.environ.get(name):
         page_env[name] = token
     print(f'Public repositories without a GitHub sign-in: {"on" if token else "off (no " + service + ")"}')
+    if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
+        sign_in_env["PR_EVAL_ADMINS"] = admins
     if key := mail_key():
         sign_in_env |= {MAIL_KEY[0]: key, "PR_EVAL_MAIL_FROM": MAIL_FROM}
     print(f'"Request access": {"on" if key else "off (no " + MAIL_KEY[1] + ")"}')
-    # No `timeout`: on Blaxel it can end a long-lived process once it elapses.
-    sandbox.process.exec({"name": f"pr-eval-page-{stamp}", "workingDir": APP, "env": page_env,
-                          "command": f"mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs",
-                          "restartOnFailure": True, "maxRestarts": 25})
-    sandbox.process.exec({"name": f"pr-eval-sign-in-{stamp}", "workingDir": f"{APP}/hosted", "env": sign_in_env,
-                          "command": "exec node --disable-warning=ExperimentalWarning server.mjs",
-                          "restartOnFailure": True, "maxRestarts": 25})
+    client().start(sandbox, f"pr-eval-page-{stamp}", cwd=APP, env=page_env,
+                   command=f"sh -c 'mkdir -p /data/home && exec /opt/venv/bin/python -m eval_sandbox serve --no-open --port {PAGE_PORT} --jobs {APP}/jobs'")
+    client().start(sandbox, f"pr-eval-sign-in-{stamp}", cwd=f"{APP}/hosted", env=sign_in_env,
+                   command="node --disable-warning=ExperimentalWarning server.mjs")
     run(sandbox, f"for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:{PORT}/login "
                  f"&& curl -s -o /dev/null http://127.0.0.1:{PAGE_PORT}/api/state -H 'host: 127.0.0.1:{PAGE_PORT}' && exit 0; sleep 1; done; "
                  "echo 'the page did not start' >&2; exit 1", timeout=90)
@@ -299,20 +359,18 @@ def verify(origin: str, meter: str) -> None:
     got = {"login": status("/login"), "page": status("/", "text/html"), "api": status("/api/state", "application/json"),
            "meter": status("/anthropic/v1/models", base=meter)}
     if got != {"login": 200, "page": 303, "api": 401, "meter": 401}:
-        raise SystemExit(f"unexpected signed-out answers {got}; see: bl logs sandbox {SANDBOX} -w {WORKSPACE}")
+        raise SystemExit(f"unexpected signed-out answers {got}; see the pr-eval-page-* and pr-eval-sign-in-* process logs")
     print(f"signed-out answers ok: {got}")
 
 
 def delete(volume: bool) -> None:
-    Sandbox, Volume = sdk()
-    Sandbox.delete(SANDBOX)
-    for _ in range(60):  # gone before a deploy can create it afresh
-        try:
-            left = Sandbox.get(SANDBOX)
-        except Exception:  # noqa: BLE001 - not found: deleted
+    client().delete(SANDBOX)
+    for _ in range(100):  # gone before a deploy can create it afresh
+        left = client().get(SANDBOX)
+        if not left:
             break
-        if left.status == "TERMINATED":  # one can stay listed like this until deleted again (2026-10-23)
-            Sandbox.delete(SANDBOX)
+        if left.get("status") == "TERMINATED":
+            client().delete(SANDBOX)
         time.sleep(3)
     else:
         raise SystemExit(f"sandbox {SANDBOX} is still there; try again in a minute")
@@ -320,10 +378,10 @@ def delete(volume: bool) -> None:
     if volume:
         for _ in range(60):
             try:
-                Volume.delete(VOLUME)
+                client().manage("DELETE", f"/v1/sandboxes/volumes/{VOLUME}", allow=(404,))
                 print(f"deleted volume {VOLUME}")
                 return
-            except Exception:  # noqa: BLE001 - still attached while the sandbox shuts down
+            except baseten.SandboxError:  # still attached while the sandbox shuts down
                 time.sleep(2)
         raise SystemExit(f"could not delete volume {VOLUME}; try again in a minute")
 
@@ -336,27 +394,31 @@ def workspace() -> str:
 
 
 def main() -> int:
-    global WORKSPACE, SANDBOX, VOLUME, PREFIX
+    global WORKSPACE, SANDBOX, VOLUME
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=Path, nargs="*", default=[], help="finished runs to show on the hosted page")
     parser.add_argument("--delete", action="store_true", help="remove the hosted sandbox")
     parser.add_argument("--volume", action="store_true", help="with --delete, also remove its data")
+    parser.add_argument("--renew", action="store_true", help="recreate the sandbox and deploy again only when it is "
+                        f"{RENEW_AFTER_DAYS}+ days old and no run is going (Baseten deletes it at 7); else do nothing")
     parser.add_argument("--name", default=SANDBOX, help="another copy, pr-eval-<something>: its own sandbox, "
-                        "volume (<name>-data), sign-in and preview (<something>-<workspace>.preview.bl.run)")
+                        "volume (<name>-data), sign-in and previews")
     args = parser.parse_args()
     if args.name != SANDBOX:
         if not re.fullmatch(r"pr-eval-[a-z0-9]+(-[a-z0-9]+)*", args.name) or args.name.startswith("pr-eval-host"):
             raise SystemExit("--name is pr-eval-<something>, in lower-case letters, digits and dashes")
-        SANDBOX, VOLUME, PREFIX = args.name, f"{args.name}-data", args.name.removeprefix("pr-eval-")
+        SANDBOX, VOLUME = args.name, f"{args.name}-data"
         LABELS["app"] = args.name
     WORKSPACE = workspace()
     if args.delete:
         delete(args.volume)
         return 0
     keys = secrets()
-    step(f"Sandbox and preview in {WORKSPACE}")
-    sandbox, origin, meter = host()
+    step(f"Sandbox and previews on Baseten (trials in Blaxel workspace {WORKSPACE})")
+    sandbox, origin, meter, created = host(renew=args.renew)
     print(origin, meter)
+    if args.renew and not created:
+        return 0
     step("Uploading the app")
     files = release_files()
     run(sandbox, f"mkdir -p {APP} {AUTH} && chmod 700 {AUTH} && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))

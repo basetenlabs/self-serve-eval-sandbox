@@ -11,8 +11,8 @@
 # provider = "anthropic": Claude Code talks to the Anthropic API directly, authenticated
 #   by ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
 # provider = "baseten": Claude Code talks to the translating proxy inside the trial
-#   container, which forwards to Baseten Model APIs with BASETEN_API_KEY and forces
-#   `effort` on every request (Baseten's Anthropic-compatible layer ignores effort).
+#   container, which forwards to Baseten Model APIs' Chat Completions endpoint with
+#   BASETEN_API_KEY and sets the same `effort` on every request.
 # max_concurrent (optional) caps how many attempts of one model run at once, for a
 #   provider that rate-limits the key. Time spent in retry backoff is excluded from the
 #   report's wall clock either way.
@@ -45,7 +45,7 @@ label = "Kimi K3"
 kind = "open"
 provider = "baseten"
 model = "moonshotai/Kimi-K3"
-# Baseten returned 429s with three or four Kimi K3 attempts at once (2026-10-16).
+# Stays within the key's rate limit.
 max_concurrent = 2
 prices."moonshotai/Kimi-K3" = { input = 3.00, cached_input = 0.30, output = 15.00 }
 
@@ -62,7 +62,7 @@ label = "Muse Spark Open"
 kind = "open"
 provider = "baseten"
 model = "meta-models/muse-spark-open"
-# Baseten returned 429s with eight attempts at once across models (2026-10-19).
+# Stays within the key's rate limit.
 max_concurrent = 2
 prices."meta-models/muse-spark-open" = { input = 1.25, cached_input = 0.15, output = 4.25 }
 
@@ -115,5 +115,5 @@ model = "moonshotai/Kimi-K3"
 base_url = "https://inference.baseten.co/v1"
 api_key_env = "BASETEN_API_KEY"
 prices = { input = 3.00, cached_input = 0.30, output = 15.00 }
-# It also chairs, so it grades twice per attempt; Baseten returns 429s for too many at once.
+# It also chairs, so it grades twice per attempt; the cap keeps it within the key's rate limit.
 max_concurrent = 4

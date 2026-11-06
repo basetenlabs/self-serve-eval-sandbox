@@ -1,9 +1,9 @@
 # Hosted eval page
 
 The deployment behind Baseten's hosted copy of the eval page: the same page as `pr-eval serve`, on
-a Blaxel sandbox, behind a sign-in, for people who don't want to install anything. You don't need
-any of this to run pr-eval yourself. Its sign-in package, `@blaxel/sign-in`, isn't public, so this
-folder can't be deployed outside Baseten as it is.
+a Baseten sandbox, behind a sign-in, for people who don't want to install anything. You don't need
+any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/sign-in` (installed as
+`@blaxel/sign-in`), isn't public, so this folder can't be deployed outside Baseten as it is.
 
 - **Sign-in:** `server.mjs` is the only public door: "Sign in with Blaxel" in front of
   `pr-eval serve` on 127.0.0.1. The page learns who is
@@ -14,8 +14,8 @@ folder can't be deployed outside Baseten as it is.
   `{"admins": [], "emails": [], "domains": []}`. A verified Blaxel email gets in when it is an
   admin, an invited address (any domain, Gmail too) or at exactly one of the domains (never a
   subdomain; public mail domains and wildcards are refused). The first start creates the file with
-  two admins (michael.stolarz@baseten.co, mstolarz@blaxel.ai) and the domains baseten.co and
-  blaxel.ai, so everyone who could sign in before still can; `deploy.py` never overwrites it.
+  the admins in `PR_EVAL_ADMINS` (comma-separated emails, set when deploying) and the domains
+  baseten.co and blaxel.ai; `deploy.py` never overwrites it.
   Admins change it on the page's **Access** tab, which only they see. The sign-in server answers
   that tab (`access.mjs`): it checks the person is an admin in the file as it is now on every
   request, checks each entry with the sign-in's own rules, never removes the last admin, writes the
@@ -24,7 +24,7 @@ folder can't be deployed outside Baseten as it is.
 - **Keys:** the page's process gets the judges', models' and Blaxel keys in its environment
   when it starts. They are never written to the volume, the image or this repository.
 - **Key meter:** trial sandboxes never get a model key, and hosted they can't reach a provider
-  either: their one destination is the meter, a second public preview (`<prefix>-meter`) served by
+  either: their one destination is the meter, a second public preview ("meter") served by
   the page's process (`eval_sandbox/meter.py`). Blaxel's egress proxy puts the attempt's ticket on
   each request; the meter checks it, adds the real key, forwards the call and writes what its usage
   cost to the run's `spend.jsonl`. So a call made by the repository's code during an attempt counts
@@ -50,9 +50,12 @@ folder can't be deployed outside Baseten as it is.
   `access.json` in the run's folder, and hides a run with no owner recorded from everyone else. The
   runs, their logs and the log lines naming who started or stopped one all stay on the volume.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
-- **Runs:** trials run in the same dedicated workspace as local runs, and the page's sandbox lives
-  there too: `deploy.py` reads it from `PR_EVAL_BLAXEL_WORKSPACE`, else `~/.config/pr-eval/blaxel.json`,
-  and stops if neither is set. While a run is going, the sign-in server keeps the sandbox awake.
+- **Runs:** the page's sandbox is on Baseten Sandboxes; its trials still run on Blaxel, in the same
+  dedicated workspace as local runs: `deploy.py` reads it from `PR_EVAL_BLAXEL_WORKSPACE`, else
+  `~/.config/pr-eval/blaxel.json`, and stops if neither is set. Trials stay on Blaxel for now:
+  a trial installs dependencies with the network open, then the agent runs with model-provider-only
+  egress, and that per-phase network policy is what Blaxel sandboxes provide today. While a run is going, the sign-in server
+  keeps the sandbox awake.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
   would clone it and check its pull requests at once), except two quick samples. Runs in
   the last 24 hours may spend $1,000 in all and $500 per person on models. Each run keeps a
@@ -73,10 +76,18 @@ folder can't be deployed outside Baseten as it is.
 ## Deploy
 
 ```sh
-bl push -d hosted --name pr-eval-host --type sandbox -w <workspace>        # the image, once and after changing hosted/Dockerfile
 (cd hosted && NODE_AUTH_TOKEN="$(gh auth token)" npm ci)                    # @blaxel/sign-in, from GitHub Packages
 .venv/bin/python hosted/deploy.py --seed jobs/<run>                          # create or update
+.venv/bin/python hosted/deploy.py --renew                                    # daily: Baseten deletes a sandbox at 7 days
 ```
+
+The deploy manages the sandbox with a Baseten key that can mint sandbox tokens (a personal key or a
+team creator service account key; `BASETEN_SANDBOX_API_KEY`, else the Keychain item in `SANDBOX_KEY`).
+It builds the image from `hosted/Dockerfile` on Baseten when that exact file isn't built yet. The
+site's address is a random Baseten preview host that the deploy prints. Baseten deletes every sandbox 7
+days after it was created, whatever its lifecycle policy says: `--renew` recreates it once it is 5
+days old and no run is going (runs, access list and sign-in state stay on the volume). A recreated
+sandbox can get a new address; the deploy prints it, and the sign-in registers itself for it.
 
 `npm ci` needs a GitHub token that can read packages (`gh auth refresh -h github.com -s read:packages`)
 and npm pointed at it once per machine, never written into a file:
@@ -88,14 +99,12 @@ To try a release before the live page gets it, deploy a copy beside it:
 preview; `--name pr-eval-staging --delete --volume` removes it.
 
 `deploy.py` reads the keys from the macOS Keychain or the environment (the list is at the top of
-the file), creates the volume, sandbox and public preview when they don't exist yet, uploads the
+the file), creates the image, volume, sandbox and public previews when they don't exist yet, uploads the
 app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
 401). `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
 trial's result.json and condensed, redacted trace, all scanned for credentials first); full
-transcripts stay on your Mac. A sandbox keeps the image it was created from: after a new
+transcripts stay on your machine. A sandbox keeps the image it was created from: after a new
 image, `deploy.py --delete` and deploy again (runs and sign-in state stay on the volume).
-
-Logs: `bl logs sandbox pr-eval-host -w <workspace>`.
 
 ## Remove
 
@@ -104,5 +113,5 @@ Logs: `bl logs sandbox pr-eval-host -w <workspace>`.
 .venv/bin/python hosted/deploy.py --delete --volume   # everything
 ```
 
-Then delete the Blaxel service account the deploy used, in the workspace's settings, and the
+Then delete the Blaxel service account the page's trials used, in the workspace's settings, and the
 Keychain items `deploy.py` reads its keys from (`SECRETS` in that file).
