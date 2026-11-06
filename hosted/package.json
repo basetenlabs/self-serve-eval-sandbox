@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.mjs",
-    "test": "node --test sign-in.test.mjs",
+    "test": "node --test sign-in.test.mjs login-page.test.mjs",
     "check": "node --disable-warning=ExperimentalWarning node_modules/@blaxel/sign-in/server.mjs --check --config site.config.mjs"
   },
   "dependencies": {

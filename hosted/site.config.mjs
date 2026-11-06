@@ -11,10 +11,7 @@ export default {
     askForAccess: 'Ask an Eval Sandbox admin, such as Michael Stolarz, on Slack to add you.',
     company: 'Baseten',
     tagline: 'Run coding models on real pull requests and compare what they solve and what it costs.',
-    login: { eyebrow: 'Internal preview', title: 'Sign in to Self-Serve Model Eval Sandbox' },
     mark: 'mark.svg',
-    // The link-preview image (Slack, X, LinkedIn): 1200 x 630, served to signed-out crawlers.
-    card: 'card.png',
   },
   security: {
     // The page's writes are JSON from this origin, which the page checks again; it sends no CSRF token.
