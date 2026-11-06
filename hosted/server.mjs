@@ -12,6 +12,7 @@ import { adminApi, seedAccess } from './access.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests } from './requests.mjs'
 import { createSiteServer, listen, loadConfig, proxySite, runMain, stopOnSignals } from '@blaxel/sign-in'
+import { renderLogin } from './login-page.mjs'
 
 /** Whether a `pr-eval run` process is going in this sandbox (the page starts them as `python -m eval_sandbox run`). */
 async function running() {
@@ -59,7 +60,7 @@ runMain(async () => {
   const requestAccess = key && config.policy.file
     ? accessRequests({ file: config.policy.file, origin: config.origin, mailer: resendMailer({ key, from: process.env.PR_EVAL_MAIL_FROM }) })
     : undefined
-  const server = await createSiteServer({ config, app, api, requestAccess })
+  const server = await createSiteServer({ config, app, api, requestAccess, renderLogin })
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
   if (process.env.BL_SANDBOX_API) keepAwake(process.env.BL_SANDBOX_API)
