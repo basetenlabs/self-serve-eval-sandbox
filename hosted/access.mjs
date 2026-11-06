@@ -9,12 +9,14 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { checkAccessList, checkDomain, checkEmail, normalizeDomain, normalizeEmail } from '@blaxel/sign-in'
 
-/** Who gets in when there is no file yet: the first admins, and everyone at the two companies. */
+/** Who gets in when there is no file yet: everyone with a baseten.co or blaxel.ai email, and the admins in PR_EVAL_ADMINS. */
 export const SEED = Object.freeze({
-  admins: ['michael.stolarz@baseten.co', 'mstolarz@blaxel.ai'],
   emails: [],
   domains: ['baseten.co', 'blaxel.ai'],
 })
+
+/** The first admins: PR_EVAL_ADMINS, comma-separated emails. */
+export const seedAdmins = (env = process.env) => (env.PR_EVAL_ADMINS || '').split(',').map(email => email.trim()).filter(Boolean)
 
 const LISTS = ['admins', 'emails', 'domains']
 const MAX_BODY = 4096
@@ -32,7 +34,7 @@ async function save(file, lists) {
 }
 
 /** Creates the file with SEED when it doesn't exist yet; never touches one that does. Returns whether it wrote. */
-export async function seedAccess(file, log = console) {
+export async function seedAccess(file, log = console, env = process.env) {
   try {
     await readFile(file)
     return false
@@ -40,8 +42,10 @@ export async function seedAccess(file, log = console) {
     if (error.code !== 'ENOENT') throw error
   }
   await mkdir(dirname(file), { recursive: true })
-  await save(file, checkAccessList(SEED))
-  log.info?.(`[access] created ${file}: ${SEED.admins.join(', ')} as admins, ${SEED.domains.join(', ')} as domains`)
+  const admins = seedAdmins(env)
+  await save(file, checkAccessList({ ...SEED, admins }))
+  log.info?.(`[access] created ${file}: ${admins.length ? admins.join(', ') : 'no'} admins, ${SEED.domains.join(', ')} as domains`)
+  if (!admins.length) log.warn?.('[access] set PR_EVAL_ADMINS to name the first admins; until then nobody can edit the list from the page')
   return true
 }
 

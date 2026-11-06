@@ -25,8 +25,9 @@ async function running() {
 }
 
 /**
- * On Blaxel a sandbox goes to standby soon after its last connection. While a run is going, hold a
- * keep-alive process through the sandbox's own process API, so closing the tab doesn't freeze it.
+ * A sandbox can go to standby soon after its last connection. While a run is going, hold a
+ * keep-alive process through the sandbox-api process API (the image's entrypoint), so closing the
+ * tab doesn't freeze it.
  */
 function keepAwake(sandboxApi) {
   let held

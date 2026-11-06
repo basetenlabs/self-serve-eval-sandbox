@@ -12,6 +12,7 @@ import { accessRequests, inviteLink } from './requests.mjs'
 import config from './site.config.mjs'
 
 const quiet = { info() {}, warn() {}, error() {} }
+const ADMINS = { PR_EVAL_ADMINS: 'lead@baseten.co, lead@blaxel.ai' }
 const folder = t => {
   const dir = mkdtempSync(join(tmpdir(), 'pr-eval-access-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -37,9 +38,9 @@ async function serve(t, file) {
   }
 }
 
-test('a refused account gets the shared access instructions from sign-in 0.4.0', () => {
+test('a refused account gets the shared access instructions from sign-in 0.4.3', () => {
   const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url)))
-  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.4.0')
+  assert.equal(pkg.dependencies['@blaxel/sign-in'], 'npm:@blaxel-ai/sign-in@0.4.3')
   const html = renderLogin({
     brand: loadBrand(config.brand, fileURLToPath(new URL('./', import.meta.url))),
     policy: createPolicy({ ...config.access, file: join(tmpdir(), 'no-such-access.json'), log: quiet }),
@@ -48,14 +49,14 @@ test('a refused account gets the shared access instructions from sign-in 0.4.0',
     blaxelSignOut: 'https://app.blaxel.ai/logout',
   })
   assert.match(html, /This account can&#39;t get in/)
-  assert.match(html, /Ask an Eval Sandbox admin, such as Michael Stolarz, on Slack to add you\./)
+  assert.match(html, /Ask an Eval Sandbox admin to add you\./)
 })
 
 test('who may sign in comes only from the access file, which starts with the seed', async t => {
   assert.deepEqual(Object.keys(config.access), ['file'])
   const file = join(folder(t), 'data', 'access.json')
-  assert.equal(await seedAccess(file, quiet), true)
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: [...SEED.admins].sort(), emails: [], domains: [...SEED.domains].sort() })
+  assert.equal(await seedAccess(file, quiet, ADMINS), true)
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: ['lead@baseten.co', 'lead@blaxel.ai'], emails: [], domains: [...SEED.domains].sort() })
   writeFileSync(file, JSON.stringify({ admins: ['a@baseten.co'], emails: [], domains: [] }))
   assert.equal(await seedAccess(file, quiet), false) // an existing file is never replaced
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins[0], 'a@baseten.co')
@@ -63,23 +64,23 @@ test('who may sign in comes only from the access file, which starts with the see
 
 test('an invited outside email gets in and an uninvited one does not, live from the file an admin edits', async t => {
   const file = join(folder(t), 'access.json')
-  await seedAccess(file, quiet)
+  await seedAccess(file, quiet, ADMINS)
   const policy = createPolicy({ file, log: quiet })
   const api = await serve(t, file)
-  assert.equal(policy.check('michael.stolarz@baseten.co'), 'allowed')
+  assert.equal(policy.check('lead@baseten.co'), 'allowed')
   assert.equal(policy.check('someone@blaxel.ai'), 'allowed')
   assert.equal(policy.check('guest@partner.io'), 'refused')
 
-  const added = await api.post('michael.stolarz@baseten.co', { list: 'emails', value: ' Guest@Partner.io ' })
+  const added = await api.post('lead@baseten.co', { list: 'emails', value: ' Guest@Partner.io ' })
   assert.equal(added.status, 200)
   assert.deepEqual(added.body.emails, ['guest@partner.io'])
   assert.equal(policy.check('guest@partner.io'), 'allowed')
   assert.equal(policy.check('other@partner.io'), 'refused')
 
-  assert.equal((await api.post('michael.stolarz@baseten.co', { list: 'domains', value: '@partner.io' })).status, 200)
+  assert.equal((await api.post('lead@baseten.co', { list: 'domains', value: '@partner.io' })).status, 200)
   assert.equal(policy.check('other@partner.io'), 'allowed')
-  assert.equal((await api.post('mstolarz@blaxel.ai', { list: 'domains', value: 'partner.io', remove: true })).status, 200)
-  assert.equal((await api.post('mstolarz@blaxel.ai', { list: 'emails', value: 'guest@partner.io', remove: true })).status, 200)
+  assert.equal((await api.post('lead@blaxel.ai', { list: 'domains', value: 'partner.io', remove: true })).status, 200)
+  assert.equal((await api.post('lead@blaxel.ai', { list: 'emails', value: 'guest@partner.io', remove: true })).status, 200)
   assert.equal(policy.check('guest@partner.io'), 'refused')
   assert.equal(policy.check('other@partner.io'), 'refused')
   assert.deepEqual(readdirSync(join(file, '..')), ['access.json']) // written by rename: no temporary file left
@@ -87,7 +88,7 @@ test('an invited outside email gets in and an uninvited one does not, live from 
 
 test('only admins read or change the list, checked against the file on every request', async t => {
   const file = join(folder(t), 'access.json')
-  await seedAccess(file, quiet)
+  await seedAccess(file, quiet, ADMINS)
   const api = await serve(t, file)
   for (const who of ['someone@baseten.co', undefined]) {
     assert.equal((await api.get(who)).status, 403)
@@ -95,11 +96,11 @@ test('only admins read or change the list, checked against the file on every req
   }
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins.length, 2)
 
-  const promoted = await api.post('mstolarz@blaxel.ai', { list: 'admins', value: 'someone@baseten.co' })
-  assert.deepEqual(promoted.body.admins, ['michael.stolarz@baseten.co', 'mstolarz@blaxel.ai', 'someone@baseten.co'])
+  const promoted = await api.post('lead@blaxel.ai', { list: 'admins', value: 'someone@baseten.co' })
+  assert.deepEqual(promoted.body.admins, ['lead@baseten.co', 'lead@blaxel.ai', 'someone@baseten.co'])
   assert.equal((await api.get('someone@baseten.co')).status, 200)
-  await api.post('someone@baseten.co', { list: 'admins', value: 'mstolarz@blaxel.ai', remove: true })
-  assert.equal((await api.get('mstolarz@blaxel.ai')).status, 403) // removed a moment ago: no longer an admin
+  await api.post('someone@baseten.co', { list: 'admins', value: 'lead@blaxel.ai', remove: true })
+  assert.equal((await api.get('lead@blaxel.ai')).status, 403) // removed a moment ago: no longer an admin
 })
 
 test('entries follow the sign-in rules, and the last admin stays', async t => {

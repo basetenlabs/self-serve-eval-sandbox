@@ -17,17 +17,17 @@ The finished setup runs the page at http://127.0.0.1:8765, where you pick merged
 The Blaxel SDK does not install on Python 3.15 yet.
 
 ```bash
-for v in 3.13 3.12 3.14; do command -v python$v && break; done
+for v in 3.13 3.12 3.14; do PY=$(command -v python$v) && break; done; echo "$PY"
 ```
 
-Check: it prints a path. If it prints nothing, install Python 3.13 (on a Mac: `brew install python@3.13`) and run it again.
+Check: it prints a path. Keep `$PY` for the next step. If it prints nothing, install Python 3.13 (on a Mac: `brew install python@3.13`) and run it again.
 
 ## 2. Install
 
 ```bash
 git clone https://github.com/basetenlabs/self-serve-eval-sandbox.git
 cd self-serve-eval-sandbox
-python3.13 -m venv .venv          # the version step 1 found
+"$PY" -m venv .venv               # the Python step 1 found
 .venv/bin/pip install -e .
 .venv/bin/pr-eval --help
 ```

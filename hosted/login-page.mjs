@@ -1,9 +1,12 @@
 // The public sign-in page: the site name and one "Continue with Blaxel" button, plus a short
 // line after a failed attempt. It says nothing about how sign-in works, who may get in or what
-// the site learns: anyone can load it, so it exposes the minimum. Link previews get the site
-// name only. Passed to createSiteServer as `renderLogin`; @blaxel/sign-in's own page is the
-// reference for the hooks kept here (#signin, data-auth, data-next for /auth/login.js).
-// The same file ships in every internal site; change them together.
+// the site learns: anyone can load it, so it exposes the minimum. Link previews (Slack, X,
+// iMessage) still get the site name, its one-line description and the public preview card from
+// @blaxel/sign-in's previewMeta: crawlers never sign in, so this page is all they see.
+// Passed to createSiteServer as `renderLogin`; @blaxel/sign-in's own page is the reference for
+// the hooks kept here (#signin, data-auth, data-next for /auth/login.js).
+import { previewMeta } from '@blaxel/sign-in'
+
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 
 /** The line under the site name for each result code, and the button label. Nothing for a first visit. */
@@ -19,8 +22,8 @@ function result(code) {
   }
 }
 
-/** `renderLogin` for createSiteServer: gets { brand, next, state, blaxelSignOut } among others. */
-export function renderLogin({ brand, next = '/', state = {}, blaxelSignOut }) {
+/** `renderLogin` for createSiteServer: gets { brand, origin, next, state, blaxelSignOut } among others. */
+export function renderLogin({ brand, origin = '', next = '/', state = {}, blaxelSignOut }) {
   const name = escape(brand.name)
   const { line, tone, other } = result(state.code)
   const start = '/auth/start' + (next === '/' ? '' : '?next=' + encodeURIComponent(next))
@@ -38,10 +41,7 @@ export function renderLogin({ brand, next = '/', state = {}, blaxelSignOut }) {
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>${name}</title>
-<meta property="og:type" content="website">
-<meta property="og:title" content="${name}">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${name}">
+${previewMeta({ brand, origin })}
 <link rel="icon" href="/auth/brand/mark">
 <link rel="stylesheet" href="/auth/theme.css">
 <link rel="stylesheet" href="/auth/login.css">

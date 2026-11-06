@@ -8,10 +8,12 @@ export default {
   access: { file: '../data/access.json' },
   brand: {
     name: 'Self-Serve Model Eval Sandbox',
-    askForAccess: 'Ask an Eval Sandbox admin, such as Michael Stolarz, on Slack to add you.',
+    askForAccess: 'Ask an Eval Sandbox admin to add you.',
     company: 'Baseten',
     tagline: 'Run coding models on real pull requests and compare what they solve and what it costs.',
     mark: 'mark.svg',
+    // Link previews (Slack, X, iMessage): 1200 x 630, public, since crawlers never sign in.
+    card: 'card.png',
   },
   security: {
     // The page's writes are JSON from this origin, which the page checks again; it sends no CSRF token.

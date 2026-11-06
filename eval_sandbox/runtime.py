@@ -119,7 +119,7 @@ def build_image(image: str, claude_code_version: str | None = None) -> int:
     check_connection()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", image):
         raise RuntimeError("Use a Blaxel image name, not a Docker registry tag.")
-    # Only the image's three source files leave the Mac; not the repository, tasks,
+    # Only the image's three source files leave this machine; not the repository, tasks,
     # .env files, job results or any local credentials.
     with tempfile.TemporaryDirectory(prefix="pr-eval-image-") as d:
         for name in IMAGE_FILES:

@@ -11,8 +11,14 @@ test('the sign-in page shows only the site name and one button', () => {
   assert.equal(text(html), 'Some Site Continue with Blaxel')
   assert.match(html, /<title>Some Site<\/title>/)
   assert.match(html, /href="\/auth\/start\?next=%2Fx"/)
-  // Link previews: the name only, no description or card.
-  assert.doesNotMatch(html, /description|og:image|twitter:image/)
+})
+
+test('link previews carry the name, the description and the public card', () => {
+  const html = renderLogin({ brand: { ...brand, card: { type: 'image/png' } }, origin: 'https://site.example' })
+  assert.match(html, /<meta property="og:title" content="Some Site">/)
+  assert.match(html, /<meta property="og:description" content="What the site does.">/)
+  assert.match(html, /<meta property="og:image" content="https:\/\/site\.example\/auth\/brand\/card">/)
+  assert.match(html, /<meta name="twitter:card" content="summary_large_image">/)
 })
 
 test('signed-out and failed sign-ins add at most one short line', () => {
