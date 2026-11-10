@@ -51,11 +51,11 @@
 .bt-tabbar > button:focus-visible { outline-offset: -2px; }
 .bt-tabbar > button .count { font: 400 12px/1 var(--geist-mono); color: var(--color-darkGrey3); }
 .bt-select.fit { inline-size: auto; min-inline-size: 144px; max-inline-size: 240px; }
-.ev-list { z-index: 70; animation: ev-drop .4s var(--ease-reveal); }
+.ev-list { z-index: 70; animation: ev-fade .3s ease, ev-drop .4s var(--ease-reveal); }   /* menus arrive like the skill's nav panels: fade .3s, drop 8px .4s */
 .ev-list > .bt-menu { max-block-size: 320px; overflow-y: auto; }
 .bt-menu > [role=option][data-highlighted] { outline: 0; background: var(--color-lightGrey1); }
 [data-radix-popper-content-wrapper] > .bt-tip { position: relative; animation: ev-fade .3s ease-out; }
-@keyframes ev-drop { from { opacity: 0; transform: translateY(-8px); } }
+@keyframes ev-drop { from { translate: 0 -8px; } }
 
 /* Checkbox: a 14px square on a Light Grey 3 edge; Black when ticked. */
 .ev-check {
@@ -76,7 +76,7 @@
 
 /* Dialog: a White block on the nav's scrim. */
 .ev-scrim { position: fixed; inset: 0; z-index: 60; background: #00000054; backdrop-filter: blur(10px); animation: ev-fade .3s ease-out; }
-.bt-dialog.ev-dialog { position: fixed; top: 50%; left: 50%; z-index: 61; transform: translate(-50%, -50%); animation: ev-fade .3s ease-out; }
+.bt-dialog.ev-dialog { position: fixed; top: 50%; left: 50%; z-index: 61; transform: translate(-50%, -50%); animation: ev-fade .3s ease, ev-drop .4s var(--ease-reveal); }
 .ev-dialog > div > p { margin-top: 8px; }
 
 /* Sheet: one task's attempts, a White block from the right edge on the same scrim. */

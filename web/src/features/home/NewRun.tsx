@@ -221,13 +221,13 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           {saveProblem && <div role="alert" className="bt-notice error mt-3">{saveProblem}</div>}
 
           {source === "quick" && state.github.sign_in && (!state.quick.ready || !!state.github.login) && (
-            <div className="ev-panel animate-enter">
+            <div className="ev-panel bt-reveal">
               <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
             </div>
           )}
 
           {source === "suite" && (
-            <div className="ev-panel animate-enter">
+            <div className="ev-panel bt-reveal">
               <div className="ev-panel-head">
                 <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
               </div>
@@ -249,7 +249,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           )}
 
           {source === "repo" && (
-            <div className="ev-panel animate-enter">
+            <div className="ev-panel bt-reveal">
               <div className="ev-panel-head">
                 <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
               </div>
