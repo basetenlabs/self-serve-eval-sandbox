@@ -200,7 +200,7 @@ img, svg { display: block; }
 .bt-link { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; text-decoration: none; font: 400 14px/1.4 var(--beausite); }
 .bt-link > svg { translate: 0 -.14em; }
 .bt-link .chevron { display: inline-flex; align-items: center; justify-content: center; inline-size: 16px; block-size: 16px; translate: 0 -.07em; }   /* a 5px triangle centred in a 16px box */
-.bt-link, .bt-inline-link { background: linear-gradient(currentColor, currentColor) 0 100% / 0 1px no-repeat; transition: background-size .2s ease-in-out; }   /* a 1px underline grows in on hover */
+.bt-link, .bt-inline-link { background: linear-gradient(currentColor, currentColor) 0 100% / 0 1px no-repeat; transition: color .2s ease-in-out, opacity .2s ease-in-out; }   /* the 1px underline appears at once on hover, as on the site: only colour and the pressed fade are eased */
 .bt-link:hover { background-size: 100% 1px; }
 .bt-link:focus-visible { outline: 0; border-radius: 2px; box-shadow: 0 0 0 2px #fff, 0 0 0 4px #000; }
 .bt-link:active { opacity: .7; }
@@ -694,6 +694,7 @@ textarea.bt-input { block-size: auto; min-block-size: 108px; }
 .bt-toc li { position: relative; padding-inline-start: 14px; }
 .bt-toc li:before { content: ""; position: absolute; left: 0; top: 4px; inline-size: 6px; block-size: 6px; background: currentColor; }
 .bt-toc li.active, .bt-toc li.passed { color: var(--color-black); }
+.bt-toc li { transition: color .4s; } .bt-toc li:hover { color: var(--color-black); }
 .bt-toc a { color: inherit; text-decoration: none; }
 
 /* ---------- App patterns (web apps, internal tools, dashboards): the same system, denser ---------- */
@@ -904,6 +905,7 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-press:before { content: ""; position: absolute; inset: 0; z-index: 1; background: var(--color-black); opacity: 0; pointer-events: none; transition: opacity .4s; }
 .bt-press:has(a:focus-visible) { opacity: .9; transform: scale(.99); } .bt-press:has(a:focus-visible):before { opacity: .05; }
 @media (hover: hover) { .bt-press:hover { opacity: .9; transform: scale(.99); } .bt-press:hover:before { opacity: .05; } }
+.bt-press.flat:is(:hover, :has(a:focus-visible)) { transform: none; }   /* a quote card beside other content: the same dim and scrim without the scale-down */
 
 /* Small states. Row link: rule and sub-line go Black (.3s). External link: a 6px arrow grows in (.4s). Icon button and
    play/pause: ground to Light Grey 2 (.2s ease-out). Resource title underlines. Footer links drop to 60% (.2s). */
@@ -919,6 +921,24 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-logo-tabs > button img { opacity: .35; transition: filter .15s ease-out, opacity .15s ease-out; }
 .bt-logo-tabs > button:is(:hover, :focus-visible) { color: var(--color-darkGrey2); } .bt-logo-tabs > button:is(:hover, :focus-visible) img { opacity: .6; }
 .bt-logo-tabs > [aria-selected=true] { background: var(--color-lightGrey1); color: var(--color-black); } .bt-logo-tabs > [aria-selected=true] img { opacity: 1; }
+/* Model picker: equal 64px Black tabs with 32px logos; the chosen one turns Light Green. .2s ease-out. */
+.bt-logo-tabs.dark { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); inline-size: 100%; }
+.bt-logo-tabs.dark > button { display: flex; align-items: center; justify-content: center; block-size: 64px; padding: 0; background: var(--color-black); color: var(--color-lightGrey1); transition: background-color .2s ease-out, color .2s ease-out; }
+.bt-logo-tabs.dark > button:is(:hover, :focus-visible) { color: var(--color-lightGrey1); }
+.bt-logo-tabs.dark > button :is(img, svg) { inline-size: 32px; block-size: 32px; opacity: 1; }
+.bt-logo-tabs.dark > [aria-selected=true] { background: var(--color-lightGreen); color: var(--color-black); }
+.bt-logo-tabs.dark > button:focus-visible { outline: 2px solid var(--color-green); outline-offset: -2px; }
+/* A list row that is one link (a job, a feature row): the ground steps one grey, 0.4s. White rows go to Light Grey 1 and their text to Dark Grey 2. */
+.bt-row-wash { background-color: var(--color-lightGrey1); color: inherit; text-decoration: none; transition: background-color .4s, color .4s; }
+.bt-row-wash.white { background-color: var(--color-white); }
+.bt-row-wash:focus-visible { background-color: var(--color-lightGrey2); outline: 1px solid var(--color-black); outline-offset: -1px; }
+.bt-row-wash.white:focus-visible { background-color: var(--color-lightGrey1); color: var(--color-darkGrey2); }
+@media (hover: hover) and (min-width: 801px) { .bt-row-wash:hover { background-color: var(--color-lightGrey2); } .bt-row-wash.white:hover { background-color: var(--color-lightGrey1); color: var(--color-darkGrey2); } }
+/* A poster over a player: it fades out in 0.4s ease-out when play starts ([data-playing] on the frame), and a notched frame closes its notches over the same 0.4s. */
+.bt-poster { transition: opacity .4s ease-out, visibility 0s linear 0s; }
+[data-playing] > .bt-poster { opacity: 0; visibility: hidden; transition: opacity .4s ease-out, visibility 0s linear .4s; }
+.bt-notched { --notch: 0px; clip-path: polygon(0 0, calc(100% - var(--notch-x, 25%)) 0, calc(100% - var(--notch-x, 25%)) var(--notch), 100% var(--notch), 100% 100%, var(--notch-x2, 33.333%) 100%, var(--notch-x2, 33.333%) calc(100% - var(--notch)), 0 calc(100% - var(--notch))); transition: clip-path .4s ease-out; }
+.bt-notched[data-playing] { --notch: 0px !important; }
 
 /* Dialog arrival: the wash fades in (.3s) and the dialog drops 8px into place (.4s, reveal curve), like a menu panel. */
 .bt-scrim { animation: bt-reveal .3s ease; }

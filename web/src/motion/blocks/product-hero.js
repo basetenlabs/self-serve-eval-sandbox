@@ -37,14 +37,14 @@ import { getProduct } from '../webgl/palette.js'
 import { createDedicatedHeroScene } from '../webgl/scenes/product-hero/dedicated.js'
 import { createGridHeroScene } from '../webgl/scenes/product-hero/grid/index.js'
 import { createModelApisHeroScene } from '../webgl/scenes/product-hero/model-apis.js'
-import { createSandboxHeroScene } from '../webgl/scenes/product-hero/sandbox.js'
+import { createSandboxHeroScene, SANDBOX_CALM } from '../webgl/scenes/product-hero/sandbox.js'
 import { createTrainingHeroScene } from '../webgl/scenes/product-hero/training/index.js'
 
 export const PRODUCT_HERO_SCENES = {
 	'dedicated-inference': { create: createDedicatedHeroScene, product: 'dedicated-inference' },
 	'model-apis': { create: createModelApisHeroScene, product: 'model-apis' },
 	training: { create: createTrainingHeroScene, product: 'training' },
-	sandbox: { create: createSandboxHeroScene, product: 'sandbox' },
+	sandbox: { create: createSandboxHeroScene, product: 'sandbox', calm: SANDBOX_CALM },
 	grid: { create: createGridHeroScene, product: 'grid' },
 }
 
@@ -59,11 +59,14 @@ export const PRODUCT_HERO_SCENES = {
  * @param {number | ((size: { width: number, height: number }) => number)} [options.zoom]
  *   Camera zoom for a pane that is not the page hero (see ProductHeroOptions in scenes/product-hero/shared.js).
  * @param {boolean} [options.trailFade]  False: cells open the frame the pointer arrives, as on the site's product pages.
+ * @param {boolean} [options.calm]  The scene's calm preset, for a scene beside working UI: the floor rests most
+ *   of the time and the hero cube stays as it is (sandbox: `SANDBOX_CALM`). Scenes without a preset are unchanged.
+ * @param {Record<string, any>} [options.tune]  The scene's own parameters by name (see `mountScene`); wins over `calm`.
  * Remaining options go to `mountScene` (poster, settle, reducedMotion, onFallback).
  */
 export function mountProductHero(
 	root,
-	{ scene, color, pattern, videoUrl, face, zoom, trailFade, ...mountOptions },
+	{ scene, color, pattern, videoUrl, face, zoom, trailFade, calm, tune, ...mountOptions },
 ) {
 	const entry = PRODUCT_HERO_SCENES[scene]
 	if (!entry) throw new Error(`No product hero scene "${scene}"`)
@@ -73,6 +76,6 @@ export function mountProductHero(
 	return mountScene(
 		root.querySelector('.scene'),
 		entry.create({ product, videoUrl: face || videoUrl, zoom, trailFade }),
-		mountOptions,
+		{ ...mountOptions, tune: { ...(calm ? entry.calm : undefined), ...tune } },
 	)
 }

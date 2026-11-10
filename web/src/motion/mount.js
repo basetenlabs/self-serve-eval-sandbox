@@ -37,10 +37,13 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
  * @param {number} [options.settle=2.5]     Reduced motion: seconds the scene runs before it rests.
  * @param {boolean} [options.reducedMotion] Force the reduced-motion behaviour on or off (default: the media query).
  * @param {Function} [options.Pane]         Tweakpane's `Pane` class, to tune the scene's parameters live.
+ * @param {Record<string, any>} [options.tune]  Sets the scene's own parameters, by the names its
+ *   tuning panel shows: `{ 'Cube swaps/Density': 0.05, 'Cube oscillation/Speed': 0.5 }` (the label
+ *   alone works when it is unique). A name the scene does not have is warned about in the console.
  * @param {(reason: 'initialization' | 'context-lost', error?: unknown) => void} [options.onFallback]
  */
 export function mountScene(container, scene, options = {}) {
-	const { poster, settle = 2.5, Pane, onFallback } = options
+	const { poster, settle = 2.5, Pane, tune, onFallback } = options
 	const media = window.matchMedia(REDUCED_MOTION)
 	const reduced = () => options.reducedMotion ?? media.matches
 	let runtime = null
@@ -140,7 +143,7 @@ export function mountScene(container, scene, options = {}) {
 	}
 
 	try {
-		runtime = createWebGLRuntime(container, scene, { debug: Boolean(Pane), Pane })
+		runtime = createWebGLRuntime(container, scene, { debug: Boolean(Pane), Pane, tune })
 		container.dataset.webglState = 'ready'
 		// Context-loss events do not bubble; capture them from the child canvas.
 		container.addEventListener('webglcontextlost', onContextLost, true)

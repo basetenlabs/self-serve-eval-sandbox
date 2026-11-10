@@ -1,7 +1,7 @@
 import { Scene, WebGLRenderer } from '../../lib/three.js'
 import { createCamera, updateCameraAspect } from './camera.js'
 import { disposeObject3D, materialTextures } from './dispose.js'
-import { createNullGui } from './gui.js'
+import { createNullGui, createTuningGui } from './gui.js'
 import { createPointer } from './pointer.js'
 /**
  * Mounts a scene inside `container`: creates canvas, renderer, camera, pointer
@@ -85,7 +85,7 @@ export function createWebGLRuntime(container, definition, options = {}) {
 				if (!gui) {
 					// Without the Tweakpane class the scene binds to a panel that does nothing.
 					if (!options.Pane) {
-						gui = createNullGui()
+						gui = options.tune ? createTuningGui(options.tune) : createNullGui()
 						return gui
 					}
 					guiElement = Object.assign(document.createElement('div'), {
@@ -100,6 +100,10 @@ export function createWebGLRuntime(container, definition, options = {}) {
 			},
 		}
 		const controller = definition.create(context) ?? {}
+		// Values passed as `tune`: their change handlers run now that the scene exists
+		gui?.flush?.()
+		if (options.tune && gui?.unused?.length)
+			console.warn(`${definition.name}: no parameter named ${gui.unused.join(', ')}`)
 		defer(() => controller.dispose?.())
 		renderer.render(scene, camera)
 		const resizeObserver = new ResizeObserver(() => {

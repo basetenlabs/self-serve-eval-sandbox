@@ -21,6 +21,26 @@ export const reducedMotion = () => window.matchMedia(REDUCED_MOTION_QUERY).match
 /** The signature curve: buttons, chevrons, lifting cells, clip-path wipes. 0.4s. */
 export const EASE_LIFT = 'cubic-bezier(0.75, 0, 0.1, 0.99)'
 
+/**
+ * One controller of a kind per element. `initMotion` skips an element that already has one, and a
+ * direct call (`steps(list, …)`) replaces whatever was there, so wiring twice never runs two timers.
+ */
+const controllers = new WeakMap()
+const claimed = (element, kind) => controllers.get(element)?.has(kind) ?? false
+function claim(element, kind, stop) {
+	let kinds = controllers.get(element)
+	if (!kinds) controllers.set(element, (kinds = new Map()))
+	kinds.set(kind, stop)
+}
+/** Forgets the element's controller of that kind (only `owner`, when given); `stop: true` also stops it. */
+function release(element, kind, { stop = false, owner } = {}) {
+	const kinds = controllers.get(element)
+	const current = kinds?.get(kind)
+	if (!current || (owner && current !== owner)) return
+	kinds.delete(kind)
+	if (stop) current()
+}
+
 /* ---------- Tabs ---------- */
 
 /**
@@ -490,6 +510,7 @@ const PAUSE_ICON =
  * `stack`: a `.bt-fade-stack` whose children follow the steps (artwork, cards).
  */
 export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
+	release(list, '.bt-steps', { stop: true })
 	const rows = [...list.children]
 	const slides = stack ? [...stack.children] : []
 	const desktop = window.matchMedia('(min-width: 801px)')
@@ -620,9 +641,10 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 	if (reducedMotion()) timer.pause('manual')
 	sync()
 
-	return {
+	const controller = {
 		timer,
 		dispose() {
+			release(list, '.bt-steps', { owner: controller.dispose })
 			stopTimer?.()
 			unsubscribe()
 			offProgress()
@@ -639,6 +661,8 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 			control.remove()
 		},
 	}
+	claim(list, '.bt-steps', controller.dispose)
+	return controller
 }
 
 /* ---------- Accordion ---------- */
@@ -1427,8 +1451,15 @@ export function initMotion(root = document) {
 	const stops = []
 	const each = (selector, start) => {
 		for (const element of root.querySelectorAll(selector)) {
-			const stop = start(element)
-			stops.push(typeof stop === 'function' ? stop : () => stop?.dispose?.())
+			// Already wired, by an earlier initMotion or by a block (mountFeatures wires its own steps)
+			if (claimed(element, selector)) continue
+			const result = start(element)
+			const stop = typeof result === 'function' ? result : () => result?.dispose?.()
+			if (!claimed(element, selector)) claim(element, selector, stop)
+			stops.push(() => {
+				release(element, selector, { owner: stop })
+				stop()
+			})
 		}
 	}
 	const find = (selector) => (selector ? document.querySelector(selector) : undefined)

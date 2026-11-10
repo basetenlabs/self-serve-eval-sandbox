@@ -153,7 +153,24 @@ const gridFragmentShader = /* glsl */ `
   }
 `
 /**
+ * The floor at rest most of the time, for a scene beside working UI: 4 blocks swap per round
+ * instead of 18, twice as slowly, with a 3s pause; the bob and the breathing squares at half.
+ * The hero cube and its hover are unchanged. Pass as `tune` (or `calm: true` on `mountProductHero`).
+ */
+export const SANDBOX_CALM = {
+	'Cube swaps/Density': 0.05,
+	'Cube swaps/Duration (s)': 2.4,
+	'Cube swaps/Pause (s)': 3,
+	'Cube oscillation/Amplitude': 0.02,
+	'Cube oscillation/Speed': 0.5,
+	'Grid squares/Speed': 0.5,
+}
+
+/**
  * Sandbox (yellow): the hero cube floats over a 9×9 floor of cubes that keep swapping places.
+ * Tunable through `mountScene`'s `tune`: `Cube swaps/Density` (0.225), `Cube swaps/Duration (s)`
+ * (1.2), `Cube swaps/Pause (s)` (0.5), `Cube oscillation/Amplitude` (0.04), `/Frequency` (2.8),
+ * `/Speed` (1), `Grid squares/Speed` (1), `/Noise amplitude` (1), `/Noise frequency` (0.88).
  * @param {import('./shared.js').ProductHeroOptions} [options]
  */
 export function createSandboxHeroScene({
