@@ -248,3 +248,55 @@ label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
 .ev-run-card:active { background: var(--color-lightGrey1); }
 .ev-meter { display: block; block-size: 2px; background: var(--color-lightGrey2); }
 .ev-meter > i { display: block; block-size: 100%; background: var(--color-green); transition: width .7s var(--ease); }
+
+/* ---------- Run page ---------- */
+.ev-title { margin: 0; font: 400 40px/1.1 var(--beausite); letter-spacing: -.02em; }
+@media (min-width: 801px) { .ev-title { font-size: 56px; } }
+.ev-figure { font: 400 56px/1 var(--beausite); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+
+/* The five steps: columns under a rule, Black once reached, Light Grey 2 before; the current one on Light Grey 1. */
+.ev-pipeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 var(--grid-gap); margin: 0; padding: 0; list-style: none; }
+@media (min-width: 640px) { .ev-pipeline { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 16px; } }
+@media (min-width: 1025px) { .ev-pipeline { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.ev-pipeline > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 12px; border-top: 1px solid var(--color-black); transition: background-color .5s; }
+.ev-pipeline > li[data-state=todo] { border-top-color: var(--color-lightGrey2); }
+.ev-pipeline > li[data-state=now] { background: var(--color-lightGrey1); }
+.ev-pipeline .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 400 12px/1.4 var(--geist-mono); letter-spacing: .02em; text-transform: uppercase; }
+.ev-pipeline > li[data-state=todo] .head { color: var(--color-darkGrey2); }
+.ev-pipeline .tick { display: grid; place-items: center; inline-size: 16px; block-size: 16px; background: var(--color-black); color: var(--color-white); }
+.ev-pipeline .what { display: none; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
+.ev-pipeline .count { font: 400 16px/1.4 var(--beausite); font-variant-numeric: tabular-nums; }
+.ev-pipeline > li[data-state=todo] .count { color: var(--color-darkGrey2); }
+@media (min-width: 640px) {
+  .ev-pipeline > li { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 12px 16px; }
+  .ev-pipeline .what { display: block; }
+  .ev-pipeline .count { margin-top: 4px; font-size: 24px; line-height: 1.3; letter-spacing: -.01em; }
+}
+
+/* A Black terminal block, like the cube's terminal face. */
+.ev-terminal { margin: 0; overflow: auto; padding: 12px 16px; background: var(--color-black); color: var(--color-white); font: 400 12px/1.6 var(--geist-mono); white-space: pre-wrap; }
+
+/* Attempt and sandbox tiles; a live attempt shows its steps as 2px lines, the current one pulsing. */
+.ev-tone { position: relative; color: var(--color-black); }
+.ev-tone.boot { background: var(--color-lightGrey1); }
+.ev-tone.setup { background: var(--color-lightGrey2); }
+.ev-tone.tests { background: var(--color-darkGrey1); color: var(--color-white); }
+.ev-tone.judge { background: var(--color-lightGold); }
+.ev-tone.failed { background: var(--color-lightGrey1); color: var(--color-darkGrey2); }
+.ev-tone.invalid { background: var(--color-white); border: 1px solid var(--color-gold); color: var(--color-darkGrey1); }
+.ev-tone.idle { background: var(--color-white); border: 1px dashed var(--color-lightGrey3); color: var(--color-darkGrey2); }
+.ev-tone.verifier { background: var(--color-white); border: 1px solid var(--color-darkGrey3); }
+.ev-cell-button { display: block; inline-size: 100%; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.ev-cell-button:hover > .ev-tone, .ev-cell-button:focus-visible > .ev-tone { outline: 1px solid var(--color-black); outline-offset: -1px; }
+.ev-cell-button:focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
+.ev-fleet { display: grid; grid-template-columns: repeat(auto-fill, minmax(16px, 1fr)); gap: 2px; }
+
+/* The board: the system table's head, rows on hairlines, attempt tiles 2px apart. */
+.ev-board > table { inline-size: 100%; table-layout: fixed; border-collapse: collapse; }
+.ev-board th { block-size: 40px; padding: 0 2px; background: var(--color-lightGrey1); text-align: left; font: 400 10px/1.4 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-darkGrey2); }
+.ev-board th:first-child { padding-inline-start: 12px; }
+.ev-board td { padding: 2px; border-bottom: 1px solid var(--color-lightGrey2); vertical-align: middle; }
+.ev-board td.pr { padding: 8px 12px; }
+.ev-board tr[data-out] td, .ev-board-cards > li[data-out] { opacity: .55; }
+.ev-board-cards { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-lightGrey2); }
+.ev-board-cards > li { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--color-lightGrey2); }

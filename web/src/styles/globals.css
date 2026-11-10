@@ -93,6 +93,17 @@
   --color-gold-dark: var(--color-darkGold);
   --color-gold-light: var(--color-lightGold);
   --color-gold-black: var(--color-blackGold);
+  /* The system's own names, for markup that means the token itself. */
+  --color-lightGrey1: var(--color-lightGrey1);
+  --color-lightGrey2: var(--color-lightGrey2);
+  --color-lightGrey3: var(--color-lightGrey3);
+  --color-darkGrey1: var(--color-darkGrey1);
+  --color-darkGrey2: var(--color-darkGrey2);
+  --color-darkGrey3: var(--color-darkGrey3);
+  --color-lightGreen: var(--color-lightGreen);
+  --color-lightPink: var(--color-lightPink);
+  --color-lightGold: var(--color-lightGold);
+  --color-lightBlue: var(--color-lightBlue);
   --color-grey-1: var(--color-darkGrey1);
   --color-grey-2: var(--color-darkGrey2);
 

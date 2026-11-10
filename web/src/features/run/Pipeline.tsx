@@ -1,8 +1,7 @@
-import { CheckIcon } from "lucide-react";
 import { isActive, LiveDot } from "@/components/brand";
+import { Tick } from "@/components/brand/icons";
 import { pipeline } from "@/lib/stages";
 import type { Run } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 /**
  * The run's five steps as brand columns. Done and current steps carry the solid rule; steps not
@@ -14,29 +13,15 @@ export function Pipeline({ run }: { run: Run }) {
   // A run that failed or stopped won't reach its remaining steps, so they read "–", not "Not yet".
   const active = isActive(run.phase);
   return (
-    <ol className="grid gap-x-1 sm:grid-cols-3 sm:gap-y-4 lg:grid-cols-5" aria-label="Run steps">
+    <ol className="ev-pipeline" aria-label="Run steps">
       {steps.map((s, i) => (
-        <li
-          key={s.key}
-          aria-current={s.state === "now" ? "step" : undefined}
-          className={cn(
-            "relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-2.5 transition-colors duration-500 sm:block sm:pt-3 sm:pb-4",
-            s.state === "todo" ? "border-t border-dashed border-line" : "border-t border-column-rule",
-            s.state === "now" && "bg-node",
-          )}
-        >
-          <div className="flex items-center gap-2 sm:justify-between">
-            <span className={cn("label-mono", s.state === "todo" ? "text-muted-foreground" : "text-foreground")}>
-              {String(i + 1).padStart(2, "0")} · {s.title}
-            </span>
-            {s.state === "done" ? (
-              <span className="grid size-4 place-items-center bg-primary text-primary-foreground" aria-label="Done"><CheckIcon className="size-3" strokeWidth={3} /></span>
-            ) : s.state === "now" ? <LiveDot className="size-2" /> : null}
+        <li key={s.key} data-state={s.state} aria-current={s.state === "now" ? "step" : undefined}>
+          <div className="head">
+            <span className="flex items-center gap-2"><span className="bt-numeral">{String(i + 1).padStart(2, "0")}</span>{s.title}</span>
+            {s.state === "done" ? <span className="tick" aria-label="Done"><Tick /></span> : s.state === "now" ? <LiveDot /> : null}
           </div>
-          <div className="mt-1.5 text-[13px] leading-snug text-muted-foreground max-sm:hidden">{s.what}</div>
-          <div className={cn("num text-[15px] leading-6 sm:mt-3 sm:text-[18px]", s.state === "todo" && !s.count && "text-muted-foreground")}>
-            {s.count ?? (s.state === "todo" && (active || run.phase === "done") ? "Not yet" : "–")}
-          </div>
+          <div className="what">{s.what}</div>
+          <div className="count">{s.count ?? (s.state === "todo" && (active || run.phase === "done") ? "Not yet" : "–")}</div>
         </li>
       ))}
     </ol>

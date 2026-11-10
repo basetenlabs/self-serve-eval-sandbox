@@ -1,6 +1,6 @@
-import { ArrowUpRightIcon } from "lucide-react";
 import type * as React from "react";
 import { Swatch } from "@/components/brand";
+import { External } from "@/components/brand/icons";
 import { Tip } from "@/components/ui/tooltip";
 import { clock, secondsSince, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
@@ -8,19 +8,21 @@ import { CHECK, failReason, isFinal, isLive, STAGE, STEPS, stepIndex, type Tone 
 import type { BoardRow, Cell, Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** Fills for each live step. The agent's step takes the model's own colour; the judge is gold, the outside world. */
+/** Fills for each step, as system tiles.
+ * The agent codes on its model's Light step and a solve fills the model's Base step; hidden tests are Dark Grey 1;
+ * the judges are gold, the outside world. */
 export function toneStyle(tone: Tone, swatch?: SwatchT): { className: string; style?: React.CSSProperties } {
   switch (tone) {
-    case "boot": return { className: "bg-node stripes animate-stripe text-foreground" };
-    case "setup": return { className: "bg-node-2 stripes animate-stripe text-foreground" };
-    case "check": return { className: "bg-node-2 stripes animate-stripe text-foreground" };
-    case "agent": return { className: "stripes animate-stripe", style: { background: swatch?.fill, color: swatch?.ink } };
-    case "tests": return { className: "bg-[#575D56] text-white stripes animate-stripe dark:bg-[#A2AE9D] dark:text-black" };
-    case "judge": return { className: "bg-[#FFBE4D] text-black stripes animate-stripe" };
-    case "solved": return { className: "", style: { background: swatch?.fill, color: swatch?.ink } };
-    case "failed": return { className: "bg-node text-muted-foreground" };
-    case "invalid": return { className: "bg-[#FFEDC4] text-[#2E261E] dark:bg-[#2E261E] dark:text-[#FFBE4D]" };
-    default: return { className: "placeholder-cell text-muted-foreground" };
+    case "boot": return { className: "ev-tone boot live" };
+    case "setup": return { className: "ev-tone setup live" };
+    case "check": return { className: "ev-tone setup live" };
+    case "agent": return { className: "ev-tone live", style: { background: swatch?.tint, color: "var(--color-black)" } };
+    case "tests": return { className: "ev-tone tests live" };
+    case "judge": return { className: "ev-tone judge live" };
+    case "solved": return { className: "ev-tone", style: { background: swatch?.fill, color: swatch?.ink } };
+    case "failed": return { className: "ev-tone failed" };
+    case "invalid": return { className: "ev-tone invalid" };
+    default: return { className: "ev-tone idle" };
   }
 }
 
@@ -34,18 +36,18 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
   const rows = [...b.rows].sort((x, y) => Number(x.check.stage === "left-out") - Number(y.check.stage === "left-out"));
   const cell = (row: BoardRow, m: Model) => {
     const c = row.cells.find((x) => x.model === m.key);
-    if (!c) return <div className="placeholder-cell h-12" />;
+    if (!c) return <div className="ev-tone idle h-12" />;
     const body = <AttemptCell c={c} swatch={colors[c.model]} now={now} judged={judged} />;
     return onOpen && isFinal(c) ? (
       <button type="button" onClick={() => onOpen(row.id)} aria-label={`${row.repo}#${row.pr}, ${m.label}: open the attempt`}
-        className="block w-full text-left transition-[box-shadow] hover:shadow-[0_0_0_1px_var(--foreground)] focus-visible:outline-offset-1">
+        className="ev-cell-button">
         {body}
       </button>
     ) : body;
   };
   return (
     <>
-      <div className="overflow-x-auto bg-surface shadow-[inset_0_0_0_1px_var(--frame)] max-md:hidden">
+      <div className="ev-board overflow-x-auto max-md:hidden">
         <table className="w-full table-fixed border-collapse" style={{ minWidth: 300 + 132 + models.length * 156 }}>
           <colgroup>
             <col />
@@ -53,36 +55,36 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
             {models.map((m) => <col key={m.key} className="w-[156px]" />)}
           </colgroup>
           <thead>
-            <tr className="border-b border-rule">
-              <th className="label-mono h-10 px-3 text-left font-normal text-muted-foreground">Pull request</th>
-              <th className="label-mono h-10 px-1 text-left font-normal text-muted-foreground">Check</th>
+            <tr>
+              <th>Pull request</th>
+              <th>Check</th>
               {models.map((m) => (
-                <th key={m.key} className="h-10 px-1 text-left font-normal">
-                  <span className="label-mono flex min-w-0 items-center gap-2 leading-tight text-foreground" title={m.label}><Swatch swatch={colors[m.key]} /><span className="line-clamp-2">{m.label}</span></span>
+                <th key={m.key}>
+                  <span className="flex min-w-0 items-center gap-2 leading-tight text-black" title={m.label}><Swatch swatch={colors[m.key]} /><span className="line-clamp-2">{m.label}</span></span>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className={cn("border-b border-frame last:border-0", row.check.stage === "left-out" && "opacity-55")}>
-                <td className="px-3 py-2"><PullTitle row={row} /></td>
-                <td className="px-1 py-1.5"><CheckCell row={row} now={now} active={active} /></td>
-                {models.map((m) => <td key={m.key} className="px-1 py-1.5">{cell(row, m)}</td>)}
+              <tr key={row.id} data-out={row.check.stage === "left-out" || undefined}>
+                <td className="pr"><PullTitle row={row} /></td>
+                <td><CheckCell row={row} now={now} active={active} /></td>
+                {models.map((m) => <td key={m.key}>{cell(row, m)}</td>)}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <ul className="grid gap-px bg-frame shadow-[0_0_0_1px_var(--frame)] md:hidden" aria-label="Board">
+      <ul className="ev-board-cards md:hidden" aria-label="Board">
         {rows.map((row) => (
-          <li key={row.id} className={cn("grid gap-2 bg-surface p-3", row.check.stage === "left-out" && "opacity-55")}>
+          <li key={row.id} data-out={row.check.stage === "left-out" || undefined}>
             <PullTitle row={row} />
             {row.check.stage !== "passed" && <CheckCell row={row} now={now} active={active} />}
             <div className="grid grid-cols-2 gap-1">
               {models.map((m) => (
                 <div key={m.key} className="min-w-0">
-                  <div className="label-mono mb-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground"><Swatch swatch={colors[m.key]} size={8} /><span className="truncate">{m.label}</span></div>
+                  <div className="label-xs mb-1 flex min-w-0 items-center gap-1.5 text-muted-foreground"><Swatch swatch={colors[m.key]} size={8} /><span className="truncate">{m.label}</span></div>
                   {cell(row, m)}
                 </div>
               ))}
@@ -97,12 +99,12 @@ export function Board({ run, models, colors, now, onOpen }: { run: Run; models: 
 function PullTitle({ row }: { row: BoardRow }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-[14px] font-medium" title={row.title}>{row.title || `#${row.pr}`}</div>
-      <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-        {row.language && <span className="rounded-chip bg-node px-1 text-[10px] uppercase text-foreground">{langShort(row.language)}</span>}
+      <div className="truncate text-[14px]" title={row.title}>{row.title || `#${row.pr}`}</div>
+      <div className="mt-0.5 flex items-center gap-2 font-mono text-[12px] text-muted-foreground">
+        {row.language && <span className="bt-badge">{langShort(row.language)}</span>}
         {row.url ? (
-          <a href={row.url} target="_blank" rel="noopener" className="inline-flex min-w-0 items-center gap-0.5 hover:text-foreground hover:underline">
-            <span className="truncate">{row.repo}#{row.pr}</span><ArrowUpRightIcon className="size-3 shrink-0" />
+          <a href={row.url} target="_blank" rel="noopener" className="inline-flex min-w-0 items-center gap-1 hover:text-black">
+            <span className="truncate">{row.repo}#{row.pr}</span><External />
           </a>
         ) : <span className="truncate">{row.repo}#{row.pr}</span>}
         {row.lines ? <span className="shrink-0">±{row.lines}</span> : null}
@@ -115,14 +117,14 @@ function CheckCell({ row, now, active }: { row: BoardRow; now: number; active: b
   const info = CHECK[row.check.stage] ?? { label: row.check.stage, tone: "idle" as Tone };
   const live = info.tone === "check";
   const passed = row.check.stage === "passed";
-  const { className, style } = live ? toneStyle("check") : passed ? { className: "bg-node text-foreground", style: undefined } : toneStyle("idle");
+  const { className, style } = live ? toneStyle("check") : passed ? { className: "ev-tone failed text-black", style: undefined } : toneStyle("idle");
   const body = (
     <div className={cn("flex h-12 flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
-        <span className="label-mono truncate text-[10.5px]">{passed ? "✓ " : ""}{info.label}</span>
-        {live && active && row.check.at && <span className="num font-mono text-[11px]">{clock(secondsSince(row.check.at, now))}</span>}
+        <span className="label-xs truncate">{passed ? "✓ " : ""}{info.label}</span>
+        {live && active && row.check.at && <span className="num font-mono text-[12px]">{clock(secondsSince(row.check.at, now))}</span>}
       </div>
-      {row.check.why && <div className="mt-0.5 truncate text-[11px] opacity-80" title={row.check.why}>{row.check.why}</div>}
+      {row.check.why && <div className="mt-0.5 truncate text-[12px]" title={row.check.why}>{row.check.why}</div>}
     </div>
   );
   return row.check.why ? <Tip content={row.check.why}>{body}</Tip> : body;
@@ -137,24 +139,24 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
   let sub: React.ReactNode = null;
   if (live) {
     sub = (
-      <div className="mt-1.5 flex gap-0.5" aria-hidden>
+      <div className="mt-1.5 flex gap-[2px]" aria-hidden>
         {Array.from({ length: steps }, (_, i) => (
-          <i key={i} className={cn("h-[3px] flex-1 bg-current", i < step ? "opacity-90" : i === step ? "animate-pulse-dot opacity-90" : "opacity-20")} />
+          <i key={i} className={cn("h-[2px] flex-1 bg-current", i < step ? "" : i === step ? "animate-pulse-dot" : "opacity-20")} />
         ))}
       </div>
     );
   } else if (c.stage === "solved" || c.stage === "failed") {
     const line = [c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ");
-    sub = <div className="mt-0.5 truncate font-mono text-[11px] opacity-80" title={line}>{line}</div>;
+    sub = <div className="mt-0.5 truncate font-mono text-[12px]" title={line}>{line}</div>;
   } else if (c.stage === "invalid") {
-    sub = <div className="mt-0.5 truncate text-[11px] opacity-80" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
+    sub = <div className="mt-0.5 truncate text-[12px]" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
   }
   const glyph = c.stage === "solved" ? "✓ " : c.stage === "failed" ? "✕ " : c.stage === "invalid" ? "! " : "";
   const cell = (
     <div key={c.stage} className={cn("flex h-12 animate-fade flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
-        <span className="label-mono truncate text-[10.5px]">{glyph}{failReason(c) ?? info.label}</span>
-        {live && c.started_at && <span className="num font-mono text-[11px]">{clock(secondsSince(c.started_at, now))}</span>}
+        <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}</span>
+        {live && c.started_at && <span className="num font-mono text-[12px]">{clock(secondsSince(c.started_at, now))}</span>}
       </div>
       {sub}
     </div>
@@ -170,12 +172,12 @@ export function BoardLegend({ judged }: { judged: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2" aria-label="Each attempt's steps">
       {items.map(([tone, label], i) => {
-        const { className, style } = toneStyle(tone, { fill: "#19E76E", ink: "#000", tint: "#D7FACE" });
+        const { className, style } = toneStyle(tone, { fill: "var(--color-green)", ink: "var(--color-black)", tint: "var(--color-lightGreen)" });
         return (
           <span key={tone} className="inline-flex items-center gap-2 text-[12px] text-muted-foreground">
             <span className={cn("size-3.5", className)} style={style} />
             {label}
-            {i < items.length - 1 && <span aria-hidden className="ml-3 text-line">→</span>}
+            {i < items.length - 1 && <span aria-hidden className="ml-3 text-darkGrey3">→</span>}
           </span>
         );
       })}

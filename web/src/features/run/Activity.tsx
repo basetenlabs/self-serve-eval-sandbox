@@ -66,10 +66,10 @@ export function Activity({ feed, colors }: { feed: Event[]; colors: Record<strin
           {feed.map((e) => {
             const { className, style } = toneStyle(e.tone, e.model ? colors[e.model] : undefined);
             return (
-              <li key={e.id} className={cn("grid grid-cols-[12px_1fr_auto] gap-3 border-b border-frame py-2.5 text-[13px] leading-snug", e.at > fresh && "animate-enter")}>
-                <span className={cn("mt-1 size-3", className, "animate-none")} style={style} aria-hidden />
+              <li key={e.id} className={cn("grid grid-cols-[10px_1fr_auto] gap-3 border-b border-lightGrey2 py-3 text-[14px] leading-snug", e.at > fresh && "animate-enter")}>
+                <span className={cn("mt-1.5 size-2.5", className)} style={style} aria-hidden />
                 <span className="min-w-0"><b className="font-medium">{e.who}</b> <span className="text-muted-foreground">{e.text}</span></span>
-                <time className="num font-mono text-[11px] text-muted-foreground">
+                <time className="num font-mono text-[12px] text-muted-foreground">
                   {new Date(e.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}
                 </time>
               </li>
@@ -77,7 +77,7 @@ export function Activity({ feed, colors }: { feed: Event[]; colors: Record<strin
           })}
         </ol>
       ) : (
-        <div className="placeholder-cell grid h-40 place-items-center px-6 text-center text-[13px] text-muted-foreground">
+        <div className="bt-empty grid h-40 place-items-center px-6 text-center">
           Events stream in here as sandboxes boot, agents code and the judges grade.
         </div>
       )}
