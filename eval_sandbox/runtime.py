@@ -10,7 +10,6 @@ import builtins
 import hashlib
 import io
 import json
-import mmap
 import os
 import re
 import secrets
@@ -214,6 +213,33 @@ def until_ready(command):
     return command()
 
 
+# Above this size Blaxel's write_binary sends 5 MB parts, each sliced from the content it is given
+# (blaxel/core/sandbox/sync/filesystem.py); a test keeps this equal to the SDK's.
+MULTIPART_THRESHOLD = 5 * 1024 * 1024
+
+
+class FileParts:
+    """A file as write_binary's multipart upload sees it: a length, and slices read from disk only
+    when asked. A task's source is about 200 MB and an attempt per model uploads it at once: read
+    whole, 20 copies filled the hosted 8 GB and the kernel killed the run. A memory mapping fails
+    on the hosted volume (virtiofs: "No such device"). Each slice opens the file for itself, so the
+    SDK's part threads share nothing."""
+
+    def __init__(self, path: Path):
+        self.path, self.size = path, path.stat().st_size
+
+    def __len__(self) -> int:
+        return self.size
+
+    def __getitem__(self, part: slice) -> bytes:
+        start, stop, step = part.indices(self.size)
+        if step != 1:
+            raise ValueError("FileParts reads contiguous slices only")
+        with self.path.open("rb") as file:
+            file.seek(start)
+            return file.read(max(0, stop - start))
+
+
 def upload(name: str, local: Path, remote: str) -> None:
     sandbox = get(name)
 
@@ -227,14 +253,10 @@ def upload(name: str, local: Path, remote: str) -> None:
             result = execute(name, f"mkdir -p {shlex.quote(remote)} && tar -xf {target} -C {shlex.quote(remote)} && rm {target}", timeout=120)
             if result.code:
                 raise RuntimeError("Could not unpack uploaded files.")
-        elif local.stat().st_size:
-            # Mapped, not read: a task's source is about 200 MB, and an attempt per model starts at once.
-            # Read into memory, 20 copies filled an 8 GB host and the kernel killed the run. Mapped pages
-            # are the file's own cache, which the kernel can drop; the upload sends 5 MB parts from it.
-            with local.open("rb") as file, mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                sandbox.fs.write_binary(remote, data)
+        elif local.stat().st_size > MULTIPART_THRESHOLD:
+            sandbox.fs.write_binary(remote, FileParts(local))
         else:
-            sandbox.fs.write_binary(remote, b"")
+            sandbox.fs.write_binary(remote, local.read_bytes())
 
     try:
         twice(transfer)

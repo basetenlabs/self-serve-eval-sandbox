@@ -259,6 +259,20 @@ def compact_stream(path: Path) -> None:
 
 
 PROXY_OUTPUT = re.compile(r"\bout=(\d+)")
+# The proxy waiting out a provider's 429 before Claude Code sees it (docker/proxy.py).
+PROXY_WAIT = re.compile(r"rate-limited: waited ([\d.]+)s over (\d+) retries")
+
+
+def add_proxy_waits(agent: dict, proxy_log: Path) -> dict:
+    """Count the proxy's rate-limit waits with Claude Code's own retries, so the report keeps them out of
+    the model's working time."""
+    waits = PROXY_WAIT.findall(proxy_log.read_text(errors="replace")) if proxy_log.is_file() else []
+    if waits:
+        retries = sum(int(n) for _, n in waits)
+        agent["api_retries"] = (agent.get("api_retries") or 0) + retries
+        agent["rate_limited_retries"] = (agent.get("rate_limited_retries") or 0) + retries
+        agent["retry_wait_seconds"] = round((agent.get("retry_wait_seconds") or 0) + sum(float(s) for s, _ in waits), 1)
+    return agent
 
 
 def rebuild_usage(stream: Path, model: Model, proxy_log: Path | None = None) -> tuple[dict, bool]:
@@ -606,7 +620,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             ticket.unlink(missing_ok=True)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         redact_file(trial_dir / "proxy.log")
-        result["agent"] = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
+        result["agent"] = add_proxy_waits(price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log"),
+                                          trial_dir / "proxy.log")
         if not ticket:
             charge(trial_dir, "agent", model.key, result["agent"].get("cost_usd"))
         charged = True

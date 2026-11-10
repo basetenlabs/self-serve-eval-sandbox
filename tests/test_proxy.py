@@ -1,6 +1,8 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("eval_proxy", Path(__file__).parents[1] / "docker" / "proxy.py")
 proxy = importlib.util.module_from_spec(SPEC)
@@ -55,6 +57,42 @@ class ReasoningGoesBack(unittest.TestCase):
     def test_streamed_reasoning_comes_back_as_a_thinking_block(self):
         answer = proxy.Answer(reasoning="Plan.", text="ok", finish_reason="stop")
         self.assertEqual(proxy.chat_to_anthropic(answer)["content"][0]["thinking"], "Plan.")
+
+
+class RateLimitsAreWaitedOut(unittest.TestCase):
+    """A run's attempts share one key; a provider's 429s are waited out here, not handed to Claude Code,
+    whose 10 quick retries lost GLM-5.3 Fast attempts to "Rate limit exceeded" on the hosted page."""
+
+    def answer(self, status, retry_after=None):
+        headers = {"retry-after": retry_after} if retry_after else {}
+        return SimpleNamespace(status=status, headers=headers, read=lambda: b"{}", close=lambda: None)
+
+    def ask(self, answers):
+        handler = object.__new__(proxy.Proxy)
+        handler.headers = {}
+        sleeps, lines = [], []
+        with mock.patch.object(proxy, "call_upstream", side_effect=answers), \
+                mock.patch.object(proxy.time, "sleep", sleeps.append), \
+                mock.patch.object(proxy, "log", lines.append):
+            up = handler._upstream("https://example.invalid/v1/chat/completions", b"{}", "anthropic")
+        return up, sleeps, lines
+
+    def test_a_429_is_asked_again_until_the_provider_answers(self):
+        up, sleeps, lines = self.ask([self.answer(429, "3"), self.answer(429), self.answer(200)])
+        self.assertEqual(up.status, 200)
+        self.assertEqual(len(sleeps), 2)
+        self.assertEqual(sleeps[0], 3.0)
+        self.assertRegex(lines[0], r"^rate-limited: waited [\d.]+s over 2 retries, then 200$")
+
+    def test_the_429_goes_back_once_the_wait_is_spent(self):
+        up, sleeps, lines = self.ask([self.answer(429, "30")] * 20)
+        self.assertEqual(up.status, 429)
+        self.assertEqual(sum(sleeps), proxy.RATE_LIMIT_WAIT_SEC)
+        self.assertIn("then 429", lines[0])
+
+    def test_other_errors_go_straight_back(self):
+        up, sleeps, lines = self.ask([self.answer(500)])
+        self.assertEqual((up.status, sleeps, lines), (500, [], []))
 
 
 if __name__ == "__main__":

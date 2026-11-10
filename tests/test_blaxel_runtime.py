@@ -121,19 +121,60 @@ class RuntimeTests(unittest.TestCase):
                 runtime.download("sb", "/workspace/.git/pr-eval.patch", Path(d) / "p")
             self.assertEqual(sandbox.fs.read_binary.call_count, 3)
 
-    def test_a_file_is_uploaded_from_its_mapping_not_read_into_memory(self):
-        # An attempt per model uploads a ~200 MB source at once; read whole, 20 of them filled the host.
+    def test_a_large_file_uploads_in_parts_read_from_disk_without_mmap(self):
+        # A task's ~200 MB source, uploaded by an attempt per model at once: read whole, 20 copies
+        # filled the hosted 8 GB; memory-mapped, every upload failed on the hosted volume
+        # (virtiofs: OSError 19, "No such device"). The real SDK's multipart code slices the parts.
+        from blaxel.core.sandbox.sync import filesystem as sdk
+        parts, sent = [], {}
+        fs = object.__new__(sdk.SyncSandboxFileSystem)
+        fs.format_path = lambda path: path
+        fs._initiate_multipart_upload = lambda path, permissions: {"uploadId": "u"}
+        def part(upload_id, number, data):
+            self.assertIsInstance(data, bytes)
+            parts.append(len(data))
+            sent[number] = data
+            return {"etag": str(number)}
+        fs._upload_part = part
+        fs._complete_multipart_upload = lambda upload_id, done: {"parts": len(done)}
+        sandbox = SimpleNamespace(fs=fs)
+        real_read_bytes = Path.read_bytes
+        def read_bytes(path):
+            if path.stat().st_size > sdk.MULTIPART_THRESHOLD:
+                raise AssertionError("a large upload was read whole")
+            return real_read_bytes(path)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(runtime, "get", return_value=sandbox), \
+                mock.patch("mmap.mmap", side_effect=OSError(19, "No such device")), \
+                mock.patch.object(Path, "read_bytes", read_bytes):
+            source = Path(d) / "source.tar.gz"
+            source.write_bytes(os.urandom(12 * 1024 * 1024 + 7))
+            runtime.upload("sb", source, "/tmp/source.tar.gz")
+            self.assertEqual(b"".join(sent[n] for n in sorted(sent)), real_read_bytes(source))
+        self.assertEqual(parts, [5 * 1024 * 1024, 5 * 1024 * 1024, 2 * 1024 * 1024 + 7])
+
+    def test_upload_splits_where_the_sdk_does(self):
+        from blaxel.core.sandbox.sync import filesystem as sdk
+        self.assertEqual(runtime.MULTIPART_THRESHOLD, sdk.MULTIPART_THRESHOLD)
+
+    def test_a_small_or_empty_file_uploads_as_bytes(self):
         seen = []
         sandbox = mock.Mock()
-        sandbox.fs.write_binary.side_effect = lambda remote, data: seen.append((type(data), bytes(data[:4]), len(data)))
+        sandbox.fs.write_binary.side_effect = lambda remote, data: seen.append((type(data), data))
         with tempfile.TemporaryDirectory() as d, mock.patch.object(runtime, "get", return_value=sandbox):
-            (Path(d) / "src.tar.gz").write_bytes(b"head" + b"x" * 100)
+            (Path(d) / "prompt.md").write_bytes(b"head" + b"x" * 100)
             (Path(d) / "empty").write_bytes(b"")
-            runtime.upload("sb", Path(d) / "src.tar.gz", "/tmp/source.tar.gz")
+            runtime.upload("sb", Path(d) / "prompt.md", "/tmp/instruction.md")
             runtime.upload("sb", Path(d) / "empty", "/tmp/empty")
-        self.assertEqual(seen[0][1:], (b"head", 104))
-        self.assertFalse(issubclass(seen[0][0], (bytes, bytearray)))
-        self.assertEqual(seen[1], (bytes, b"", 0))
+        self.assertEqual(seen, [(bytes, b"head" + b"x" * 100), (bytes, b"")])
+
+    def test_proxy_rate_limit_waits_count_as_retry_waits(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "proxy.log"
+            log.write_text("turn=1 /v1/messages shape=anthropic effort=high -> 200 in 3.0s out=10\n"
+                           "rate-limited: waited 12.5s over 3 retries, then 200\n"
+                           "rate-limited: waited 2.0s over 1 retries, then 200\n")
+            agent = runner.add_proxy_waits({"api_retries": 1, "rate_limited_retries": 1, "retry_wait_seconds": 0.5}, log)
+        self.assertEqual((agent["api_retries"], agent["rate_limited_retries"], agent["retry_wait_seconds"]), (5, 5, 15.0))
 
     def test_failed_patch_capture_is_not_a_model_failure(self):
         with mock.patch.object(runner, "sh", return_value=(1, "git failed", False)):

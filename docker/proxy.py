@@ -14,6 +14,7 @@ Stdlib only. Flags and env vars are interchangeable.
 import argparse
 import json
 import os
+import random
 import sys
 import threading
 import time
@@ -30,6 +31,13 @@ from typing import Any, Iterator
 HEARTBEAT_SEC = 10
 
 UPSTREAM_TIMEOUT_SEC = 600  # this leg is where the whole turn happens
+
+# How long one request waits out the provider's 429s before the proxy passes the 429 on. A key shared by every
+# attempt of a run gets rate-limited when many start at once, and Claude Code gives up after 10 quick retries
+# (about 3 to 6 minutes); the attempt was then lost to the provider, not the model. Under the client's own
+# 600 s request timeout. The proxy logs each wait so the report keeps it out of the model's working time.
+RATE_LIMIT_WAIT_SEC = 300
+RATE_LIMIT_BACKOFF_MAX_SEC = 30
 
 # Reasoning knobs a client might send. All dropped, so the forced level is the only one that decides anything.
 CLIENT_EFFORT_KEYS = ("reasoning_effort", "reasoning", "thinking", "output_config")
@@ -584,6 +592,20 @@ def _sse_data(line: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def rate_limit_delay(up: Upstream, retries: int, waited: float) -> float | None:
+    """Seconds to wait before asking again after this answer, or None to keep it: only a 429, and only while
+    the request's wait stays within RATE_LIMIT_WAIT_SEC. The provider's Retry-After when it gives one,
+    else a jittered exponential backoff."""
+    if up.status != 429:
+        return None
+    try:
+        delay = float(up.headers.get("retry-after") or "")
+    except (TypeError, ValueError):
+        delay = random.uniform(0.5, 1.0) * min(RATE_LIMIT_BACKOFF_MAX_SEC, 2 ** (retries + 1))
+    delay = min(max(delay, 0.5), RATE_LIMIT_BACKOFF_MAX_SEC)
+    return delay if waited + delay <= RATE_LIMIT_WAIT_SEC else None
+
+
 def call_upstream(path: str, body: bytes | None, headers: dict[str, str]) -> Upstream | Exception:
     """Call the upstream host, returning a 4xx or 5xx as a readable response rather than raising.
 
@@ -803,11 +825,23 @@ class Proxy(BaseHTTPRequestHandler):
         return CONFIG.upstream + "/chat/completions"
 
     def _upstream(self, url: str, body: bytes | None, shape: str) -> Upstream | None:
-        """Call the upstream, answering the client with a 502 and returning None if it was never reached."""
-        up = call_upstream(url, body, upstream_headers(self.headers))
-        if not hasattr(up, "status"):
-            self._send(502, error_body(up, shape))
-            return None
+        """Call the upstream, answering the client with a 502 and returning None if it was never reached.
+        A 429 is asked again after a wait, for up to RATE_LIMIT_WAIT_SEC, before it goes back to the client."""
+        waited, retries = 0.0, 0
+        while True:
+            up = call_upstream(url, body, upstream_headers(self.headers))
+            if not hasattr(up, "status"):
+                self._send(502, error_body(up, shape))
+                return None
+            delay = rate_limit_delay(up, retries, waited)
+            if delay is None:
+                break
+            up.read()
+            up.close()
+            time.sleep(delay)
+            waited, retries = waited + delay, retries + 1
+        if retries:
+            log(f"rate-limited: waited {waited:.1f}s over {retries} retries, then {up.status}")
         return up
 
     def _relay(self, up: Upstream) -> bytes:
