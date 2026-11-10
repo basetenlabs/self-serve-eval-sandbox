@@ -1,29 +1,24 @@
-import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-// Value chips: flat fill, 2px radius, mono. Colour only where it carries meaning.
-const badgeVariants = cva(
-  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-chip px-1.5 py-0.5 font-mono text-[11px] leading-4 uppercase tracking-[0.06em] [&_svg]:size-3",
-  {
-    variants: {
-      variant: {
-        default: "bg-node text-foreground",
-        solid: "bg-primary text-primary-foreground",
-        outline: "text-muted-foreground shadow-[inset_0_0_0_1px_var(--rule)]",
-        live: "bg-[#D7FACE] text-black dark:bg-[#213026] dark:text-[#19E76E]",
-        warn: "bg-warn-surface text-foreground dark:text-[#FFBE4D]",
-        danger: "bg-danger-surface text-[#AC0EB2] dark:text-[#FFA9FD]",
-        info: "bg-info-surface text-[#0065AD] dark:text-[#3DA6FF]",
-        delta: "bg-delta text-black",
-      },
-    },
-    defaultVariants: { variant: "default" },
-  },
-);
+// Status badges (baseten.css .bt-badge): a Light ramp ground with the ramp's Black text, always with a word.
+// Green is something Baseten runs that is live or healthy, gold waiting or a warning, pink failed or needing
+// attention, blue informational, grey inactive. Solid is the Black tag.
+type Variant = "default" | "solid" | "outline" | "live" | "warn" | "danger" | "info" | "delta" | "pink";
+const LOOK: Record<Variant, string> = {
+  default: "bt-badge",
+  solid: "bt-badge ev-badge-black",
+  outline: "bt-badge white",
+  live: "bt-badge green",
+  warn: "bt-badge gold",
+  danger: "bt-badge pink",
+  info: "bt-badge blue",
+  delta: "bt-badge pink regular",
+  pink: "bt-badge pink",
+};
 
-function Badge({ className, variant, ...props }: React.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
-  return <span data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />;
+function Badge({ className, variant = "default", ...props }: React.ComponentProps<"span"> & { variant?: Variant | null }) {
+  return <span data-slot="badge" className={cn(LOOK[variant ?? "default"], className)} {...props} />;
 }
 
-export { Badge, badgeVariants };
+export { Badge };

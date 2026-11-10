@@ -1,0 +1,119 @@
+/* The eval page's own parts (ev-*), built from the system's pieces in baseten.css. Where the App Builder Sandbox
+   already has a part (select, tabs, info note, switch, dialog, Black terminal block), the measurements are the same. */
+
+/* ---------- Frame: app bar, White surfaces on the texture, 12px apart ---------- */
+.ev-shell { display: flex; flex-direction: column; min-block-size: 100dvh; }
+.bt-appbar { position: relative; z-index: 30; flex-shrink: 0; }
+.bt-appbar .logo svg { inline-size: 117px; block-size: 22px; }
+.bt-appbar nav { align-items: center; min-inline-size: 0; }
+.bt-appbar nav a { white-space: nowrap; }
+.bt-appbar nav .crumb { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; }
+.bt-appbar .end { display: flex; align-items: center; gap: 12px; margin-inline-start: auto; }
+@media (max-width: 800.98px) { .bt-appbar .end { margin-inline-start: 0; } }
+.ev-main { display: flex; flex: 1; flex-direction: column; }
+.ev-main > .bt-surface:first-child { margin-top: var(--section-inset); }
+.ev-surface { padding: 24px var(--grid-gutter); }
+@media (min-width: 801px) { .ev-surface { padding-block: 32px 40px; } }
+.ev-surface.tight { padding-block: 24px; }
+.bt-footnote.ev-foot { margin-block: 0 var(--section-inset); background: var(--color-white); }
+.ev-foot code { font: 400 12px/1.4 var(--geist-mono); letter-spacing: .02em; color: var(--color-black); }
+
+/* A section opens with an eyebrow, then its heading at 32 (phones) or 40px, then a line of supporting copy. */
+.ev-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; margin-bottom: 32px; }
+.ev-head > div { display: flex; flex-direction: column; gap: 16px; min-inline-size: 0; }
+.ev-head h1, .ev-head h2 { margin: 0; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; text-wrap: balance; }
+@media (min-width: 801px) { .ev-head h1, .ev-head h2 { font-size: 40px; line-height: 1.1; } }
+.ev-head p { margin: 0; max-inline-size: 480px; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey1); }
+
+/* ---------- Controls the site has no class for, built from its parts ---------- */
+.bt-button .label { display: inline-flex; align-items: center; gap: 8px; }
+.bt-button .label > svg { flex-shrink: 0; }
+.bt-button.has-chevron.short .label { min-inline-size: 0; }
+.bt-button.full > span { inline-size: 100%; }
+.bt-button kbd { font: 400 10px/1 var(--geist-mono); letter-spacing: .08em; color: var(--color-darkGrey3); }
+
+/* A plain text action in a row of controls: Beausite 14px, Dark Grey 2, Black on hover. */
+.ev-text-button {
+  display: inline-flex; align-items: center; gap: 6px; min-block-size: 36px; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
+  font: 400 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); text-decoration: none; transition: color .3s;
+}
+.ev-text-button:hover { color: var(--color-black); }
+.ev-text-button:disabled { color: var(--color-darkGrey3); cursor: default; }
+.ev-text-button.small { min-block-size: 0; font-size: 12px; }
+
+/* Segmented choice: compact tab rows side by side in a Light Grey 1 strip; the chosen one is Black. */
+.ev-segments { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; background: var(--color-lightGrey1); }
+.ev-segments > button {
+  min-inline-size: 36px; block-size: 32px; margin: 0; padding: 0 12px; border: 0; background: none; cursor: pointer;
+  font: 400 14px/1.2 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); transition: color .3s, background-color .3s;
+}
+.ev-segments > button:hover { color: var(--color-black); }
+.ev-segments > button[aria-checked=true], .ev-segments > button[data-state=active] { background: var(--color-black); color: var(--color-white); }
+
+/* The skill's controls (bt-tabbar, bt-select, bt-info, bt-tip) used through Radix: its open and highlighted states. */
+.bt-tabbar > button { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.bt-tabbar > button:focus-visible { outline-offset: -2px; }
+.bt-tabbar > button .count { font: 400 12px/1 var(--geist-mono); color: var(--color-darkGrey3); }
+.bt-select.fit { inline-size: auto; min-inline-size: 144px; max-inline-size: 240px; }
+.ev-list { z-index: 70; animation: ev-drop .4s var(--ease-reveal); }
+.ev-list > .bt-menu { max-block-size: 320px; overflow-y: auto; }
+.bt-menu > [role=option][data-highlighted] { outline: 0; background: var(--color-lightGrey1); }
+[data-radix-popper-content-wrapper] > .bt-tip { position: relative; animation: ev-fade .3s ease-out; }
+@keyframes ev-drop { from { opacity: 0; transform: translateY(-8px); } }
+
+/* Checkbox: a 14px square on a Light Grey 3 edge; Black when ticked. */
+.ev-check {
+  display: grid; flex-shrink: 0; place-items: center; inline-size: 16px; block-size: 16px; margin: 0; padding: 0;
+  border: 1px solid var(--color-lightGrey3); background: var(--color-white); color: var(--color-white); cursor: pointer; transition: background-color .2s, border-color .2s;
+}
+.ev-check:hover { border-color: var(--color-darkGrey3); }
+.ev-check[data-state=checked] { background: var(--color-black); border-color: var(--color-black); }
+.ev-check:disabled { cursor: default; background: var(--color-lightGrey1); border-color: var(--color-lightGrey2); }
+
+/* A 7px square says a state: Black done, Green at work, Dark Pink failed, Gold waiting, Light Grey 3 not yet. */
+.ev-dot { display: inline-block; flex-shrink: 0; inline-size: 7px; block-size: 7px; background: var(--color-black); }
+.ev-dot.live { background: var(--color-green); animation: ev-pulse 1s infinite; }
+.ev-dot.ok { background: var(--color-green); }
+.ev-dot.bad { background: var(--color-darkPink); }
+.ev-dot.wait { background: var(--color-gold); }
+.ev-dot.idle { background: var(--color-lightGrey3); }
+
+/* Dialog: a White block on the nav's scrim. */
+.ev-scrim { position: fixed; inset: 0; z-index: 60; background: #00000054; backdrop-filter: blur(10px); animation: ev-fade .3s ease-out; }
+.bt-dialog.ev-dialog { position: fixed; top: 50%; left: 50%; z-index: 61; transform: translate(-50%, -50%); animation: ev-fade .3s ease-out; }
+.ev-dialog > div > p { margin-top: 8px; }
+
+/* Sheet: one task's attempts, a White block from the right edge on the same scrim. */
+.ev-sheet {
+  position: fixed; inset-block: 0; right: 0; z-index: 61; display: flex; flex-direction: column; inline-size: 100%; max-inline-size: 960px;
+  background: var(--color-white); outline: 0; animation: ev-slide .4s var(--ease-reveal);
+}
+@keyframes ev-slide { from { transform: translateX(24px); opacity: 0; } }
+.ev-close {
+  display: grid; place-items: center; flex-shrink: 0; inline-size: 36px; block-size: 36px; margin: 0; padding: 0; border: 0;
+  background: var(--color-lightGrey1); color: var(--color-black); cursor: pointer; transition: background-color .2s ease-out;
+}
+.ev-close:hover { background: var(--color-lightGrey2); }
+
+/* Messages after an action, bottom right: flat notice blocks, no shadow. */
+.ev-toasts { position: fixed; right: var(--section-inset); bottom: var(--section-inset); z-index: 90; display: flex; flex-direction: column; gap: 12px; inline-size: min(380px, calc(100vw - 2 * var(--section-inset))); margin: 0; padding: 0; outline: 0; list-style: none; }
+.ev-toast { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; background: var(--color-black); color: var(--color-white); animation: ev-slide .4s var(--ease-reveal); }
+.ev-toast > .title { font: 400 12px/1.2 var(--geist-mono); letter-spacing: .02em; text-transform: uppercase; }
+.ev-toast > .body { font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-lightGrey3); }
+.ev-toast.danger { background: var(--color-lightPink); color: var(--color-black); }
+.ev-toast.danger > .body { color: var(--color-darkGrey1); }
+
+/* Keyboard hint inside a button or a line of copy. */
+.ev-kbd { display: inline-flex; align-items: center; block-size: 18px; padding: 0 4px; border: 1px solid currentColor; font: 400 10px/1 var(--geist-mono); letter-spacing: .02em; opacity: .7; }
+
+/* Data table rows that open something. */
+.bt-table tr.ev-row { cursor: pointer; transition: background-color .2s; }
+.bt-table tr.ev-row:hover td, .bt-table tr.ev-row:focus-visible td { background: var(--color-lightGrey1); }
+.bt-table tr.ev-row:focus-visible { outline: 2px solid var(--color-black); outline-offset: -2px; }
+.bt-table td .sub { display: block; margin-top: 4px; font: 400 10px/1.2 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-darkGrey2); }
+
+/* Skeleton: Light Grey 1 blocks that breathe; no shimmer. */
+.ev-skeleton { background: var(--color-lightGrey1); animation: ev-pulse 2s ease-in-out infinite; }
+.bt-badge.ev-badge-black { --badge-background: var(--color-black); --badge-color: var(--color-white); }
+a.bt-badge { text-decoration: none; transition: background-color .3s; }
+a.bt-badge.green:hover { --badge-background: var(--color-green); }

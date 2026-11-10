@@ -1,37 +1,43 @@
-import { cva, type VariantProps } from "class-variance-authority";
-import { Slot } from "radix-ui";
 import * as React from "react";
+import { Chevron } from "@/components/brand/icons";
 import { cn } from "@/lib/utils";
 
-// Baseten buttons: square, mono, uppercase. Primary is solid Black (White in dark mode).
-const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap font-mono uppercase tracking-[0.04em] transition-[background-color,color,box-shadow,transform] duration-150 select-none disabled:pointer-events-none disabled:opacity-40 active:translate-y-px [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-  {
-    variants: {
-      variant: {
-        default: "bg-primary text-primary-foreground hover:bg-[#323432] dark:hover:bg-[#E3EAE1]",
-        outline: "bg-surface text-foreground shadow-[inset_0_0_0_1px_var(--rule)] hover:shadow-[inset_0_0_0_1px_var(--foreground)]",
-        secondary: "bg-node text-foreground hover:bg-node-2",
-        ghost: "text-foreground hover:bg-node",
-        danger: "bg-surface text-danger shadow-[inset_0_0_0_1px_var(--rule)] hover:bg-danger-surface hover:shadow-[inset_0_0_0_1px_var(--danger)]",
-        link: "h-auto px-0 normal-case tracking-normal font-sans underline-offset-4 hover:underline",
-      },
-      size: {
-        default: "h-10 px-4 text-[13px]",
-        sm: "h-8 px-3 text-[12px]",
-        lg: "h-12 px-5 text-[14px]",
-        icon: "size-10",
-        "icon-sm": "size-8",
-      },
-    },
-    defaultVariants: { variant: "default", size: "default" },
-  },
-);
+// Baseten's button (baseten.css .bt-button): square, 36px, Beausite 14px. Primary is Black, secondary Light Grey 1,
+// tertiary White with a hairline; each lifts into a little block on hover. A ghost is a plain text action and a
+// destructive trigger is a tertiary whose label says what it does.
+type Variant = "default" | "secondary" | "outline" | "danger" | "ghost" | "link";
+type Size = "default" | "sm" | "lg" | "icon" | "icon-sm";
+const LOOK: Record<Variant, string> = {
+  default: "bt-button",
+  secondary: "bt-button secondary",
+  outline: "bt-button tertiary",
+  danger: "bt-button tertiary",
+  ghost: "ev-text-button",
+  link: "ev-text-button",
+};
 
-function Button({ className, variant, size, asChild = false, ...props }:
-  React.ComponentProps<"button"> & VariantProps<typeof buttonVariants> & { asChild?: boolean }) {
-  const Comp = asChild ? Slot.Root : "button";
-  return <Comp data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />;
+export function buttonClass({ variant = "default", size, chevron, full, className }: { variant?: Variant; size?: Size; chevron?: boolean; full?: boolean; className?: string } = {}) {
+  return cn(LOOK[variant], variant !== "ghost" && variant !== "link" && chevron && "has-chevron", (full || size === "lg") && "full", className);
 }
 
-export { Button, buttonVariants };
+type Props = React.ComponentProps<"button"> & { variant?: Variant; size?: Size; asChild?: boolean; chevron?: boolean; full?: boolean };
+
+function face(children: React.ReactNode, variant: Variant, chevron?: boolean) {
+  if (variant === "ghost" || variant === "link") return children;
+  return (
+    <span>
+      <span className="label">{children}</span>
+      {chevron && <span className="chevron"><Chevron /></span>}
+    </span>
+  );
+}
+
+function Button({ className, variant = "default", size, asChild = false, chevron, full, children, type, ...props }: Props) {
+  const cls = buttonClass({ variant, size, chevron, full, className });
+  if (asChild && React.isValidElement<{ className?: string; children?: React.ReactNode }>(children)) {
+    return React.cloneElement(children, { ...props, className: cn(cls, children.props.className) } as object, face(children.props.children, variant, chevron));
+  }
+  return <button type={type ?? "button"} data-slot="button" className={cls} {...props}>{face(children, variant, chevron)}</button>;
+}
+
+export { Button };

@@ -8,7 +8,7 @@ type Push = (title: string, opts?: { body?: string; tone?: Item["tone"] }) => vo
 const ToastContext = React.createContext<Push>(() => {});
 export const useToast = () => React.useContext(ToastContext);
 
-/** Short confirmations ("Run started", "Copied") and errors, bottom right. */
+/** Short confirmations ("Run started") and errors, bottom right: a flat Black block, Light Pink for a problem. */
 export function Toaster({ children }: { children: React.ReactNode }) {
   const [items, setItems] = React.useState<Item[]>([]);
   const push = React.useCallback<Push>((title, opts) => {
@@ -22,16 +22,13 @@ export function Toaster({ children }: { children: React.ReactNode }) {
           <ToastPrimitive.Root
             key={t.id}
             onOpenChange={(open) => !open && setItems((list) => list.filter((x) => x.id !== t.id))}
-            className={cn(
-              "grid gap-0.5 bg-primary px-4 py-3 text-primary-foreground shadow-pop animate-slide-in data-[state=closed]:animate-fade",
-              t.tone === "danger" && "bg-[#AC0EB2] text-white",
-            )}
+            className={cn("ev-toast", t.tone === "danger" && "danger")}
           >
-            <ToastPrimitive.Title className="font-mono text-[12px] uppercase tracking-[0.06em]">{t.title}</ToastPrimitive.Title>
-            {t.body && <ToastPrimitive.Description className="text-[13px] opacity-85">{t.body}</ToastPrimitive.Description>}
+            <ToastPrimitive.Title className="title">{t.title}</ToastPrimitive.Title>
+            {t.body && <ToastPrimitive.Description className="body">{t.body}</ToastPrimitive.Description>}
           </ToastPrimitive.Root>
         ))}
-        <ToastPrimitive.Viewport className="fixed right-4 bottom-4 z-[60] flex w-[min(380px,calc(100vw-32px))] flex-col gap-2 outline-none" />
+        <ToastPrimitive.Viewport className="ev-toasts" />
       </ToastPrimitive.Provider>
     </ToastContext.Provider>
   );
