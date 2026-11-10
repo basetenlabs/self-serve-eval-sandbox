@@ -167,6 +167,15 @@ class RuntimeTests(unittest.TestCase):
             runtime.upload("sb", Path(d) / "empty", "/tmp/empty")
         self.assertEqual(seen, [(bytes, b"head" + b"x" * 100), (bytes, b"")])
 
+    def test_proxy_rate_limit_waits_count_as_retry_waits(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "proxy.log"
+            log.write_text("turn=1 /v1/messages shape=anthropic effort=high -> 200 in 3.0s out=10\n"
+                           "rate-limited: waited 12.5s over 3 retries, then 200\n"
+                           "rate-limited: waited 2.0s over 1 retries, then 200\n")
+            agent = runner.add_proxy_waits({"api_retries": 1, "rate_limited_retries": 1, "retry_wait_seconds": 0.5}, log)
+        self.assertEqual((agent["api_retries"], agent["rate_limited_retries"], agent["retry_wait_seconds"]), (5, 5, 15.0))
+
     def test_failed_patch_capture_is_not_a_model_failure(self):
         with mock.patch.object(runner, "sh", return_value=(1, "git failed", False)):
             with self.assertRaises(runtime.RuntimeError):
