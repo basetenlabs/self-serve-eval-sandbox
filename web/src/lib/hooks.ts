@@ -38,32 +38,6 @@ export function useRoute(): [Route, (r: Route, replace?: boolean) => void] {
   return [route, go];
 }
 
-// ---------- theme: follows the system, like the sign-in page, until someone picks one here ----------
-
-export function useTheme(): ["light" | "dark", () => void] {
-  const [theme, setTheme] = useState<"light" | "dark">(() =>
-    document.documentElement.classList.contains("dark") ? "dark" : "light");
-  useEffect(() => {
-    const media = matchMedia("(prefers-color-scheme: dark)");
-    const follow = () => {
-      try { if (localStorage.getItem("pr-eval-theme")) return; } catch { /* private window */ }
-      document.documentElement.classList.toggle("dark", media.matches);
-      setTheme(media.matches ? "dark" : "light");
-    };
-    media.addEventListener("change", follow);
-    return () => media.removeEventListener("change", follow);
-  }, []);
-  const toggle = useCallback(() => {
-    setTheme((t) => {
-      const next = t === "dark" ? "light" : "dark";
-      document.documentElement.classList.toggle("dark", next === "dark");
-      try { localStorage.setItem("pr-eval-theme", next); } catch { /* private window */ }
-      return next;
-    });
-  }, []);
-  return [theme, toggle];
-}
-
 /** Counts the times this tab comes back into focus while `active`: to look again after someone
  * changed something on another site, such as which repositories the GitHub App may read. */
 export function useFocusCount(active: boolean): number {

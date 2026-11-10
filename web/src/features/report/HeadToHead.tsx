@@ -1,7 +1,8 @@
-import { ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
 import { Column, DeltaChip } from "@/components/brand";
+import { Chevron } from "@/components/brand/icons";
 import { dur, pct, plural, usd } from "@/lib/format";
+import { Count, Scramble } from "@/lib/motion";
 import { type Paired, type Takeaway, wilson } from "@/lib/stats";
 import type { Model, Summary, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -9,7 +10,7 @@ import { cn } from "@/lib/utils";
 type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: string; units: string; format: (x: number | null) => string; delta?: string; max?: number };
 
 // The brand's head-to-head: Baseten's bar is always Green, the comparison always Blue.
-const GREEN = "#19E76E", BLUE = "#3DA6FF";
+const GREEN = "var(--color-green)", BLUE = "var(--color-blue)";
 
 /**
  * Baseten's open model against the closed comparison. First who solved which of the same PRs, then
@@ -49,20 +50,20 @@ export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
                 <div className="label-mono mt-0.5 text-muted-foreground">{metric.units}</div>
                 {metric.delta && <DeltaChip className="mt-3">{metric.delta}</DeltaChip>}
               </div>
-              <div className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)] items-center gap-x-4">
+              <div className="grid grid-cols-1 items-center gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-y-0">
                 {sides.map((s, i) => {
                   const v = values[i];
                   const w = v == null ? 0 : Math.max(0.5, (v / max) * 100);
-                  const inside = w >= 22;
+                  const inside = w >= 45; // under half the track the value sits after the bar, so it never spills onto the name
                   return (
                     <div key={s.m.key} className="contents">
-                      <div className="label-mono truncate text-right text-foreground" title={s.m.label}>{s.m.label}</div>
+                      <div className={cn("label-mono truncate text-foreground sm:text-right", i > 0 && "max-sm:mt-2")} title={s.m.label}>{s.m.label}</div>
                       <div className="relative h-10 bg-surface">
                         {v == null ? (
                           <div className="placeholder-cell flex h-full items-center px-3 label-mono text-muted-foreground">Not measured</div>
                         ) : (
                           <div className="relative h-full origin-left animate-grow" style={{ width: `${w}%`, background: s.fill, animationDelay: `${i * 80}ms` }}>
-                            <span className={cn("num absolute top-1/2 -translate-y-1/2 font-mono text-[13px] whitespace-nowrap", inside ? "right-3 text-black" : "left-full ml-2 text-foreground")}>
+                            <span className={cn("num absolute top-1/2 -translate-y-1/2 font-mono text-[12px] whitespace-nowrap", inside ? "right-3 text-black" : "left-full ml-2 text-foreground")}>
                               {metric.format(v)}
                             </span>
                           </div>
@@ -76,7 +77,7 @@ export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
           );
         })}
       </div>
-      <div className="label-mono border-t border-rule pt-3 text-[10.5px] text-muted-foreground">{grid ? "Cost and time scaled within each metric" : "Solve rate out of 100%; cost and time scaled within each metric"}</div>
+      <div className="label-xs border-t border-lightGrey2 pt-3 text-muted-foreground">{grid ? "Cost and time scaled within each metric" : "Solve rate out of 100%; cost and time scaled within each metric"}</div>
     </Column>
   );
 }
@@ -104,13 +105,13 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
       <div>
         <h3 className="text-[20px] leading-7 font-normal">Solved</h3>
         <div className="label-mono mt-0.5 text-muted-foreground">The same {plural(p.n, "PR")} · higher is better</div>
-        <p className="mt-3 max-w-[34ch] text-[13px] leading-5 text-muted-foreground">
+        <p className="mt-3 max-w-[34ch] text-[14px] leading-5 text-muted-foreground">
           Solved = the PR's own hidden tests pass{judged ? " and the judges agree" : ""}. The model never sees the tests or the merged diff.
           {attempts > 1 ? " A PR counts as solved when at least half its attempts were." : ""}
         </p>
       </div>
       <div className="grid gap-4">
-        <div className="grid grid-cols-2 gap-px bg-frame shadow-[0_0_0_1px_var(--frame)]">
+        <div className="grid grid-cols-2 gap-px bg-lightGrey2">
           {sides.map((s) => (
             <div key={s.m.key} className="min-w-0 bg-surface p-5">
               <div className="label-mono flex min-w-0 items-center gap-2 text-foreground">
@@ -118,28 +119,28 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
                 <span className="truncate" title={s.m.label}>{s.m.label}</span>
               </div>
               <div className="mt-4 flex flex-wrap items-baseline gap-x-5 gap-y-2">
-                <span className="num text-[46px] leading-none tracking-[-0.03em]">{s.n}<span className="ml-2 text-[20px] tracking-[-0.01em]">solved</span></span>
-                <span className="text-[15px] text-muted-foreground">
-                  <b className="num font-medium text-foreground">{usd(S[s.m.key]?.cost_per_solved)}</b> per solved task
+                <span className="num text-[48px] leading-none tracking-[-0.03em]"><Count value={s.n} /><span className="ml-2 text-[20px] tracking-[-0.01em]">solved</span></span>
+                <span className="text-[16px] text-muted-foreground">
+                  <b className="num font-medium text-foreground"><Scramble value={usd(S[s.m.key]?.cost_per_solved)} /></b> per solved task
                 </span>
               </div>
             </div>
           ))}
         </div>
-        <details className="group">
-          <summary className="label-mono inline-flex cursor-pointer list-none items-center gap-1.5 text-[10.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />Solve rate, 95% range and each PR
+        <details className="ev-details">
+          <summary>
+            <Chevron />Solve rate, 95% range and each PR
           </summary>
           <div className="mt-3 grid gap-3">
-            <div className="grid gap-px bg-frame">
+            <div className="grid gap-px bg-lightGrey2">
               {notes.map(([label, text]) => (
                 <div key={label} className="flex flex-col gap-1 bg-background py-2.5 sm:flex-row sm:gap-4">
-                  <span className="label-mono w-28 shrink-0 pt-0.5 text-[10.5px] text-foreground">{label}</span>
-                  <span className="text-[13px] leading-5 text-muted-foreground">{text}</span>
+                  <span className="label-xs w-28 shrink-0 pt-0.5 text-foreground">{label}</span>
+                  <span className="text-[14px] leading-5 text-muted-foreground">{text}</span>
                 </div>
               ))}
             </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[14px] text-muted-foreground">
               {sides.map((s) => {
                 const r = S[s.m.key];
                 const ci = r ? wilson(r.solved, r.valid) : null;
@@ -152,13 +153,13 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
                 );
               })}
             </div>
-            <ul className="grid grid-cols-[minmax(0,1fr)] border-t border-frame">
+            <ul className="grid grid-cols-[minmax(0,1fr)] border-t border-lightGrey2">
               {tasks.map((task) => (
-                <li key={task.id} className="border-b border-frame">
+                <li key={task.id} className="border-b border-lightGrey2">
                   <PullRow task={task} onOpen={onOpen}>
                     {sides.map((s) => (
-                      <span key={s.m.key} className="label-mono inline-flex w-24 shrink-0 items-center gap-1.5 text-[10.5px] text-muted-foreground">
-                        <span aria-hidden className="size-2" style={s.has.has(task) ? { background: s.fill } : { boxShadow: "inset 0 0 0 1px var(--line)" }} />
+                      <span key={s.m.key} className="label-xs inline-flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
+                        <span aria-hidden className="size-2" style={s.has.has(task) ? { background: s.fill } : { border: "1px solid var(--color-darkGrey3)" }} />
                         {s.has.has(task) ? "Solved" : "—"}
                       </span>
                     ))}
@@ -177,8 +178,8 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
 function PullRow({ task, onOpen, children }: { task: Task; onOpen?: (taskId: string) => void; children: React.ReactNode }) {
   const body = (
     <>
-      <span className="w-36 shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">{task.repo.split("/").pop()}#{task.pr}</span>
-      <span className="min-w-0 flex-1 truncate text-[13px] text-foreground group-hover/pr:underline">{task.title || `#${task.pr}`}</span>
+      <span className="w-36 shrink-0 truncate font-mono text-[12px] text-muted-foreground">{task.repo.split("/").pop()}#{task.pr}</span>
+      <span className="min-w-0 flex-1 truncate text-[14px] text-foreground group-hover/pr:underline">{task.title || `#${task.pr}`}</span>
       {children}
     </>
   );

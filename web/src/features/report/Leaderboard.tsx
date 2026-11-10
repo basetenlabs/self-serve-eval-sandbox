@@ -1,9 +1,8 @@
-import { ChevronDownIcon, CopyIcon } from "lucide-react";
 import * as React from "react";
 import { Column, Swatch } from "@/components/brand";
+import { Down } from "@/components/brand/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/components/ui/toast";
 import { compact, dur, elapsed, pct, usd } from "@/lib/format";
 import { isOpen, type Swatch as SwatchT } from "@/lib/models";
 import { wilson } from "@/lib/stats";
@@ -14,7 +13,7 @@ import { benchMarkdown } from "./markdown";
 /** Every model, best first, with the three numbers that decide it and the rest one click away. */
 export function Leaderboard({ report, ranked, colors }: { report: Report; ranked: Model[]; colors: Record<string, SwatchT> }) {
   const S = report.summary;
-  const toast = useToast();
+  const [copied, setCopied] = React.useState<"yes" | "no" | null>(null);
   const scored = ranked.filter((m) => S[m.key]?.valid);
   // A metric's leader gets "Best" only when it leads alone: a tie marks nobody.
   const lead = (value: (s: Summary) => number | null, higher: boolean) => {
@@ -31,19 +30,21 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(benchMarkdown(report, ranked));
-      toast("Copied as Markdown");
+      setCopied("yes");
+      window.setTimeout(() => setCopied(null), 2000);
     } catch {
-      toast("Copy failed", { body: "Select the table instead.", tone: "danger" });
+      setCopied("no");
     }
   };
   return (
     <Column
       heading="All models"
-      aside={<Button variant="outline" size="sm" onClick={copy}><CopyIcon className="size-3.5" />Copy as Markdown</Button>}
+      aside={<Button variant="outline" onClick={copy} aria-live="polite">{copied === "yes" ? "Copied" : "Copy as Markdown"}</Button>}
     >
-      <div className="hidden grid-cols-[2.5rem_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_2rem] gap-4 border-b border-rule px-3 pb-2 md:grid">
+      {copied === "no" && <div role="alert" className="bt-notice error mb-4">Couldn't copy. Select the table instead.</div>}
+      <div className="hidden grid-cols-[2.5rem_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_2rem] gap-4 border-b border-lightGrey2 px-3 pb-2 md:grid">
         {["#", "Model", "Solved ↑", "Cost per solved ↓", "Time per task ↓", "Total wall clock"].map((h) => (
-          <span key={h} className="label-mono text-[10.5px] text-muted-foreground">{h}</span>
+          <span key={h} className="label-xs text-muted-foreground">{h}</span>
         ))}
       </div>
       <ol>
@@ -70,23 +71,23 @@ function Row({ m, rank, s, swatch, leads, judged }: {
   const ci = wilson(s.solved, s.valid);
   const t = s.timing;
   return (
-    <li className={cn("border-b border-frame", open && "bg-muted")}>
+    <li className={cn("border-b border-lightGrey2 transition-colors", open && "bg-lightGrey1")}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         className={cn("grid w-full grid-cols-[2.5rem_minmax(0,1fr)_2rem] items-center gap-x-4 gap-y-3 px-3 py-4 text-left transition-colors hover:bg-muted", GRID)}
       >
-        <span className="num font-mono text-[13px] text-muted-foreground">{String(rank).padStart(2, "0")}</span>
+        <span className="num font-mono text-[14px] text-muted-foreground">{String(rank).padStart(2, "0")}</span>
         <span className="min-w-0">
           <span className="flex items-center gap-2.5">
             <Swatch swatch={swatch} size={12} />
-            <span className="truncate text-[17px] font-medium">{m.label}</span>
+            <span className="truncate text-[16px] font-medium">{m.label}</span>
           </span>
-          {m.model && <span className="mt-1 block truncate font-mono text-[11.5px] text-muted-foreground">{m.model}</span>}
-          <span className="label-mono mt-1 block text-[10.5px] text-muted-foreground">{isOpen(m) ? "Open · served on Baseten" : "Closed · comparison"}</span>
+          {m.model && <span className="mt-1 block truncate font-mono text-[12px] text-muted-foreground">{m.model}</span>}
+          <span className="label-xs mt-1 block text-muted-foreground">{isOpen(m) ? "Open · served on Baseten" : "Closed · comparison"}</span>
         </span>
-        <ChevronDownIcon className={cn("size-4 justify-self-end text-muted-foreground transition-transform md:order-last", open && "rotate-180")} />
+        <span className={cn("grid size-4 place-items-center justify-self-end text-darkGrey2 transition-transform md:order-last", open && "rotate-180")}><Down /></span>
         <Figure label="Solved" lead={leads.solved} value={`${s.tasks_solved} solved`} note={judged ? "Tests pass, judges agree" : "Hidden tests pass"} />
         <Figure label="Cost per solved" lead={leads.cost} value={usd(s.cost_per_solved)} note={`${usd(s.cost_per_attempt)} per attempt`} />
         <Figure label="Time per task" lead={leads.time} value={dur(s.median_seconds)} note="Median, agent time" />
@@ -94,7 +95,7 @@ function Row({ m, rank, s, swatch, leads, judged }: {
       </button>
       {open && (
         // Each detail sits under the figure it explains.
-        <div className={cn("grid animate-enter grid-cols-2 gap-x-4 gap-y-4 border-t border-frame px-3 pt-4 pb-5", GRID)}>
+        <div className={cn("grid animate-enter grid-cols-2 gap-x-4 gap-y-4 border-t border-lightGrey2 px-3 pt-4 pb-5", GRID)}>
           <span className="hidden md:block" />
           <span className="hidden md:block" />
           <Details items={[["Solve rate", `${pct(s.pass_at_1)} per attempt`], ["95% range", ci ? `${pct(ci[0])}–${pct(ci[1])}` : "–"]]} />
@@ -110,7 +111,7 @@ function Row({ m, rank, s, swatch, leads, judged }: {
 function Figure({ label, value, note, lead }: { label: string; value: string; note: string; lead?: boolean }) {
   return (
     <span className="col-span-1 min-w-0 max-md:col-start-2 max-md:col-end-3">
-      <span className="label-mono block text-[10.5px] text-muted-foreground md:hidden">{label}</span>
+      <span className="label-xs block text-muted-foreground md:hidden">{label}</span>
       <span className="flex items-center gap-2">
         <span className="num text-[24px] leading-8 tracking-[-0.02em]">{value}</span>
         {lead && <Badge variant="solid" className="px-1 text-[9.5px]">Best</Badge>}
@@ -125,8 +126,8 @@ function Details({ items }: { items: readonly (readonly [string, string])[] }) {
     <dl className="grid content-start gap-3">
       {items.map(([k, v]) => (
         <div key={k}>
-          <dt className="label-mono text-[10.5px] text-muted-foreground">{k}</dt>
-          <dd className="num mt-0.5 text-[15px]">{v}</dd>
+          <dt className="label-xs text-muted-foreground">{k}</dt>
+          <dd className="num mt-0.5 text-[16px]">{v}</dd>
         </div>
       ))}
     </dl>

@@ -1,13 +1,13 @@
-import { ChevronRightIcon, MoonIcon, SunIcon } from "lucide-react";
 import * as React from "react";
 import { BasetenLogo, LiveDot } from "@/components/brand";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
-import { href, type Route, useTheme } from "@/lib/hooks";
+import { href, type Route } from "@/lib/hooks";
+import { useMotion } from "@/lib/motion";
 import type { AppState } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
-/** The page frame: top bar, the blueprint guides of baseten.co, and a footer. */
+/** The page frame: the app bar on the texture, the page's White surfaces, and a one-line footer. */
 export function Shell({ state, route, go, offline, children }: {
   state: AppState | null;
   route: Route;
@@ -15,73 +15,43 @@ export function Shell({ state, route, go, offline, children }: {
   offline: boolean;
   children: React.ReactNode;
 }) {
-  const [theme, toggleTheme] = useTheme();
   const live = state?.runs.find((r) => ["collecting", "checking", "running"].includes(r.phase));
   const sandboxes = live?.board?.sandboxes ?? 0;
+  const run = route.page === "run" ? state?.runs.find((r) => r.id === route.id) : undefined;
+  const home = (e: React.MouseEvent) => { e.preventDefault(); go({ page: "home" }); };
+  const page = React.useRef<HTMLDivElement>(null);
+  useMotion(page, [route.page, route.page === "run" && route.id]); // the skill's markup hooks on each page
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-dashed border-rule bg-background/85 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
-        <div className="mx-auto flex h-14 max-w-[1320px] items-center gap-4 px-4 sm:px-6 md:guide-x md:px-8">
-          <a href="#/" onClick={(e) => { e.preventDefault(); go({ page: "home" }); }} className="flex items-center gap-3" aria-label="Eval Sandbox home">
-            <BasetenLogo className="h-[22px] w-auto" />
-            <span className="h-5 w-px bg-rule" aria-hidden />
-            <span className="label-mono text-[12px] whitespace-nowrap text-foreground">Eval Sandbox</span>
-          </a>
-          {route.page === "access" && (
-            <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-muted-foreground md:flex">
-              <ChevronRightIcon className="size-3.5 shrink-0" />
-              <span className="label-mono text-foreground">Access</span>
-            </nav>
-          )}
+    <div className="bt-page ev-shell" ref={page}>
+      <header className="bt-appbar">
+        <a href="#/" onClick={home} className="logo" aria-label="Self-Serve Model Eval Sandbox home"><BasetenLogo /></a>
+        <nav aria-label="Pages">
+          <a href="#/" onClick={home} aria-current={route.page === "home" ? "page" : undefined}>Self-Serve Model Eval Sandbox</a>
           {route.page === "run" && (
-            <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-muted-foreground md:flex">
-              <ChevronRightIcon className="size-3.5 shrink-0" />
-              <a href={href({ page: "home" })} className="label-mono hover:text-foreground">Runs</a>
-              <ChevronRightIcon className="size-3.5 shrink-0" />
-              <span className="label-mono truncate text-foreground">{route.id}</span>
-            </nav>
+            <a href={href({ page: "run", id: route.id })} aria-current="page" className="crumb">{run?.title ?? route.id}</a>
           )}
-          <div className="ml-auto flex items-center gap-2">
-            {offline ? (
-              <span className="label-mono hidden items-center gap-2 text-[#AC0EB2] sm:inline-flex dark:text-[#FFA9FD]">
-                <span className="size-1.5 bg-current" /> Page server unreachable
-              </span>
-            ) : live ? (
-              <a
-                href={href({ page: "run", id: live.id })}
-                className="label-mono hidden items-center gap-2 bg-[#D7FACE] px-2.5 py-1.5 text-black transition-colors hover:bg-[#19E76E] sm:inline-flex dark:bg-[#213026] dark:text-[#19E76E] dark:hover:bg-[#213026]/70"
-              >
-                <LiveDot /> Run in progress
-                {sandboxes > 0 && <span className="opacity-70">· {sandboxes} sandboxes</span>}
-              </a>
-            ) : state ? (
-              <span className="label-mono hidden items-center gap-2 text-muted-foreground sm:inline-flex">
-                <span className="size-1.5 bg-foreground" /> Ready
-              </span>
-            ) : null}
-            {state?.admin && route.page !== "access" && (
-              <Tip content="Who can sign in: admins, invited people and whole domains">
-                <Button variant="ghost" size="sm" asChild><a href={href({ page: "access" })}>Access</a></Button>
-              </Tip>
-            )}
-            <Tip content={theme === "dark" ? "Light theme" : "Dark theme"}>
-              <Button variant="ghost" size="icon-sm" onClick={toggleTheme} aria-label="Toggle theme">
-                {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-              </Button>
+          {state?.admin && (
+            <Tip content="Who can sign in: admins, invited people and whole domains">
+              <a href={href({ page: "access" })} aria-current={route.page === "access" ? "page" : undefined}>Access</a>
             </Tip>
-            <SignOut />
-          </div>
+          )}
+        </nav>
+        <div className="end">
+          {offline ? (
+            <Badge variant="danger"><span aria-hidden className="ev-dot bad" />Page server unreachable</Badge>
+          ) : live && !(route.page === "run" && route.id === live.id) ? (
+            <a href={href({ page: "run", id: live.id })} className="bt-badge green no-underline max-sm:hidden">
+              <LiveDot /> Run in progress{sandboxes > 0 && <span>· {sandboxes} sandboxes</span>}
+            </a>
+          ) : null}
+          <SignOut />
         </div>
       </header>
-      <main className={cn("mx-auto max-w-[1320px] md:guide-x")}>{children}</main>
-      <footer className="border-t border-dashed border-rule">
-        <div className="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-3 px-4 py-6 sm:px-6 md:guide-x md:px-8">
-          <span className="label-mono text-muted-foreground">Baseten ▪ Eval Sandbox</span>
-          {state && !state.github.sign_in && <span className="label-mono text-muted-foreground">
-            Also from a terminal: <code className="normal-case tracking-normal text-foreground">pr-eval run --quick</code>
-          </span>}
-        </div>
+      <main className="ev-main">{children}</main>
+      <footer className="bt-footnote ev-foot">
+        <span>Self-Serve Model Eval Sandbox</span>
+        {state && !state.github.sign_in && <span className="max-sm:hidden">Also from a terminal: <code>pr-eval run --quick</code></span>}
       </footer>
     </div>
   );
@@ -110,7 +80,7 @@ function SignOut() {
   if (!signIn) return null;
   return (
     <Tip content={error ?? `Signed in as ${signIn.email}`}>
-      <Button variant="outline" size="sm" onClick={() => signIn.client.signOut().catch((e: Error) => setError(e.message))}>
+      <Button variant="outline" onClick={() => signIn.client.signOut().catch((e: Error) => setError(e.message))}>
         Sign out
       </Button>
     </Tip>

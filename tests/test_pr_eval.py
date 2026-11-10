@@ -1273,6 +1273,35 @@ class AppTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_beausite_only_reaches_a_signed_in_person(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            jobs, fonts = Path(d) / "jobs", Path(d) / "fonts"
+            jobs.mkdir()
+            fonts.mkdir()
+            for name in app.BEAUSITE.values():
+                (fonts / name).write_bytes(b"wOF2")
+            page = app.App(jobs)
+            handler = type("H", (app.Handler,), {"app": page})
+            server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+
+            def get(path, user=None):
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+                conn.request("GET", path, headers={"x-forwarded-email": user} if user else {})
+                res = conn.getresponse()
+                return res.status, res.read()
+            try:
+                with mock.patch.object(app, "FONTS", fonts):
+                    self.assertNotIn(b"@font-face{font-family:\"Beausite", get("/")[1])  # locally, or before sign-in: Geist
+                    self.assertEqual(get("/fonts/BeausiteClassic-400.woff2")[0], 404)
+                    self.assertIn(b'@font-face{font-family:"Beausite Classic"', get("/", "a@x.co")[1])
+                    self.assertEqual(get("/fonts/BeausiteClassic-400.woff2", "a@x.co"), (200, b"wOF2"))
+                with mock.patch.object(app, "FONTS", Path(d) / "none"):
+                    self.assertNotIn(b"@font-face{font-family:\"Beausite", get("/", "a@x.co")[1])  # no files fetched: Geist
+            finally:
+                server.shutdown()
+
     def test_hosted_an_admin_sees_and_opens_every_run(self):
         import http.client
         with tempfile.TemporaryDirectory() as d:

@@ -1,4 +1,3 @@
-import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AccessPage } from "@/features/access/AccessPage";
 import { HomePage } from "@/features/home/HomePage";
@@ -12,14 +11,12 @@ export function App() {
   const { state, error, hurry } = useAppState(route.page === "run" ? route.id : undefined);
   return (
     <TooltipProvider>
-      <Toaster>
         <Shell state={state} route={route} go={go} offline={!!error && !state}>
           {route.page === "run"
             ? <RunPage key={route.id} id={route.id} tab={route.tab} task={route.task} state={state} go={go} hurry={hurry} />
             : route.page === "access" ? <AccessPage key={route.invite ?? ""} invite={route.invite} />
               : <HomePage state={state} error={error} go={go} hurry={hurry} />}
         </Shell>
-      </Toaster>
     </TooltipProvider>
   );
 }

@@ -1,5 +1,5 @@
-import { AlertCircleIcon, CircleSlashIcon, ExternalLinkIcon, SearchIcon, StarIcon, XIcon } from "lucide-react";
 import * as React from "react";
+import { Cross, External } from "@/components/brand/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -75,22 +75,21 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
 
   return (
     <div className="grid grid-cols-1 gap-2">
-      <div className="relative">
-        <SearchIcon className="pointer-events-none absolute top-3 left-3 size-3.5 text-muted-foreground" />
+      <div>
         <Input value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} autoComplete="off"
           placeholder="Find by number, title or author" aria-label={`Find a pull request in ${repo}`}
           onKeyDown={(e) => {
             if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
             if (e.key === "Enter") { e.preventDefault(); if (firstUsable) toggle(firstUsable.number, true); } // tick the best match
           }}
-          className="h-10 pl-8 text-[14px]" />
+          className="ev-search" />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="label-mono num inline-flex items-center gap-2 text-muted-foreground" aria-live="polite">
           {needle ? (searching ? "Searching GitHub too" : `${plural(matches, "match", "matches")} · ${chosen.length} chosen`)
-            : reading ? <><span aria-hidden className="size-1.5 animate-pulse-dot bg-foreground" /> Reading the latest merges from GitHub</>
+            : reading ? <><span aria-hidden className="ev-dot live" /> Reading the latest merges from GitHub</>
             : list?.error ? "Couldn't list them"
-            : chosen.length ? <><span className="text-foreground">{chosen.length} chosen</span>{chosen.length >= max ? ` · the most one run takes` : ` · ${plural(fit.length, "usable PR")} listed`}</>
+            : chosen.length ? <><span className="text-black">{chosen.length} chosen</span>{chosen.length >= max ? ` · the most one run takes` : ` · ${plural(fit.length, "usable PR")} listed`}</>
             : `Tick the ones to run · ${plural(fit.length, "usable PR")} listed`}
         </span>
         <span className="flex gap-1">
@@ -104,12 +103,12 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
         </span>
       </div>
       {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
-        <ul className="max-h-[420px] overflow-y-auto bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-label={`${repo} pull requests`} aria-busy={loading || searching}>
+        <ul className="ev-pulls-list max-h-[420px] overflow-y-auto" aria-label={`${repo} pull requests`} aria-busy={loading || searching}>
           {!list && !needle ? Array.from({ length: 6 }, (_, i) => <SkeletonRow key={i} at={i} />) : groups.map((g) => (
             <React.Fragment key={g.label || "all"}>
               {g.label && g.rows.length > 0 && (
-                <li className="label-mono sticky top-0 z-[1] flex items-center gap-1.5 border-b border-rule bg-surface/95 px-3 py-1.5 text-[10.5px] text-muted-foreground backdrop-blur-sm">
-                  {g.label === "Saved" && <StarIcon className="size-3 fill-current" />}{g.label} <span className="opacity-60">{g.rows.length}</span>
+                <li className="ev-pulls-group">
+                  {g.label} <span className="text-darkGrey3">{g.rows.length}</span>
                 </li>
               )}
               {g.rows.map((r) => (
@@ -119,15 +118,15 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
                     <Checkbox checked={chosen.includes(r.number)} disabled={!!r.why || (!chosen.includes(r.number) && chosen.length >= max)}
                       onCheckedChange={(v) => toggle(r.number, v === true)} aria-label={`#${r.number} ${r.title}`} />
                   }
-                  trailing={r.why ? <span className="size-7 shrink-0" /> : <Star saved={isSaved(r.number)} number={r.number} onClick={() => onFavorite({ repo, number: r.number, title: r.title }, !isSaved(r.number))} />} />
+                  trailing={r.why ? null : <Star saved={isSaved(r.number)} number={r.number} onClick={() => onFavorite({ repo, number: r.number, title: r.title }, !isSaved(r.number))} />} />
               ))}
             </React.Fragment>
           ))}
           {needle && !searching && !matches && (
-            <li className="px-3 py-6 text-center text-[13px] text-muted-foreground">No merged pull request matches “{needle}”.</li>
+            <li className="ev-pulls-none">No merged pull request matches “{needle}”.</li>
           )}
           {!needle && list && !rows.length && !savedHere.length && (
-            <li className="px-3 py-6 text-center text-[13px] text-muted-foreground">No merged pull requests yet.</li>
+            <li className="ev-pulls-none">No merged pull requests yet.</li>
           )}
           {(searching || (!needle && list && loading)) && Array.from({ length: needle ? 2 : 3 }, (_, i) => <SkeletonRow key={`more-${i}`} at={i + 1} />)}
           {more && !needle && (
@@ -152,18 +151,18 @@ export function SavedPulls({ favorites, picked, onPick, onFavorite }: {
   if (!favorites.length) return null;
   return (
     <div className="grid grid-cols-1 gap-2">
-      <span className="label-mono flex items-center gap-1.5 text-muted-foreground"><StarIcon className="size-3 fill-current" /> Saved pull requests <span className="opacity-60">{favorites.length}</span></span>
-      <ul className="bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-label="Saved pull requests">
+      <span className="label-xs text-muted-foreground">Saved pull requests <span className="text-darkGrey3">{favorites.length}</span></span>
+      <ul className="ev-pulls-list" aria-label="Saved pull requests">
         {shown.map((f) => (
-          <li key={`${f.repo}#${f.number}`} className="border-rule not-last:border-b">
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-node/60">
+          <li key={`${f.repo}#${f.number}`}>
+            <label className="ev-pull" data-on={picked(f) || undefined}>
               <Checkbox checked={picked(f)} onCheckedChange={(v) => onPick(f, v === true)} aria-label={`${f.repo} #${f.number} ${f.title}`} />
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-baseline gap-2">
-                  <span className="num shrink-0 text-[13px] text-muted-foreground">#{f.number}</span>
-                  <span className="truncate text-[14px]">{f.title || "Untitled"}</span>
+                  <span className="no">#{f.number}</span>
+                  <span className="title">{f.title || "Untitled"}</span>
                 </span>
-                <span className="block truncate text-[12px] text-muted-foreground">{f.repo} · saved {ago(f.saved_at)}</span>
+                <span className="meta block truncate">{f.repo} · saved {ago(f.saved_at)}</span>
               </span>
               <Star saved number={f.number} onClick={() => onFavorite(f, false)} />
             </label>
@@ -177,13 +176,12 @@ export function SavedPulls({ favorites, picked, onPick, onFavorite }: {
   );
 }
 
+/** Save for later: a small mono toggle that reads what it does, Black when saved. */
 function Star({ saved, number, onClick }: { saved: boolean; number: number; onClick: () => void }) {
   return (
     <button type="button" aria-pressed={saved} aria-label={saved ? `Forget #${number}` : `Save #${number} for later`} title={saved ? "Saved: click to forget" : "Save for later"}
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClick(); }}
-      className={cn("grid size-7 shrink-0 place-items-center transition-colors hover:bg-node",
-        saved ? "text-[#E8A000] dark:text-[#FFBE4D]" : "text-muted-foreground/60 hover:text-foreground")}>
-      <StarIcon className={cn("size-3.5", saved && "fill-current")} />
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClick(); }} className="ev-save">
+      <span className={cn("bt-chip", saved && "active")}>{saved ? "Saved" : "Save"}</span>
     </button>
   );
 }
@@ -222,25 +220,25 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
   return (
     <div className="grid grid-cols-1 gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[13px] font-medium">{repo}</span>
-        <span className="label-mono text-muted-foreground">
+        <code className="ev-code">{repo}</code>
+        <span className="label-xs text-muted-foreground">
           {loading ? "Checking with GitHub" : list?.error ? "" : usable === numbers.length ? `All ${numbers.length} usable` : `${usable} of ${numbers.length} usable`}
           {list?.language && !list.error ? ` · ${list.language}` : ""}
         </span>
       </div>
       {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
-        <ul className="bg-surface shadow-[inset_0_0_0_1px_var(--rule)]" aria-busy={loading}>
+        <ul className="ev-pulls-list" aria-busy={loading}>
           {numbers.map((n) => {
             const row = rows.get(n);
             const remove = (
               <button type="button" onClick={() => onRemove(repo, n)} aria-label={`Remove #${n}`}
-                className="grid size-7 shrink-0 place-items-center text-muted-foreground transition-colors hover:bg-node hover:text-foreground">
-                <XIcon className="size-3.5" />
+                className="ev-icon-button">
+                <Cross />
               </button>
             );
             const isSaved = favorites.some((f) => samePull(f, { repo, number: n }));
             const star = <Star saved={isSaved} number={n} onClick={() => onFavorite({ repo, number: n, title: row?.title }, !isSaved)} />;
-            return row ? <PullItem key={n} row={row} trailing={<>{row.why ? <span className="size-7 shrink-0" /> : star}{remove}</>} />
+            return row ? <PullItem key={n} row={row} trailing={<>{row.why ? null : star}{remove}</>} />
               : <SkeletonRow key={n} at={n} number={n} trailing={remove} />;
           })}
         </ul>
@@ -252,34 +250,32 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
 function PullItem({ row, control, trailing, hits, chosen }: { row: PullRow; control?: React.ReactNode; trailing?: React.ReactNode; hits?: number[]; chosen?: boolean }) {
   const Row = control && !row.why ? "label" : "div";
   return (
-    <li className="border-rule not-last:border-b">
-      <Row className={cn("flex items-center gap-3 px-3 transition-colors",
-        row.why ? "min-h-12 py-1.5 text-muted-foreground" : "min-h-14 py-2",
-        control && !row.why && "cursor-pointer hover:bg-node/60",
-        chosen && "bg-muted shadow-[inset_2px_0_0_var(--foreground)]")}>
-        {control && row.why ? <CircleSlashIcon aria-label="Can't be a task" className="size-[18px] shrink-0 p-px text-line" /> : control}
+    <li>
+      <Row className="ev-pull" data-on={chosen || undefined} data-off={row.why ? true : undefined}>
+        {control && row.why ? <span aria-label="Can't be a task" className="ev-check-off"><Cross /></span> : control}
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-baseline gap-2">
-            <span className="num shrink-0 text-[13px] text-muted-foreground">#{row.number}</span>
-            <span className={cn("truncate", row.why ? "text-[13px]" : "text-[14px] text-foreground")}>{hits?.length ? <Marked text={row.title} hits={hits} /> : row.title || "Untitled"}</span>
+            <span className="no">#{row.number}</span>
+            <span className="title">{hits?.length ? <Marked text={row.title} hits={hits} /> : row.title || "Untitled"}</span>
           </span>
-          <span className="num mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-muted-foreground">
+          <span className="meta flex flex-wrap items-center gap-x-1.5 gap-y-1 max-md:gap-x-3">
             {row.why ? (
-              <span className="inline-flex items-center gap-1.5">{!control && <CircleSlashIcon className="size-3" />}Can't be a task: {row.why}</span>
+              <span>Can't be a task: {row.why}</span>
             ) : (
               <>
                 {[row.author, row.merged_at && `merged ${ago(row.merged_at)}`, plural(row.files, "file"), `${row.lines.toLocaleString()} lines`, plural(row.tests, "test file")]
-                  .filter(Boolean).map((part, i) => <span key={i}>{i > 0 && <span aria-hidden className="mr-1.5 opacity-50">·</span>}{part}</span>)}
+                  .filter(Boolean).map((part, i) => <span key={i} className="whitespace-nowrap">{i > 0 && <span aria-hidden className="mr-1.5 text-darkGrey3 max-md:hidden">·</span>}{part}</span>)}
                 {row.maintenance && <Badge variant="outline" className="ml-1">Upkeep</Badge>}
               </>
             )}
           </span>
         </span>
-        <a href={row.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label={`Open #${row.number} on GitHub`} title="Open on GitHub"
-          className="grid size-7 shrink-0 place-items-center text-muted-foreground/70 transition-colors hover:bg-node hover:text-foreground">
-          <ExternalLinkIcon className="size-3.5" />
-        </a>
-        {trailing}
+        <span className="actions">
+          <a href={row.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label={`Open #${row.number} on GitHub`} title="Open on GitHub" className="ev-icon-button">
+            <External />
+          </a>
+          {trailing}
+        </span>
       </Row>
     </li>
   );
@@ -294,21 +290,21 @@ function Marked({ text, hits }: { text: string; hits: number[] }) {
     if (parts.length && parts[parts.length - 1].bold === bold) parts[parts.length - 1].text += text[i];
     else parts.push({ bold, text: text[i] });
   }
-  return <>{parts.map((p, i) => p.bold ? <mark key={i} className="bg-transparent font-semibold text-foreground underline decoration-foreground/40 underline-offset-2">{p.text}</mark> : p.text)}</>;
+  return <>{parts.map((p, i) => p.bold ? <mark key={i} className="ev-hit">{p.text}</mark> : p.text)}</>;
 }
 
 const TITLE_WIDTHS = ["w-[70%]", "w-[44%]", "w-[58%]", "w-[36%]", "w-[64%]", "w-[50%]"];
 
 function SkeletonRow({ number, trailing, at = 0 }: { number?: number; trailing?: React.ReactNode; at?: number }) {
   return (
-    <li aria-hidden className="flex min-h-14 items-center gap-3 border-rule px-3 py-2 not-last:border-b">
-      {number == null && <span className="size-[18px] shrink-0 shadow-[inset_0_0_0_1px_var(--rule)]" />}
+    <li aria-hidden className="ev-pull">
+      {number == null && <span className="ev-check-off" />}
       <span className="grid min-w-0 flex-1 gap-2">
         <span className="flex items-center gap-2">
-          {number != null ? <span className="num text-[13px] text-muted-foreground">#{number}</span> : <span className="h-3 w-9 shrink-0 bg-node" />}
-          <span className={cn("stripes h-3 animate-stripe bg-node", TITLE_WIDTHS[at % TITLE_WIDTHS.length])} />
+          {number != null ? <span className="no">#{number}</span> : <span className="bt-skeleton h-3 w-9 shrink-0" />}
+          <span className={cn("bt-skeleton h-3", TITLE_WIDTHS[at % TITLE_WIDTHS.length])} />
         </span>
-        <span className="h-2.5 w-[38%] max-w-64 bg-node" />
+        <span className="bt-skeleton h-2.5 w-[38%] max-w-64" />
       </span>
       {trailing}
     </li>
@@ -317,12 +313,11 @@ function SkeletonRow({ number, trailing, at = 0 }: { number?: number; trailing?:
 
 function Problem({ children, install }: { children: React.ReactNode; install?: string }) {
   return (
-    <div role="alert" className="flex flex-wrap items-start gap-2 bg-danger-surface px-3 py-2.5 text-[13px]">
-      <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-[#AC0EB2] dark:text-[#FFA9FD]" />
+    <div role="alert" className="bt-notice error flex-wrap items-center">
       <span className="min-w-0 flex-1">{children}</span>
       {install && (
-        <Button asChild size="sm">
-          <a href={install} target="_blank" rel="noreferrer">Add it on GitHub <ExternalLinkIcon /></a>
+        <Button asChild variant="outline">
+          <a href={install} target="_blank" rel="noreferrer">Add it on GitHub <External /></a>
         </Button>
       )}
     </div>

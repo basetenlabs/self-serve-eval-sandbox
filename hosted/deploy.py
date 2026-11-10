@@ -419,6 +419,8 @@ def main() -> int:
     print(origin, meter)
     if args.renew and not created:
         return 0
+    step("Fetching Baseten's brand face for signed-in visitors")
+    subprocess.run(["node", str(ROOT / "hosted" / "fonts.mjs")], check=False)  # best effort: without it, Geist
     step("Uploading the app")
     files = release_files()
     run(sandbox, f"mkdir -p {APP} {AUTH} && chmod 700 {AUTH} && rm -rf " + " ".join(f"{APP}/{e}" for e in RELEASE))

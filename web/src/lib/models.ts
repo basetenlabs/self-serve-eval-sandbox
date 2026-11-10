@@ -1,25 +1,24 @@
 import type { Model } from "./types";
 
-// Green is Baseten: open models served on Baseten take the green ramp first. Closed models are the
-// comparison and take blue. Pink stays free for deltas while there are fewer than four open models.
+// Green is Baseten: open models served on Baseten take Green, then Dark Green (the second member of the family).
+// Closed models are the comparison: Blue, then Dark Blue. Anything left over is a grey, so Gold (judges, not
+// scored) and Pink (the difference between two models) keep their meaning however many models run.
 export interface Swatch {
   fill: string; // the Base (or Dark) step: bars, dots, solved cells
   ink: string; // text on fill, from the brand's passing contrast pairs
   tint: string; // the Light step: regions and backgrounds
 }
 
-const GREEN = { fill: "#19E76E", ink: "#000000", tint: "#D7FACE" };
-const GREEN_DARK = { fill: "#009735", ink: "#000000", tint: "#D7FACE" };
-const GOLD = { fill: "#FFBE4D", ink: "#000000", tint: "#FFEDC4" };
-const GOLD_DARK = { fill: "#D5700B", ink: "#000000", tint: "#FFEDC4" };
-const PINK = { fill: "#FFA9FD", ink: "#000000", tint: "#F4E7F2" };
-const PINK_DARK = { fill: "#AC0EB2", ink: "#FFFFFF", tint: "#F4E7F2" };
-const BLUE = { fill: "#3DA6FF", ink: "#000000", tint: "#D4EBFF" };
-const BLUE_DARK = { fill: "#0065AD", ink: "#FFFFFF", tint: "#D4EBFF" };
-const GREY = { fill: "#575D56", ink: "#FFFFFF", tint: "#E3EAE1" };
+const c = (name: string) => `var(--color-${name})`;
+const GREEN = { fill: c("green"), ink: c("black"), tint: c("lightGreen") };
+const GREEN_DARK = { fill: c("darkGreen"), ink: c("white"), tint: c("lightGreen") };
+const BLUE = { fill: c("blue"), ink: c("black"), tint: c("lightBlue") };
+const BLUE_DARK = { fill: c("darkBlue"), ink: c("white"), tint: c("lightBlue") };
+const GREY = (step: string, ink: string) => ({ fill: c(step), ink: c(ink), tint: c("lightGrey2") });
 
-const OPEN = [GREEN, GREEN_DARK, GOLD, PINK, GOLD_DARK, PINK_DARK];
-const CLOSED = [BLUE, BLUE_DARK, GREY];
+// Open models take the dark greys first and closed ones the light greys, so leftovers stay apart.
+const OPEN = [GREEN, GREEN_DARK, GREY("darkGrey1", "white"), GREY("darkGrey2", "white"), GREY("darkGrey3", "black")];
+const CLOSED = [BLUE, BLUE_DARK, GREY("lightGrey3", "black"), GREY("darkGrey3", "black")];
 
 export const isOpen = (m: Model) => m.kind !== "closed";
 
@@ -31,9 +30,9 @@ export function ordered<T extends Model>(models: T[]): T[] {
 /** One swatch per model key, stable for a given list of models. */
 export function palette(models: Model[]): Record<string, Swatch> {
   const out: Record<string, Swatch> = {};
-  let o = 0, c = 0;
+  let o = 0, k = 0;
   for (const m of ordered(models)) {
-    out[m.key] = isOpen(m) ? OPEN[o++ % OPEN.length] : CLOSED[c++ % CLOSED.length];
+    out[m.key] = isOpen(m) ? OPEN[o++ % OPEN.length] : CLOSED[k++ % CLOSED.length];
   }
   return out;
 }

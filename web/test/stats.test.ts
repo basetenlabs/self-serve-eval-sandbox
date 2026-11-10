@@ -50,9 +50,15 @@ describe("stats", () => {
 
   it("keeps green for Baseten's open models and blue for the comparison", () => {
     const colors = palette([sonnet, glm, kimi]);
-    expect(colors.glm.fill).toBe("#19E76E");
-    expect(colors.kimi.fill).toBe("#009735");
-    expect(colors.sonnet.fill).toBe("#3DA6FF");
+    expect(colors.glm.fill).toBe("var(--color-green)");
+    expect(colors.kimi.fill).toBe("var(--color-darkGreen)");
+    expect(colors.sonnet.fill).toBe("var(--color-blue)");
+  });
+
+  it("never gives a model gold (judges, not scored) or pink (the difference), however many run", () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ ...glm, key: `open${i}` }));
+    const fills = Object.values(palette([...many, sonnet, { ...sonnet, key: "other" }, { ...sonnet, key: "third" }])).map((c) => c.fill);
+    expect(fills.join(" ")).not.toMatch(/gold|pink/i);
   });
 
   describe("paired verdict", () => {

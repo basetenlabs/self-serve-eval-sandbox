@@ -1,17 +1,16 @@
 import type * as React from "react";
-import { CheckIcon, ChevronRightIcon, ClockIcon, XIcon } from "lucide-react";
+import { Chevron, Cross, Tick } from "@/components/brand/icons";
 import { Column } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AppState } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { GitHubMark } from "./GitHubAccount";
 
 type Item = { ok: boolean | null; label: string; fix: string; action?: React.ReactNode };
 
 /** What a run needs, each with the one thing to do when it's missing. Locally that's this machine's setup.
- * Hosted, visitors have no terminal: the page's own setup is its admins' to fix, and GitHub is the visitor's
- * own sign-in, needed only for their own repos, so it's never a thing to fix. */
+ * Hosted, visitors have no terminal and see none of the plumbing: the page's own setup is one line its admins
+ * fix, and GitHub is the visitor's own sign-in, needed only for their own repos, so it's never a thing to fix. */
 export function readiness(state: AppState, onSignIn?: () => void): Item[] {
   const c = state.checks;
   const hosted = state.github.sign_in;
@@ -23,8 +22,12 @@ export function readiness(state: AppState, onSignIn?: () => void): Item[] {
   const github: Item = hosted
     ? { ok: login ? true : null, label: login ? `GitHub: signed in as @${login}` : "GitHub: needed only for your own repos",
         fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in to start a run.",
-        action: onSignIn && <Button type="button" size="sm" variant="outline" className="mt-2" onClick={onSignIn}><GitHubMark className="size-3.5" /> Sign in with GitHub</Button> }
+        action: onSignIn && <Button type="button" variant="outline" className="mt-2" onClick={onSignIn}><GitHubMark className="size-3.5" /> Sign in with GitHub</Button> }
     : { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
+  if (hosted) {
+    const ready = c.blaxel && c.bl_cli && !!baseten && !baseten.missing && !!claude && !claude.missing && c.judge.ok;
+    return [github, { ok: ready, label: ready ? "Models and judges ready" : "This page isn't ready to run", fix: "Its admins are fixing it." }];
+  }
   return [
     { ok: c.blaxel, label: "Dedicated Blaxel workspace", fix: hosted ? host("", c.blaxel_problem) : c.blaxel_problem || "Configure PR_EVAL_BLAXEL_WORKSPACE or ~/.config/pr-eval/blaxel.json, then restart pr-eval serve" },
     { ok: c.bl_cli, label: "Blaxel CLI", fix: hosted ? host("") : "Install the Blaxel CLI (bl): runs use it to build and find the trial image" },
@@ -43,11 +46,11 @@ export function Readiness({ state, onSignIn }: { state: AppState; onSignIn?: () 
   const missing = items.filter((i) => i.ok === false).length;
   if (!missing) {
     return (
-      <Column heading="Environment" aside={<Badge variant="solid">All set</Badge>}>
-        <details className="group">
-          <summary className="label-mono flex cursor-pointer list-none items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-            Workspace, keys and judges are ready
+      <Column heading="Environment" aside={<Badge variant="live">All set</Badge>}>
+        <details className="ev-details">
+          <summary>
+            <Chevron />
+            {state.github.sign_in ? "Ready to run" : "Workspace, keys and judges are ready"}
           </summary>
           <div className="mt-3"><Checks items={items} /></div>
         </details>
@@ -57,30 +60,26 @@ export function Readiness({ state, onSignIn }: { state: AppState; onSignIn?: () 
   return (
     <Column heading="Environment" aside={<Badge variant="danger">{missing} to fix</Badge>}>
       <Checks items={items} />
-      <p className="mt-5 text-[12.5px] leading-snug text-muted-foreground">
-        Runs use their own Blaxel workspace, never a shared one. Keys are read from the environment, never saved to a file.
-      </p>
+      {!state.github.sign_in && (
+        <p className="ev-small mt-6">
+          Runs use their own Blaxel workspace, never a shared one. Keys are read from the environment, never saved to a file.
+        </p>
+      )}
     </Column>
   );
 }
 
 function Checks({ items }: { items: Item[] }) {
   return (
-    <ul className="grid gap-px bg-frame">
+    <ul className="ev-checks">
       {items.map((i) => (
-        <li key={i.label} className="flex gap-3 bg-background py-3">
-          <span
-            className={cn(
-              "mt-0.5 grid size-5 shrink-0 place-items-center",
-              i.ok === true ? "bg-primary text-primary-foreground" : i.ok === null ? "placeholder-cell text-muted-foreground" : "bg-[#AC0EB2] text-white dark:bg-[#FFA9FD] dark:text-black",
-            )}
-            aria-label={i.ok === true ? "Ready" : i.ok === null ? "Pending" : "Missing"}
-          >
-            {i.ok === true ? <CheckIcon className="size-3.5" strokeWidth={3} /> : i.ok === null ? <ClockIcon className="size-3" /> : <XIcon className="size-3.5" strokeWidth={3} />}
+        <li key={i.label}>
+          <span className="mark" data-ok={i.ok === true ? "yes" : i.ok === null ? "wait" : "no"} aria-label={i.ok === true ? "Ready" : i.ok === null ? "Pending" : "Missing"}>
+            {i.ok === true ? <Tick /> : i.ok === null ? null : <Cross />}
           </span>
-          <span className="min-w-0 text-[14px] leading-5">
+          <span className="min-w-0">
             {i.label}
-            {i.ok !== true && <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{i.fix}</span>}
+            {i.ok !== true && <span className="fix">{i.fix}</span>}
             {i.ok !== true && i.action}
           </span>
         </li>

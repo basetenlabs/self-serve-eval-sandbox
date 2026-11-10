@@ -9,17 +9,11 @@ function TooltipProvider({ delayDuration = 150, ...props }: React.ComponentProps
 const Tooltip = TooltipPrimitive.Root;
 const TooltipTrigger = TooltipPrimitive.Trigger;
 
+/** The info note: a Black block with 14px White text. */
 function TooltipContent({ className, sideOffset = 6, children, ...props }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
   return (
     <TooltipPrimitive.Portal>
-      <TooltipPrimitive.Content
-        sideOffset={sideOffset}
-        className={cn(
-          "z-50 max-w-72 bg-primary px-2.5 py-1.5 text-[12px] leading-snug text-primary-foreground animate-fade",
-          className,
-        )}
-        {...props}
-      >
+      <TooltipPrimitive.Content sideOffset={sideOffset} className={cn("bt-tip", className)} {...props}>
         {children}
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
@@ -37,4 +31,16 @@ function Tip({ content, children, side }: { content: React.ReactNode; children: 
   );
 }
 
-export { Tip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger };
+/** A small square "?" beside a label that opens the info note. */
+function Info({ children, label = "About this" }: { children: React.ReactNode; label?: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="bt-info" aria-label={label}>?</button>
+      </TooltipTrigger>
+      <TooltipContent>{children}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+export { Info, Tip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger };

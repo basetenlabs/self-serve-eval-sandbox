@@ -32,7 +32,7 @@ export function LivePanel({ run, models, colors, onOpen }: { run: Run; models: M
       </div>
       {b.rows.length > 0 && (
         <div className={cn("grid gap-10", active && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
-          <Column heading="Board" aside={<span className="label-mono text-muted-foreground">{onOpen ? "Open a finished cell for its diff and trace" : "One row per PR · one cell per attempt"}</span>} className="min-w-0">
+          <Column heading="Board" aside={<span className="label-xs text-muted-foreground">{onOpen ? "Open a finished cell for its diff and trace" : "One row per PR · one cell per attempt"}</span>} className="min-w-0">
             <Board run={run} models={models} colors={colors} now={now} onOpen={onOpen} />
             <div className="mt-4"><BoardLegend judged={run.judged !== false} /></div>
           </Column>
@@ -63,27 +63,27 @@ function Fleet({ run, colors }: { run: Run; colors: Record<string, SwatchT> }) {
   const scored = cells.filter((c) => c.stage !== "left-out" && c.stage !== "not-run").length;
   const capacity = Math.min(96, Math.max(vms.length, (b.concurrency || 8) * 2));
   return (
-    <Column heading="Blaxel sandboxes" aside={active ? <span className="label-mono text-muted-foreground">Up to {capacity} at once</span> : null}>
+    <Column heading="Sandboxes" aside={active ? <span className="label-xs text-muted-foreground">Up to {capacity} at once</span> : null}>
       <div className="flex items-baseline gap-3">
-        <span className="num text-[56px] leading-none tracking-[-0.04em]">{active ? b.sandboxes : 0}</span>
+        <span className="ev-figure">{active ? b.sandboxes : 0}</span>
         <span className="text-[14px] text-muted-foreground">{active ? "running in parallel" : `all deleted · ${scored * 2} used`}</span>
       </div>
       {active && (
         <>
-          <div className="mt-5 grid grid-cols-[repeat(auto-fill,minmax(18px,1fr))] gap-[2px]" aria-hidden>
+          <div className="ev-fleet mt-6" aria-hidden>
             {Array.from({ length: capacity }, (_, i) => {
               const v = vms[i];
-              if (!v) return <i key={i} className="aspect-square placeholder-cell" />;
-              if (v.verifier) return <i key={i} className="aspect-square bg-surface shadow-[inset_0_0_0_1.5px_var(--line)]" />;
+              if (!v) return <i key={i} className="aspect-square ev-tone idle" />;
+              if (v.verifier) return <i key={i} className="aspect-square ev-tone verifier" />;
               const { className, style } = toneStyle(v.tone, v.model ? colors[v.model] : undefined);
               return <i key={i} className={cn("aspect-square transition-colors duration-500", className)} style={style} />;
             })}
           </div>
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
-            <span className="inline-flex items-center gap-1.5"><i className="size-2.5 bg-[#19E76E]" />Agent, in its model's colour</span>
-            <span className="inline-flex items-center gap-1.5"><i className="size-2.5 bg-surface shadow-[inset_0_0_0_1.5px_var(--line)]" />Verifier waiting</span>
-            <span className="inline-flex items-center gap-1.5"><i className="size-2.5 bg-[#575D56] dark:bg-[#A2AE9D]" />Hidden tests</span>
-            <span className="inline-flex items-center gap-1.5"><i className="size-2.5 placeholder-cell" />Free</span>
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+            <span className="inline-flex items-center gap-2"><i className="size-2.5 bg-lightGreen" />Agent, in its model's colour</span>
+            <span className="inline-flex items-center gap-2"><i className="ev-tone verifier size-2.5" />Verifier waiting</span>
+            <span className="inline-flex items-center gap-2"><i className="size-2.5 bg-darkGrey1" />Hidden tests</span>
+            <span className="inline-flex items-center gap-2"><i className="ev-tone idle size-2.5" />Free</span>
           </div>
         </>
       )}
@@ -102,16 +102,16 @@ function Progress({ run, now }: { run: Run; now: number }) {
   return (
     <Column heading="Progress">
       <div className="flex items-baseline gap-3">
-        <span className="num text-[56px] leading-none tracking-[-0.04em]">{Math.round(share * 100)}%</span>
+        <span className="ev-figure">{Math.round(share * 100)}%</span>
         <span className="text-[14px] text-muted-foreground">{finished} of {scored || "–"} attempts</span>
       </div>
-      <div className="mt-5 h-2 bg-node" aria-hidden>
-        <div className="h-full bg-foreground transition-[width] duration-700" style={{ width: `${share * 100}%` }} />
+      <div className="ev-meter mt-6" aria-hidden>
+        <i className="!bg-black" style={{ width: `${share * 100}%` }} />
       </div>
       {seconds != null && (
         <div className="mt-6">
-          <div className="label-mono text-muted-foreground">{active ? "Wall clock" : "Total wall clock"}</div>
-          <div className="num mt-1 font-mono text-[28px] leading-9 tracking-[-0.02em]">{clock(seconds)}</div>
+          <div className="label-xs text-muted-foreground">{active ? "Wall clock" : "Total wall clock"}</div>
+          <div className="num mt-2 font-mono text-[24px] leading-8">{clock(seconds)}</div>
         </div>
       )}
     </Column>
@@ -132,13 +132,13 @@ function Scores({ run, models, colors }: { run: Run; models: Model[]; colors: Re
             <li key={m.key}>
               <div className="flex items-baseline justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2 text-[14px] font-medium"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
-                <span className="num text-[20px] leading-7">{graded ? `${solved}/${graded}` : "–"}</span>
+                <span className="num text-[24px] leading-8">{graded ? `${solved}/${graded}` : "–"}</span>
               </div>
-              {m.model && <div className="truncate font-mono text-[11px] text-muted-foreground">{m.model}</div>}
-              <div className="mt-1.5 h-2.5 bg-node" aria-hidden>
+              {m.model && <div className="truncate font-mono text-[12px] text-muted-foreground">{m.model}</div>}
+              <div className="mt-2 h-2 bg-lightGrey1" aria-hidden>
                 <div className="h-full transition-[width] duration-700" style={{ width: `${graded ? (100 * solved) / graded : 0}%`, background: colors[m.key]?.fill }} />
               </div>
-              <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+              <div className="label-xs mt-2 text-muted-foreground">
                 {[graded ? `${pct(solved / graded)} solved` : "Waiting for results", spent ? `${usd(spent)} spent` : null, solved ? `${usd(spent / solved)} per solve` : null].filter(Boolean).join(" · ")}
               </div>
             </li>
