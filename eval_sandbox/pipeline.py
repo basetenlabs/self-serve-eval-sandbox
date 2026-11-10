@@ -460,8 +460,9 @@ def none_passed(count: int, statuses: dict[str, str | None]) -> str:
     """Why a run has nothing to run: its most common reason, in words."""
     reasons = [left_out_why(s) for s in statuses.values() if s != "valid"]
     common = max(set(reasons), key=reasons.count) if reasons else None
-    return (f"None of the {count} pull requests passed the check" + (f" ({reasons.count(common)} because "
-            f"{common})" if common else "") + ". If installing failed, give the install and test commands (--setup, --test).")
+    return (f"None of the {count} pull requests passed the check" + (f" ({reasons.count(common)} because: "
+            f"{common.rstrip('.')})" if common else "") + ". If installing failed, give the install and test commands "
+            "(--setup, --test).")
 
 
 def left_out_why(status: str | None) -> str:
