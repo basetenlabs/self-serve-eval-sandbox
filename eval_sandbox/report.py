@@ -203,14 +203,29 @@ def build(job_dir: Path) -> Path:
     data = build_data(job_dir)
     # No credential is ever in a run's files; masking by value makes sure none reaches a reader.
     write_atomic(job_dir / "report.json", redact_known(json.dumps(data, indent=1)))
-    html = TEMPLATE.read_text()
+    target = job_dir / "report.html"
+    write_atomic(target, html(data))
+    return target
+
+
+def html(data: dict) -> str:
+    """A run's report page: the current template around its data."""
     # No "<" at all inside the script: "</script" would end it early, and "<!--<script" would keep the
     # real end tag from closing it. PR titles and diffs come from anyone's public repository.
     payload = redact_known(json.dumps(data)).replace("<", "\\u003c")
-    html = html.replace("__REPORT_TITLE__", f"Eval Sandbox · {data['run']['run_id']}").replace("__REPORT_DATA__", payload)
-    target = job_dir / "report.html"
-    write_atomic(target, html)
-    return target
+    title = f"Self-Serve Model Eval Sandbox · {data['run']['run_id']}"
+    return TEMPLATE.read_text().replace("__REPORT_TITLE__", title).replace("__REPORT_DATA__", payload)
+
+
+def current_html(job_dir: Path) -> bytes | None:
+    """The report as the page looks today, from the run's report.json; a report.html written when the run
+    finished keeps the design of that day. None when the run has no readable report.json."""
+    try:
+        data = json.loads((job_dir / "report.json").read_text())
+        data["run"]["run_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return html(data).encode()
 
 
 def write_atomic(path: Path, text: str) -> None:

@@ -87,8 +87,8 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
             <button type="button" onClick={() => setOpenId(t.id)} className="grid w-full gap-2 bg-surface p-3 text-left active:bg-muted">
               <span className="min-w-0">
                 <span className="line-clamp-2 text-[14px] font-medium">{t.title}</span>
-                <span className="mt-0.5 block truncate font-mono text-[12px] text-muted-foreground">
-                  {t.repo} #{t.pr ?? ""}{t.language ? ` · ${t.language}` : ""}{t.size ? ` · ${t.lines_changed} lines` : ""}
+                <span className="mt-0.5 block break-words font-mono text-[12px] text-muted-foreground">
+                  {t.repo} #{t.pr ?? ""}{t.language ? ` · ${t.language}` : ""}{t.size ? ` · ${t.lines_changed}\u00a0lines` : ""}
                 </span>
               </span>
               <span className="grid grid-cols-2 gap-x-3 gap-y-1.5">

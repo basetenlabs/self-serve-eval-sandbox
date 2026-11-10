@@ -1783,6 +1783,13 @@ class ReportTest(unittest.TestCase):
             block = html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0]
             self.assertNotIn("<", block)
             self.assertEqual(json.loads(block)["summary"]["claude-opus"]["solved"], 1)  # still valid JSON
+            # A report written in an older design opens in today's: the page builds it again from report.json.
+            (job / "report.html").write_text("old design")
+            served = report.current_html(job).decode()
+            self.assertIn("<title>Self-Serve Model Eval Sandbox · r1</title>", served)
+            self.assertNotIn("+</script><b>", served)
+            (job / "report.json").write_text("{")
+            self.assertIsNone(report.current_html(job))  # unreadable: the page serves report.html as written
 
 
 def judged_task(d: str) -> tasks.Task:
