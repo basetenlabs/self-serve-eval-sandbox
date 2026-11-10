@@ -32,6 +32,12 @@ RUN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")  # never "." or ".."
 # The only files under jobs/ the page serves: each run's report. Transcripts, logs and
 # diffs stay on disk; an attempt's trace goes out condensed and redacted, by /api/trace.
 REPORT_FILE = re.compile(r"/([A-Za-z0-9_-][A-Za-z0-9_.-]*)/report\.(html|json)")
+# Baseten's licensed face, Beausite Classic. hosted/deploy.py fetches it into hosted/fonts (never committed) and the page
+# gets it only through the hosted sign-in: a request that names a signed-in person. Everyone else, and every page
+# opened from disk, sets in Geist, which the page ships.
+FONTS = Path(__file__).resolve().parent.parent / "hosted" / "fonts"
+BEAUSITE = {w: f"BeausiteClassic-{w}.woff2" for w in ("350", "400", "500")}
+FONT_FILE = re.compile(r"/fonts/(BeausiteClassic-(?:350|400|500)\.woff2)")
 MAX_LIMIT = 50
 PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
@@ -912,7 +918,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self.same_origin():
             return self.send_error(403)
         if url.path in ("/", "/index.html"):
-            return self.send_body(PAGE.read_bytes(), "text/html; charset=utf-8")
+            return self.send_body(self.with_fonts(PAGE.read_bytes()), "text/html; charset=utf-8")
+        if (font := FONT_FILE.fullmatch(url.path)) and self.user() and (FONTS / font[1]).is_file():
+            return self.send_body((FONTS / font[1]).read_bytes(), "font/woff2")
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         user = self.user()
         if url.path == "/api/state":
@@ -925,6 +933,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if url.path == "/api/trace":
             return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", ""), user))
         if (report := REPORT_FILE.fullmatch(url.path)) and self.app.visible(self.app.jobs_dir / report[1], user):
+            if report[2] == "html" and (file := self.app.jobs_dir / report[1] / "report.html").is_file():
+                return self.send_body(self.with_fonts(file.read_bytes()), "text/html; charset=utf-8")
             return super().do_GET()
         return self.send_error(404)
 
@@ -959,6 +969,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/github/sign-out":
             return self.send_json(self.app.github_sign_out(user))
         return self.send_error(404)
+
+    def with_fonts(self, html: bytes) -> bytes:
+        """The page with Beausite's faces declared, for a signed-in person on the hosted page when the files are there."""
+        if not self.user() or not all((FONTS / name).is_file() for name in BEAUSITE.values()):
+            return html
+        faces = "".join(f'@font-face{{font-family:"Beausite Classic";src:url("/fonts/{name}") format("woff2");'
+                        f"font-weight:{weight};font-style:normal;font-display:swap}}" for weight, name in BEAUSITE.items())
+        return html.replace(b"</head>", f"<style>{faces}</style></head>".encode(), 1)
 
     def user(self) -> str | None:
         """Who is asking, as the hosted sign-in names them; locally, no one in particular."""

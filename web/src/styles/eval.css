@@ -304,3 +304,6 @@ label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
 
 /* Trace: a failed tool call is marked by a 2px Dark Pink line at its left. */
 .ev-trace-error { border-left: 2px solid var(--color-darkPink); }
+
+/* Radix keeps a hidden native radio beside each choice for forms; square like every mark on the site. */
+input[type=radio] { border-radius: 0; }

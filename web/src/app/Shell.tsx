@@ -20,7 +20,7 @@ export function Shell({ state, route, go, offline, children }: {
   const home = (e: React.MouseEvent) => { e.preventDefault(); go({ page: "home" }); };
 
   return (
-    <div className="ev-shell">
+    <div className="bt-page ev-shell">
       <header className="bt-appbar">
         <a href="#/" onClick={home} className="logo" aria-label="Eval Sandbox home"><BasetenLogo /></a>
         <nav aria-label="Pages">

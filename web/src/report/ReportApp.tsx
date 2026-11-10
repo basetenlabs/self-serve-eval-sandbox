@@ -14,7 +14,7 @@ export function ReportApp({ report }: { report: Report }) {
   return (
     <TooltipProvider>
       <Toaster>
-        <div className="ev-shell">
+        <div className="bt-page ev-shell">
           <header className="bt-appbar">
             <span className="logo"><BasetenLogo /></span>
             <nav aria-label="Pages">
