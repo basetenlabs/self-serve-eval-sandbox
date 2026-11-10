@@ -107,7 +107,6 @@
   --color-grey-1: var(--color-darkGrey1);
   --color-grey-2: var(--color-darkGrey2);
 
-  --animate-pulse-dot: ev-pulse 1s infinite;
   --animate-enter: ev-fade 0.3s ease-out both;
   --animate-fade: ev-fade 0.3s ease-out both;
   --animate-grow: ev-grow 0.4s cubic-bezier(.75, 0, .1, .99) both;
@@ -171,7 +170,6 @@
   outline-offset: -1px;
 }
 
-@keyframes ev-pulse { 50% { opacity: .35; } }
 @keyframes ev-fade { from { opacity: 0; } }
 @keyframes ev-grow { from { width: 0; } }
 @keyframes ev-spin { to { transform: rotate(360deg); } }

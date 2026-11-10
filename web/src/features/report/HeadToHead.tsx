@@ -49,14 +49,14 @@ export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
                 <div className="label-mono mt-0.5 text-muted-foreground">{metric.units}</div>
                 {metric.delta && <DeltaChip className="mt-3">{metric.delta}</DeltaChip>}
               </div>
-              <div className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)] items-center gap-x-4">
+              <div className="grid grid-cols-1 items-center gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-y-0">
                 {sides.map((s, i) => {
                   const v = values[i];
                   const w = v == null ? 0 : Math.max(0.5, (v / max) * 100);
-                  const inside = w >= 22;
+                  const inside = w >= 45; // under half the track the value sits after the bar, so it never spills onto the name
                   return (
                     <div key={s.m.key} className="contents">
-                      <div className="label-mono truncate text-right text-foreground" title={s.m.label}>{s.m.label}</div>
+                      <div className={cn("label-mono truncate text-foreground sm:text-right", i > 0 && "max-sm:mt-2")} title={s.m.label}>{s.m.label}</div>
                       <div className="relative h-10 bg-surface">
                         {v == null ? (
                           <div className="placeholder-cell flex h-full items-center px-3 label-mono text-muted-foreground">Not measured</div>

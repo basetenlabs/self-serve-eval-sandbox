@@ -9,8 +9,8 @@ const H = 400, L = 56, R = 32, T = 40, B = 48;
 // Geist Mono at 11px with the labels' 0.06em tracking: one character's advance, for sizing chips.
 const CHAR = 7.3;
 
-function niceStep(span: number) {
-  const raw = span / 4, mag = 10 ** Math.floor(Math.log10(raw));
+function niceStep(span: number, ticks = 4) {
+  const raw = span / ticks, mag = 10 ** Math.floor(Math.log10(raw));
   return [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw) ?? raw;
 }
 
@@ -37,7 +37,7 @@ function useWidth(): [(el: HTMLDivElement | null) => void, number] {
 export function Scatter({ models, S, colors }: { models: Model[]; S: Record<string, Summary>; colors: Record<string, Swatch> }) {
   const [hover, setHover] = React.useState<string | null>(null);
   const [box, width] = useWidth();
-  const W = Math.max(width, 480);
+  const W = width || 480; // the column's own width, phones included: never drawn wider and scaled down
   const pts = models
     .map((m) => ({ m, s: S[m.key] }))
     .filter((p) => p.s?.pass_at_1 != null && p.s.cost_per_solved != null);
@@ -51,7 +51,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   }
 
   const maxX = Math.max(...pts.map((p) => p.s.cost_per_solved!)) * 1.15 || 1;
-  const step = niceStep(maxX), xMax = Math.ceil(maxX / step) * step;
+  const step = niceStep(maxX, W < 560 ? 2 : 4), xMax = Math.ceil(maxX / step) * step;
   const x = (v: number) => L + (v / xMax) * (W - L - R);
   const yStep = Math.max(1, Math.ceil(Math.max(...pts.map((p) => p.s.tasks_solved)) / 4)), yMax = yStep * 4;
   const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
@@ -89,10 +89,12 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   const chips = pts.map((p, i) => {
     const { cx, cy } = at(p);
     const w = p.m.label.length * CHAR + 16, h = 22;
-    const spots = [[cx + 10, cy - 30], [cx - 10 - w, cy - 30], [cx + 12, cy + 8], [cx - 12 - w, cy + 8], [cx - w / 2, cy - 36], [cx - w / 2, cy + 14], [cx + 14, cy - h / 2], [cx - 14 - w, cy - h / 2]];
-    for (const [x0, y0] of spots) {
+    // On a narrow chart a chip may slide sideways to stay inside the plot, and may drop a row further down.
+    const spots = [[cx + 10, cy - 30], [cx - 10 - w, cy - 30], [cx + 12, cy + 8], [cx - 12 - w, cy + 8], [cx - w / 2, cy - 36], [cx - w / 2, cy + 14], [cx + 14, cy - h / 2], [cx - 14 - w, cy - h / 2], [cx - w / 2, cy + 40], [cx - w / 2, cy + 66]];
+    for (const [sx, y0] of spots) {
+      const x0 = Math.min(Math.max(sx, L + 2), W - 2 - w);
       const b = { x0, x1: x0 + w, y0, y1: y0 + h };
-      if (b.x0 < L + 2 || b.x1 > W - 2 || b.y0 < 2 || b.y1 > H - B) continue;
+      if (b.x0 < L + 2 || b.y0 < 2 || b.y1 > H - B) continue;
       if (placed.some((o) => o !== dots[i] && hits(b, o))) continue;
       placed.push(b);
       return { x0, y0, w, h };
@@ -146,11 +148,11 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
                 className="cursor-default outline-none"
               >
                 <circle cx={cx} cy={cy} r={16} fill="transparent" />
-                <circle cx={cx} cy={cy} r={hover === p.m.key ? 6 : 4} fill={sw?.fill} className="transition-[r]" />
+                <circle cx={cx} cy={cy} r={hover === p.m.key ? 6 : 4} style={{ fill: sw?.fill }} className="transition-[r]" />
                 {chip && (
                   <g>
-                    <rect x={chip.x0} y={chip.y0} width={chip.w} height={chip.h} fill={sw?.fill} />
-                    <text x={chip.x0 + 8} y={chip.y0 + 15} fill={sw?.ink} className="font-mono text-[11px] uppercase tracking-[0.06em]">{p.m.label}</text>
+                    <rect x={chip.x0} y={chip.y0} width={chip.w} height={chip.h} style={{ fill: sw?.fill }} />
+                    <text x={chip.x0 + 8} y={chip.y0 + 15} style={{ fill: sw?.ink }} className="font-mono text-[11px] uppercase tracking-[0.06em]">{p.m.label}</text>
                   </g>
                 )}
               </g>

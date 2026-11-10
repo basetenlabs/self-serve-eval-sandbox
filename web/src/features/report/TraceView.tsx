@@ -16,7 +16,7 @@ export function TraceView({ runId, trial, active }: { runId: string; trial: stri
   // A report opened from disk has no page server behind it to ask.
   const local = location.protocol === "file:";
   const trace = useTrace(runId, trial, active && !local);
-  if (local) return <Note>Open this run in Eval Sandbox to read the agent's trace.</Note>;
+  if (local) return <Note>Open this run in the Self-Serve Model Eval Sandbox to read the agent's trace.</Note>;
   if (!trace) return <Note><span aria-hidden className="ev-dot live mr-2" />Reading the trace</Note>;
   if (trace.error) return <Note>{trace.error}</Note>;
   return <Steps trace={trace} />;
@@ -57,9 +57,9 @@ function Steps({ trace }: { trace: Trace }) {
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="ev-segments" role="radiogroup" aria-label="Show">
+        <div className="bt-toolbar ev-chips" role="radiogroup" aria-label="Show">
           {filters.filter(([k]) => k === "all" || counts[k] > 0).map(([k, label]) => (
-            <button key={k} type="button" role="radio" aria-checked={show === k} onClick={() => setShow(k)}>
+            <button key={k} type="button" role="radio" aria-checked={show === k} className={cn("bt-chip", show === k && "active")} onClick={() => setShow(k)}>
               {label} <span className="count">{counts[k]}</span>
             </button>
           ))}
@@ -72,7 +72,7 @@ function Steps({ trace }: { trace: Trace }) {
           {expandAll ? "Collapse all" : "Expand all"}
         </Button>
       </div>
-      <ol className="max-h-[640px] overflow-y-auto bg-surface hairline" aria-label="Trace">
+      <ol className="max-h-[640px] overflow-y-auto border-t border-lightGrey2" aria-label="Trace">
         {shown.length ? shown.map(([s, i]) => (
           <Step key={i} step={s} open={expandAll !== opened.has(i)} onToggle={() => toggle(i)} />
         )) : <li className="px-4 py-8 text-center text-[14px] text-muted-foreground">Nothing matches.</li>}
@@ -99,7 +99,7 @@ function Step({ step: s, open, onToggle }: { step: TraceStep; open: boolean; onT
         <div className="min-w-0 flex-1">
           <span className="label-xs text-muted-foreground">{thinking ? "Thought" : "Said"}</span>
           <p className={cn("mt-0.5 text-[13.5px] leading-relaxed whitespace-pre-wrap break-words",
-            thinking && "text-muted-foreground italic", long && !open && "line-clamp-4")}>{s.text}</p>
+            thinking && "text-muted-foreground", long && !open && "line-clamp-4")}>{s.text}</p>
           {long && (
             <button type="button" onClick={onToggle} className="label-xs mt-1 text-muted-foreground hover:text-foreground">
               {open ? "Less" : "More"}
@@ -111,7 +111,7 @@ function Step({ step: s, open, onToggle }: { step: TraceStep; open: boolean; onT
   }
   const more = !!(s.detail || s.output);
   return (
-    <li className={cn(row, nested, s.error && "ev-trace-error")}>
+    <li className={cn(row, nested)}>
       {gutter}
       <div className="min-w-0 flex-1">
         <button type="button" onClick={onToggle} disabled={!more} aria-expanded={more ? open : undefined}
@@ -119,6 +119,7 @@ function Step({ step: s, open, onToggle }: { step: TraceStep; open: boolean; onT
           <span className={cn("mt-px inline-flex h-5 shrink-0 items-center px-1.5 font-mono text-[12px] uppercase tracking-[0.06em]",
             s.error ? "bg-lightPink text-black" : "bg-lightGrey1 text-black")}>{s.tool || "tool"}</span>
           <span className={cn("min-w-0 flex-1 font-mono text-[14px] leading-5", open ? "break-all whitespace-pre-wrap" : "truncate")}>{s.title || " "}</span>
+          {s.error && <span className="bt-badge pink shrink-0">Error</span>}
           {more && <span className={cn("mt-1 grid size-3.5 shrink-0 place-items-center text-darkGrey3 transition-transform group-hover:text-black", open && "rotate-90")}><Chevron /></span>}
         </button>
         {open && more && (

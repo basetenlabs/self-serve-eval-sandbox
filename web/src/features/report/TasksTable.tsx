@@ -110,7 +110,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
         ))}
         {!rows.length && <li className="bg-surface py-10 text-center text-[14px] text-muted-foreground">No tasks match these filters.</li>}
       </ul>
-      <div className="bg-surface hairline max-md:hidden">
+      <div className="bg-surface max-md:hidden">
         <Table>
           <THead>
             <TR>

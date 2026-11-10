@@ -1,7 +1,6 @@
 import * as React from "react";
 import { BasetenLogo, Spacer, Surface } from "@/components/brand";
 import { Button } from "@/components/ui/button";
-import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ReportHeader, Results, Tasks } from "@/features/report/ReportView";
 import type { Report } from "@/lib/types";
@@ -13,12 +12,11 @@ export function ReportApp({ report }: { report: Report }) {
   const served = location.protocol.startsWith("http"); // opened through pr-eval serve, not from disk
   return (
     <TooltipProvider>
-      <Toaster>
         <div className="bt-page ev-shell">
           <header className="bt-appbar">
             <span className="logo"><BasetenLogo /></span>
             <nav aria-label="Pages">
-              {served ? <a href="/#/">Eval Sandbox</a> : <span className="text-[14px] text-faint">Eval Sandbox</span>}
+              {served ? <a href="/#/">Self-Serve Model Eval Sandbox</a> : <span className="text-[14px] text-faint">Self-Serve Model Eval Sandbox</span>}
               <a href="#" aria-current="page" className="crumb">Report</a>
             </nav>
             {served && (
@@ -43,11 +41,10 @@ export function ReportApp({ report }: { report: Report }) {
             </Surface>
           </main>
           <footer className="bt-footnote ev-foot">
-            <span>Baseten Eval Sandbox</span>
+            <span>Self-Serve Model Eval Sandbox</span>
             <span className="max-sm:hidden">Generated {new Date(report.generated_at).toLocaleString()}. The data is in report.json next to this file.</span>
           </footer>
         </div>
-      </Toaster>
     </TooltipProvider>
   );
 }

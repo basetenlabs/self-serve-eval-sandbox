@@ -14,6 +14,7 @@ describe("readiness", () => {
     const github = items.find((i) => i.label.startsWith("GitHub"))!;
     expect(github.ok).toBeNull(); // not a thing to fix: needed only for your own repos
     expect(items.map((i) => i.fix).join(" ")).not.toMatch(/gh auth|terminal|pr-eval serve/);
+    expect(items.map((i) => `${i.label} ${i.fix}`).join(" ")).not.toMatch(/Blaxel|CLI|image|_KEY|--judge/);
     expect(readiness(state(true, "octocat")).find((i) => i.label.startsWith("GitHub"))!.ok).toBe(true);
   });
 

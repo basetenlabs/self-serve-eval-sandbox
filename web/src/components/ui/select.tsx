@@ -21,7 +21,7 @@ function Select({ value, onValueChange, options, allLabel, label, className }: {
         <Down />
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
-        <SelectPrimitive.Content position="popper" sideOffset={4} className="ev-list min-w-[var(--radix-select-trigger-width)]">
+        <SelectPrimitive.Content position="popper" sideOffset={4} align="end" collisionPadding={12} className="ev-list min-w-[var(--radix-select-trigger-width)]">
           <SelectPrimitive.Viewport className="bt-menu">
             {[{ value: ALL, label: allLabel }, ...options].map((o) => (
               <SelectPrimitive.Item key={o.value} value={o.value}>

@@ -3,7 +3,6 @@ import { Column, Empty, Surface, Tag } from "@/components/brand";
 import { Cross } from "@/components/brand/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useToast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
 import { plural } from "@/lib/format";
 
@@ -49,7 +48,7 @@ export function AccessPage({ invite }: { invite?: string }) {
       )}
       <div className="mt-12">
         {error ? <Empty title="Not available">{error}</Empty>
-          : !access ? <div className="ev-skeleton h-64" aria-busy />
+          : !access ? <div className="bt-skeleton h-64" aria-busy />
             : (
               <div className="grid gap-12 lg:grid-cols-3 lg:gap-3">
                 {LISTS.map((list) => <List key={list.key} list={list} access={access} onChange={setAccess} prefill={list.key === "emails" ? invite : undefined} />)}
@@ -63,7 +62,6 @@ export function AccessPage({ invite }: { invite?: string }) {
 function List({ list, access, onChange, prefill }: {
   list: (typeof LISTS)[number]; access: Access; onChange: (a: Access) => void; prefill?: string;
 }) {
-  const toast = useToast();
   // A request's link fills in the invite list only while that address isn't on it yet.
   const [value, setValue] = React.useState(() => prefill && !access[list.key].includes(prefill.toLowerCase()) ? prefill : "");
   const [busy, setBusy] = React.useState(false);
@@ -76,8 +74,7 @@ function List({ list, access, onChange, prefill }: {
     const res = await post<Access>(URL, { list: list.key, value: entry, remove });
     setBusy(false);
     if (res.error) {
-      if (remove) toast("Couldn't remove it", { body: res.error, tone: "danger" });
-      else setProblem(res.error);
+      setProblem(remove ? `Couldn't remove ${entry}. ${res.error}` : res.error);
       return false;
     }
     onChange(res);

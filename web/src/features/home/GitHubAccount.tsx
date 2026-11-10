@@ -1,7 +1,6 @@
 import * as React from "react";
 import { External, Tick } from "@/components/brand/icons";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
 import type { Checks, GitHubAccount as Account } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -15,7 +14,6 @@ type Poll = { pending?: boolean; interval?: number; login?: string | null; error
 export function GitHubAccount({ github, checks, onChange, ref }: {
   github: Account; checks: Checks; onChange: () => void; ref?: React.Ref<{ signIn: () => void }>;
 }) {
-  const toast = useToast();
   const [device, setDevice] = React.useState<Device | null>(github.device ?? null); // a reload picks the code back up
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -41,14 +39,13 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
         if (res.error) setError(res.error);
         else {
           setApproved(res.login ?? "");
-          toast("Signed in with GitHub", { body: res.login ? `as @${res.login}` : undefined });
           report.current();
         }
       }, seconds * 1000);
     };
     ask(device.interval);
     return () => { live = false; window.clearTimeout(timer); };
-  }, [device, toast]);
+  }, [device]);
 
   async function signIn() {
     if (device) return;

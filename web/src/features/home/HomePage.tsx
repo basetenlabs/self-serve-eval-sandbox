@@ -92,7 +92,7 @@ export function HomePage({ state, error, go, hurry }: {
           </div>
           {state && state.runs.length > 0 && <span className="label-mono text-muted-foreground">{plural(state.runs.length, "run")}</span>}
         </div>
-        {!state ? <div className="ev-skeleton h-40" aria-busy />
+        {!state ? <div className="bt-skeleton h-40" aria-busy />
           : state.runs.length ? <History runs={state.runs} go={go} />
             : <Empty title="No runs yet">Start the quick sample above. Results land in about half an hour.</Empty>}
       </Surface>
@@ -170,11 +170,11 @@ function ComposerSkeleton({ error }: { error: string | null }) {
     <div className="layout-grid !p-0" aria-busy>
       <div className="bt-main grid content-start gap-10">
         {[132, 280].map((h, i) => (
-          <div key={i} className="bt-column"><div className="ev-skeleton mt-8" style={{ height: h }} /></div>
+          <div key={i} className="bt-column"><div className="bt-skeleton mt-8" style={{ height: h }} /></div>
         ))}
       </div>
       <div className="bt-aside">
-        <div className="bt-column"><div className="ev-skeleton mt-8 h-56" /></div>
+        <div className="bt-column"><div className="bt-skeleton mt-8 h-56" /></div>
       </div>
     </div>
   );

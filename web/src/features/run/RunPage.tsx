@@ -5,7 +5,6 @@ import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
-import { useToast } from "@/components/ui/toast";
 import { fillAgain } from "@/features/home/NewRun";
 import { Results, TaskDrawer, Tasks } from "@/features/report/ReportView";
 import { post, useReport } from "@/lib/api";
@@ -27,12 +26,12 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   const version = run ? `${run.progress.done}|${run.phase}|${run.report}` : null;
   const { report } = useReport(run?.report ? id : null, version);
 
-  if (!state) return <Surface><div className="ev-skeleton h-96" aria-busy /></Surface>;
+  if (!state) return <Surface><div className="bt-skeleton h-96" aria-busy /></Surface>;
   if (!run) {
     return (
       <Surface>
         <Empty title="Run not found">
-          No run called <code className="ev-code">{id}</code> in this jobs folder.
+          No run called <code className="ev-code">{id}</code>.
           <div className="mt-4"><Button variant="outline" onClick={() => go({ page: "home" })}>All runs</Button></div>
         </Empty>
       </Surface>
@@ -87,20 +86,20 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
 function RunHeader({ run, state, sentence, hurry, go }: {
   run: Run; state: AppState; sentence: React.ReactNode; hurry: () => void; go: (r: Route) => void;
 }) {
-  const toast = useToast();
+  const [message, setMessage] = React.useState<{ tone: "error" | "success"; text: string } | null>(null);
   const [stopping, setStopping] = React.useState(false);
   const active = isActive(run.phase);
   React.useEffect(() => { if (!active) setStopping(false); }, [active]);
   const stop = async () => {
     setStopping(true);
+    setMessage(null);
     const res = await post(`/api/runs/${encodeURIComponent(run.id)}/stop`);
-    if (res.error) { setStopping(false); toast("Couldn't stop the run", { body: res.error, tone: "danger" }); }
+    if (res.error) { setStopping(false); setMessage({ tone: "error", text: `Couldn't stop the run. ${res.error}` }); }
     hurry();
   };
   const resume = async () => {
     const res = await post(`/api/runs/${encodeURIComponent(run.id)}/resume`);
-    if (res.error) toast("Couldn't resume", { body: res.error, tone: "danger" });
-    else toast("Resumed", { body: "Unfinished attempts run again." });
+    setMessage(res.error ? { tone: "error", text: `Couldn't resume. ${res.error}` } : { tone: "success", text: "Resumed: unfinished attempts run again." });
     hurry();
   };
   const again = () => {
@@ -138,6 +137,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
               title="Stop this run?"
               description="Attempts in progress end and their sandboxes are deleted. Finished results stay, and Resume picks up where it left off."
               action="Stop run"
+              cancel="Keep running"
               onConfirm={stop}
               trigger={<Button variant="danger" disabled={stopping}>{stopping ? "Stopping" : "Stop"}</Button>}
             />
@@ -157,6 +157,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
           )}
         </div>
       </div>
+      {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("bt-notice mt-6", message.tone)}>{message.text}</div>}
     </Surface>
   );
 }
@@ -168,7 +169,7 @@ function now(run: Run): string {
   const sofar = total ? ` ${done} of ${total} attempts finished.` : "";
   if (step === "find") return "Finding merged pull requests that came with tests.";
   if (step === "check") return "Checking that each pull request's tests fail before the fix and pass after.";
-  if (step === "code") return `Models coding, each attempt in its own Blaxel sandbox.${sofar}`;
+  if (step === "code") return `Models coding, each attempt in its own sandbox.${sofar}`;
   if (step === "grade") return `Grading with the hidden tests${run.judged === false ? "" : ", then the judges"}.${sofar}`;
   return `${run.detail ? run.detail.replace(/\.?$/, ".") : "Starting."}${sofar}`;
 }
@@ -222,5 +223,5 @@ function Note({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function Loading() {
-  return <div className="grid gap-6" aria-busy>{[180, 260, 200].map((h, i) => <div key={i} className="ev-skeleton" style={{ height: h }} />)}</div>;
+  return <div className="grid gap-6" aria-busy>{[180, 260, 200].map((h, i) => <div key={i} className="bt-skeleton" style={{ height: h }} />)}</div>;
 }

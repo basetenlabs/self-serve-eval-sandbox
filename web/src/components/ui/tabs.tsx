@@ -19,13 +19,4 @@ function TabsContent({ className, ...props }: React.ComponentProps<typeof TabsPr
   return <TabsPrimitive.Content data-slot="tabs-content" className={cn("outline-none animate-fade", className)} {...props} />;
 }
 
-/** Segmented control: compact choices in a Light Grey 1 strip; the chosen one is Black. */
-function SegmentList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {
-  return <TabsPrimitive.List className={cn("ev-segments", className)} {...props} />;
-}
-
-function SegmentTrigger({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
-  return <TabsPrimitive.Trigger className={className} {...props} />;
-}
-
-export { SegmentList, SegmentTrigger, Tabs, TabsContent, TabsList, TabsTrigger };
+export { Tabs, TabsContent, TabsList, TabsTrigger };

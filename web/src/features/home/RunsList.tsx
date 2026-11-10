@@ -83,9 +83,9 @@ function Title({ run, link = true }: { run: Run; link?: boolean }) {
   );
 }
 
-/** A chip only when the run isn't simply done: live, stopped or failed. */
+/** The run's phase as the same badge the run page shows. */
 function Status({ run }: { run: Run }) {
-  return run.phase === "done" ? <span className="text-[14px] text-muted-foreground">Done</span> : <PhaseBadge phase={run.phase} />;
+  return <PhaseBadge phase={run.phase} />;
 }
 
 /** What each model solved, with its cost per solved task; or how far a live run has got. */
@@ -112,9 +112,9 @@ function Results({ run }: { run: Run }) {
       {results.map((m) => {
         const s = run.summary[m.key];
         return (
-          <span key={m.key} className="grid grid-cols-[minmax(0,12rem)_1fr] items-center gap-3 text-[14px]">
+          <span key={m.key} className="grid grid-cols-1 items-center gap-x-3 text-[14px] sm:grid-cols-[minmax(0,12rem)_1fr]">
             <span className="flex min-w-0 items-center gap-2"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
-            <span className="num whitespace-nowrap"><b className="font-medium">{s.tasks_solved ?? s.solved} solved</b> <span className="text-muted-foreground">· {usd(s.cost_per_solved)} per solved task</span></span>
+            <span className="num whitespace-nowrap max-sm:pl-[18px]"><b className="font-medium">{s.tasks_solved ?? s.solved} solved</b> <span className="text-muted-foreground">· {usd(s.cost_per_solved)} per solved task</span></span>
           </span>
         );
       })}

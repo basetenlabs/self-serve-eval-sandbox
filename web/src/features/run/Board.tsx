@@ -141,7 +141,7 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
     sub = (
       <div className="mt-1.5 flex gap-[2px]" aria-hidden>
         {Array.from({ length: steps }, (_, i) => (
-          <i key={i} className={cn("h-[2px] flex-1 bg-current", i < step ? "" : i === step ? "animate-pulse-dot" : "opacity-20")} />
+          <i key={i} className={cn("h-[2px] flex-1 bg-current", i < step ? "" : i === step ? "opacity-60" : "opacity-20")} />
         ))}
       </div>
     );

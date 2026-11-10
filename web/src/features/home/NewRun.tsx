@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Kbd, Label } from "@/components/ui/input";
-import { useToast } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { post, repoInfo, samePull, useFavorites } from "@/lib/api";
 import { dur, money, plural, usd } from "@/lib/format";
@@ -29,7 +28,6 @@ const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
 export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) => void; hurry: () => void }) {
-  const toast = useToast();
   const [stored, setSource] = useStored<string>("pr-eval-source", "quick");
   const source: Source = stored === "repo" || stored === "suite" ? stored : "quick";
   const [text, setText] = useStored("pr-eval-pulls", "");
@@ -63,8 +61,10 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     else { setSource("repo"); setSignInNext(true); }
   };
   const [favorites, save] = useFavorites(state.favorites);
+  const [saveProblem, setSaveProblem] = React.useState<string | null>(null);
   const onFavorite: OnFavorite = (pull, saved) => {
-    void save(pull, saved).then((problem) => problem && toast("Couldn't save it", { body: problem, tone: "danger" }));
+    setSaveProblem(null);
+    void save(pull, saved).then((problem) => problem && setSaveProblem(`Couldn't save it. ${problem}`));
   };
   const github = state.github.login; // a GitHub sign-in can open private repositories, so look again
   // The eval suite: every starred pull request, from any repository, less the ones unticked for this run.
@@ -179,7 +179,6 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
       return;
     }
     if (commandsFor && mode !== "suite" && (setup.trim() || test.trim())) setKept({ ...kept, [commandsFor]: { setup, test } });
-    toast("Run started", { body: `${attempts} attempts on ${plural(prs, "pull request")}.` });
     hurry();
     go({ page: "run", id: res.id });
   }
@@ -218,6 +217,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
               text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
           </RadioGroup.Root>
+          {saveProblem && <div role="alert" className="bt-notice error mt-3">{saveProblem}</div>}
 
           {source === "quick" && state.github.sign_in && (!state.quick.ready || !!state.github.login) && (
             <div className="ev-panel animate-enter">
@@ -468,9 +468,10 @@ function Segmented({ label, value, onChange, options }: {
   return (
     <div className="bt-field w-auto gap-2">
       <span className="label-xs text-muted-foreground">{label}</span>
-      <div className="ev-segments" role="radiogroup" aria-label={label}>
+      <div className="bt-toolbar ev-chips" role="radiogroup" aria-label={label}>
         {options.map((o) => (
-          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}>{o.label}</button>
+          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} className={cn("bt-chip", value === o.value && "active")}
+            onClick={() => onChange(o.value)}>{o.label}</button>
         ))}
       </div>
     </div>

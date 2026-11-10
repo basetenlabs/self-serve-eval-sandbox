@@ -9,8 +9,8 @@ import { GitHubMark } from "./GitHubAccount";
 type Item = { ok: boolean | null; label: string; fix: string; action?: React.ReactNode };
 
 /** What a run needs, each with the one thing to do when it's missing. Locally that's this machine's setup.
- * Hosted, visitors have no terminal: the page's own setup is its admins' to fix, and GitHub is the visitor's
- * own sign-in, needed only for their own repos, so it's never a thing to fix. */
+ * Hosted, visitors have no terminal and see none of the plumbing: the page's own setup is one line its admins
+ * fix, and GitHub is the visitor's own sign-in, needed only for their own repos, so it's never a thing to fix. */
 export function readiness(state: AppState, onSignIn?: () => void): Item[] {
   const c = state.checks;
   const hosted = state.github.sign_in;
@@ -24,6 +24,10 @@ export function readiness(state: AppState, onSignIn?: () => void): Item[] {
         fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in to start a run.",
         action: onSignIn && <Button type="button" variant="outline" className="mt-2" onClick={onSignIn}><GitHubMark className="size-3.5" /> Sign in with GitHub</Button> }
     : { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
+  if (hosted) {
+    const ready = c.blaxel && c.bl_cli && !!baseten && !baseten.missing && !!claude && !claude.missing && c.judge.ok;
+    return [github, { ok: ready, label: ready ? "Models and judges ready" : "This page isn't ready to run", fix: "Its admins are fixing it." }];
+  }
   return [
     { ok: c.blaxel, label: "Dedicated Blaxel workspace", fix: hosted ? host("", c.blaxel_problem) : c.blaxel_problem || "Configure PR_EVAL_BLAXEL_WORKSPACE or ~/.config/pr-eval/blaxel.json, then restart pr-eval serve" },
     { ok: c.bl_cli, label: "Blaxel CLI", fix: hosted ? host("") : "Install the Blaxel CLI (bl): runs use it to build and find the trial image" },
@@ -46,7 +50,7 @@ export function Readiness({ state, onSignIn }: { state: AppState; onSignIn?: () 
         <details className="ev-details">
           <summary>
             <Chevron />
-            Workspace, keys and judges are ready
+            {state.github.sign_in ? "Ready to run" : "Workspace, keys and judges are ready"}
           </summary>
           <div className="mt-3"><Checks items={items} /></div>
         </details>
@@ -56,9 +60,11 @@ export function Readiness({ state, onSignIn }: { state: AppState; onSignIn?: () 
   return (
     <Column heading="Environment" aside={<Badge variant="danger">{missing} to fix</Badge>}>
       <Checks items={items} />
-      <p className="ev-small mt-6">
-        Runs use their own Blaxel workspace, never a shared one. Keys are read from the environment, never saved to a file.
-      </p>
+      {!state.github.sign_in && (
+        <p className="ev-small mt-6">
+          Runs use their own Blaxel workspace, never a shared one. Keys are read from the environment, never saved to a file.
+        </p>
+      )}
     </Column>
   );
 }

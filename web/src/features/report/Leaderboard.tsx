@@ -3,7 +3,6 @@ import { Column, Swatch } from "@/components/brand";
 import { Down } from "@/components/brand/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/components/ui/toast";
 import { compact, dur, elapsed, pct, usd } from "@/lib/format";
 import { isOpen, type Swatch as SwatchT } from "@/lib/models";
 import { wilson } from "@/lib/stats";
@@ -14,7 +13,7 @@ import { benchMarkdown } from "./markdown";
 /** Every model, best first, with the three numbers that decide it and the rest one click away. */
 export function Leaderboard({ report, ranked, colors }: { report: Report; ranked: Model[]; colors: Record<string, SwatchT> }) {
   const S = report.summary;
-  const toast = useToast();
+  const [copied, setCopied] = React.useState<"yes" | "no" | null>(null);
   const scored = ranked.filter((m) => S[m.key]?.valid);
   // A metric's leader gets "Best" only when it leads alone: a tie marks nobody.
   const lead = (value: (s: Summary) => number | null, higher: boolean) => {
@@ -31,16 +30,18 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(benchMarkdown(report, ranked));
-      toast("Copied as Markdown");
+      setCopied("yes");
+      window.setTimeout(() => setCopied(null), 2000);
     } catch {
-      toast("Copy failed", { body: "Select the table instead.", tone: "danger" });
+      setCopied("no");
     }
   };
   return (
     <Column
       heading="All models"
-      aside={<Button variant="outline" onClick={copy}>Copy as Markdown</Button>}
+      aside={<Button variant="outline" onClick={copy} aria-live="polite">{copied === "yes" ? "Copied" : "Copy as Markdown"}</Button>}
     >
+      {copied === "no" && <div role="alert" className="bt-notice error mb-4">Couldn't copy. Select the table instead.</div>}
       <div className="hidden grid-cols-[2.5rem_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_2rem] gap-4 border-b border-lightGrey2 px-3 pb-2 md:grid">
         {["#", "Model", "Solved ↑", "Cost per solved ↓", "Time per task ↓", "Total wall clock"].map((h) => (
           <span key={h} className="label-xs text-muted-foreground">{h}</span>

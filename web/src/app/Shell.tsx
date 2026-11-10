@@ -22,9 +22,9 @@ export function Shell({ state, route, go, offline, children }: {
   return (
     <div className="bt-page ev-shell">
       <header className="bt-appbar">
-        <a href="#/" onClick={home} className="logo" aria-label="Eval Sandbox home"><BasetenLogo /></a>
+        <a href="#/" onClick={home} className="logo" aria-label="Self-Serve Model Eval Sandbox home"><BasetenLogo /></a>
         <nav aria-label="Pages">
-          <a href="#/" onClick={home} aria-current={route.page === "home" ? "page" : undefined}>Eval Sandbox</a>
+          <a href="#/" onClick={home} aria-current={route.page === "home" ? "page" : undefined}>Self-Serve Model Eval Sandbox</a>
           {route.page === "run" && (
             <a href={href({ page: "run", id: route.id })} aria-current="page" className="crumb">{run?.title ?? route.id}</a>
           )}
@@ -47,7 +47,7 @@ export function Shell({ state, route, go, offline, children }: {
       </header>
       <main className="ev-main">{children}</main>
       <footer className="bt-footnote ev-foot">
-        <span>Baseten Eval Sandbox</span>
+        <span>Self-Serve Model Eval Sandbox</span>
         {state && !state.github.sign_in && <span className="max-sm:hidden">Also from a terminal: <code>pr-eval run --quick</code></span>}
       </footer>
     </div>

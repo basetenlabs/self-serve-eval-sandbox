@@ -118,7 +118,7 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
                     <Checkbox checked={chosen.includes(r.number)} disabled={!!r.why || (!chosen.includes(r.number) && chosen.length >= max)}
                       onCheckedChange={(v) => toggle(r.number, v === true)} aria-label={`#${r.number} ${r.title}`} />
                   }
-                  trailing={r.why ? <span className="size-7 shrink-0" /> : <Star saved={isSaved(r.number)} number={r.number} onClick={() => onFavorite({ repo, number: r.number, title: r.title }, !isSaved(r.number))} />} />
+                  trailing={r.why ? null : <Star saved={isSaved(r.number)} number={r.number} onClick={() => onFavorite({ repo, number: r.number, title: r.title }, !isSaved(r.number))} />} />
               ))}
             </React.Fragment>
           ))}
@@ -181,7 +181,7 @@ function Star({ saved, number, onClick }: { saved: boolean; number: number; onCl
   return (
     <button type="button" aria-pressed={saved} aria-label={saved ? `Forget #${number}` : `Save #${number} for later`} title={saved ? "Saved: click to forget" : "Save for later"}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClick(); }} className="ev-save">
-      {saved ? "Saved" : "Save"}
+      <span className={cn("bt-chip", saved && "active")}>{saved ? "Saved" : "Save"}</span>
     </button>
   );
 }
@@ -238,7 +238,7 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
             );
             const isSaved = favorites.some((f) => samePull(f, { repo, number: n }));
             const star = <Star saved={isSaved} number={n} onClick={() => onFavorite({ repo, number: n, title: row?.title }, !isSaved)} />;
-            return row ? <PullItem key={n} row={row} trailing={<>{row.why ? <span className="size-7 shrink-0" /> : star}{remove}</>} />
+            return row ? <PullItem key={n} row={row} trailing={<>{row.why ? null : star}{remove}</>} />
               : <SkeletonRow key={n} at={n} number={n} trailing={remove} />;
           })}
         </ul>
@@ -264,16 +264,18 @@ function PullItem({ row, control, trailing, hits, chosen }: { row: PullRow; cont
             ) : (
               <>
                 {[row.author, row.merged_at && `merged ${ago(row.merged_at)}`, plural(row.files, "file"), `${row.lines.toLocaleString()} lines`, plural(row.tests, "test file")]
-                  .filter(Boolean).map((part, i) => <span key={i}>{i > 0 && <span aria-hidden className="mr-1.5 text-darkGrey3">·</span>}{part}</span>)}
+                  .filter(Boolean).map((part, i) => <span key={i} className="whitespace-nowrap">{i > 0 && <span aria-hidden className="mr-1.5 text-darkGrey3">·</span>}{part}</span>)}
                 {row.maintenance && <Badge variant="outline" className="ml-1">Upkeep</Badge>}
               </>
             )}
           </span>
         </span>
-        <a href={row.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label={`Open #${row.number} on GitHub`} title="Open on GitHub" className="ev-icon-button">
-          <External />
-        </a>
-        {trailing}
+        <span className="actions">
+          <a href={row.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label={`Open #${row.number} on GitHub`} title="Open on GitHub" className="ev-icon-button">
+            <External />
+          </a>
+          {trailing}
+        </span>
       </Row>
     </li>
   );
@@ -299,10 +301,10 @@ function SkeletonRow({ number, trailing, at = 0 }: { number?: number; trailing?:
       {number == null && <span className="ev-check-off" />}
       <span className="grid min-w-0 flex-1 gap-2">
         <span className="flex items-center gap-2">
-          {number != null ? <span className="no">#{number}</span> : <span className="ev-skeleton h-3 w-9 shrink-0" />}
-          <span className={cn("ev-skeleton h-3", TITLE_WIDTHS[at % TITLE_WIDTHS.length])} />
+          {number != null ? <span className="no">#{number}</span> : <span className="bt-skeleton h-3 w-9 shrink-0" />}
+          <span className={cn("bt-skeleton h-3", TITLE_WIDTHS[at % TITLE_WIDTHS.length])} />
         </span>
-        <span className="ev-skeleton h-2.5 w-[38%] max-w-64" />
+        <span className="bt-skeleton h-2.5 w-[38%] max-w-64" />
       </span>
       {trailing}
     </li>
