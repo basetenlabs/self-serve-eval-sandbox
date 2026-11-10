@@ -6,7 +6,7 @@ import { Tip } from "@/components/ui/tooltip";
 import { plural } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import type { AppState, Run } from "@/lib/types";
-import { useProductHero } from "@/lib/motion";
+import { useProductHero } from "@/lib/scene";
 // The still Model APIs scene (scripts/make_cube.py --family pink --scene --inline): what shows until the live scene
 // has rendered, and instead of it without WebGL. The phone gets a squarer crop with the cube centred.
 import scene from "@/assets/hero.svg?raw";

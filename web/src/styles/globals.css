@@ -109,7 +109,7 @@
 
   --animate-enter: ev-fade 0.3s ease-out both;
   --animate-fade: ev-fade 0.3s ease-out both;
-  --animate-grow: ev-grow 0.4s cubic-bezier(.75, 0, .1, .99) both;
+  --animate-grow: ev-grow 0.4s cubic-bezier(.75, 0, .1, .99) backwards;
   --animate-spin: ev-spin 1s linear infinite;
 }
 
@@ -171,5 +171,5 @@
 }
 
 @keyframes ev-fade { from { opacity: 0; } }
-@keyframes ev-grow { from { width: 0; } }
+@keyframes ev-grow { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }   /* a bar wipes in from the left once, on the lift curve */
 @keyframes ev-spin { to { transform: rotate(360deg); } }

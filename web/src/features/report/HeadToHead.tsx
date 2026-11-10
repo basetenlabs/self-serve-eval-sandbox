@@ -2,6 +2,7 @@ import type * as React from "react";
 import { Column, DeltaChip } from "@/components/brand";
 import { Chevron } from "@/components/brand/icons";
 import { dur, pct, plural, usd } from "@/lib/format";
+import { Count, Scramble } from "@/lib/motion";
 import { type Paired, type Takeaway, wilson } from "@/lib/stats";
 import type { Model, Summary, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -118,9 +119,9 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
                 <span className="truncate" title={s.m.label}>{s.m.label}</span>
               </div>
               <div className="mt-4 flex flex-wrap items-baseline gap-x-5 gap-y-2">
-                <span className="num text-[48px] leading-none tracking-[-0.03em]">{s.n}<span className="ml-2 text-[20px] tracking-[-0.01em]">solved</span></span>
+                <span className="num text-[48px] leading-none tracking-[-0.03em]"><Count value={s.n} /><span className="ml-2 text-[20px] tracking-[-0.01em]">solved</span></span>
                 <span className="text-[16px] text-muted-foreground">
-                  <b className="num font-medium text-foreground">{usd(S[s.m.key]?.cost_per_solved)}</b> per solved task
+                  <b className="num font-medium text-foreground"><Scramble value={usd(S[s.m.key]?.cost_per_solved)} /></b> per solved task
                 </span>
               </div>
             </div>
