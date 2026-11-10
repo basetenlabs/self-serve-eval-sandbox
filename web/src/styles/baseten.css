@@ -213,6 +213,8 @@ img, svg { display: block; }
 }
 .bt-row-link:hover { border-color: var(--color-black); }
 .bt-row-link small { display: block; margin-top: 4px; font-size: 12px; color: var(--color-darkGrey2); }
+.bt-row-link:has(small) { align-items: flex-start; } .bt-row-link:has(small) > .bt-arrow { margin-top: 3px; }   /* with a second line the arrow sits on the first */
+.bt-row-link > .bt-arrow { flex-shrink: 0; }
 
 /* ---------- Header ---------- */
 .bt-header { position: absolute; inset: 0 0 auto; z-index: 50; padding: 1rem calc(var(--grid-gutter) * .8); background: var(--background-texture); color: var(--color-black); }
@@ -223,14 +225,14 @@ img, svg { display: block; }
 .bt-nav .links, .bt-nav .actions { display: none; align-items: center; margin: 0; padding: 0; list-style: none; }
 .bt-nav .links { gap: var(--grid-gutter); }
 .bt-nav .actions { gap: var(--grid-gap); justify-content: flex-end; }
-.bt-nav .links a, .bt-nav .links button, .bt-nav .actions > li > a:not(.bt-button) {
+.bt-nav .links > li > a, .bt-nav .links > li > button, .bt-nav .actions > li > a:not(.bt-button) {
   display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; cursor: pointer;
   font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-black); text-decoration: none; white-space: nowrap; transition: color .3s;
 }
-.bt-nav :is(.logo, .links a, .links button, .menu):focus-visible { outline: .125rem solid var(--color-darkGrey3); outline-offset: .25rem; }
-.bt-nav .links button svg { box-sizing: content-box; inline-size: 8px; block-size: 4px; padding: 6px 4px; color: var(--color-darkGrey3); transition: transform .4s; }  /* 16px box */
+.bt-nav :is(.logo, .links > li > a, .links > li > button, .menu):focus-visible { outline: .125rem solid var(--color-darkGrey3); outline-offset: .25rem; }
+.bt-nav .links > li > button svg { box-sizing: content-box; inline-size: 8px; block-size: 4px; padding: 6px 4px; color: var(--color-darkGrey3); transition: transform .4s; }  /* 16px box */
 .bt-nav .actions > li > a:not(.bt-button) { padding: 8px 4px; line-height: 1.2; }
-.bt-nav .links button[aria-expanded=true] svg { color: var(--color-black); transform: rotate(-180deg); }
+.bt-nav .links > li > button[aria-expanded=true] svg { color: var(--color-black); transform: rotate(-180deg); }
 .bt-nav .links:has(> li:hover) > li:not(:hover) > :is(a, button) { color: var(--color-darkGrey3); }  /* siblings fade */
 .bt-nav .menu { display: flex; flex-direction: column; justify-content: center; gap: .25rem; inline-size: 93px; padding: .75rem 1rem; border: 0; background: var(--color-black); color: var(--color-lightGrey1); cursor: pointer; }
 .bt-nav .menu span { block-size: .125rem; inline-size: 100%; background: currentColor; }
@@ -470,6 +472,12 @@ img, svg { display: block; }
 :is(a, button):is(:hover, :focus-visible) .bt-arrow g, .bt-arrow.open g { transform: none; }
 :is(a, button):is(:hover, :focus-visible) .bt-arrow path:first-child, .bt-arrow.open path:first-child { d: path("M10 7L5 2L5 7Z"); }
 :is(a, button):is(:hover, :focus-visible) .bt-arrow path:last-child, .bt-arrow.open path:last-child { d: path("M10 7L5 7L5 12Z"); }
+/* .point: the reverse, for rows of links. It rests as the arrow and folds into the square on hover. */
+.bt-arrow.point g { transform: none; }
+.bt-arrow.point path:first-child { d: path("M10 7L5 2L5 7Z"); } .bt-arrow.point path:last-child { d: path("M10 7L5 7L5 12Z"); }
+:is(a, button):is(:hover, :focus-visible) .bt-arrow.point g { transform: rotate(90deg); }
+:is(a, button):is(:hover, :focus-visible) .bt-arrow.point path:first-child { d: path("M3.536 3.536L3.536 10.607L10.607 3.536Z"); }
+:is(a, button):is(:hover, :focus-visible) .bt-arrow.point path:last-child { d: path("M10.607 10.607L10.607 3.536L3.536 10.607Z"); }
 .bt-tabs.compact { gap: 6px; } .bt-tabs.compact > :is(a, button) { block-size: 26px; padding: 4px 0; }
 .bt-tabs.compact > :is(a, button):hover, .bt-tabs.compact > .active, .bt-tabs.compact > [aria-selected=true] { border-color: var(--color-lightGrey2); }   /* compact rows keep the pale rule */
 .bt-tabs.compact > :is(a, button):after { content: ""; flex-shrink: 0; inline-size: 7px; block-size: 7px; margin-inline-end: 2px; background: var(--color-black); opacity: 0; transition: opacity .2s; }
@@ -884,8 +892,10 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-lift { --offset: var(--grid-gap); position: relative; display: block; inline-size: 100%; block-size: 100%;
   clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); transition: clip-path .4s var(--ease); }
 :is(button, a).bt-lift { padding: 0; border: 0; background: none; outline: 0; color: inherit; text-align: inherit; text-decoration: none; cursor: pointer; }
-.bt-lift > :first-child { position: relative; z-index: 1; inline-size: 100%; block-size: 100%; transition: transform .4s var(--ease); }
-.bt-lift > span:first-child { display: block; }
+/* Layout a page may want to change on an element it supplies (a face, a row's content) is set inside :where(), at zero specificity, so any rule of the page wins; only what the motion itself needs keeps a class's weight. */
+:where(.bt-lift > :first-child) { position: relative; z-index: 1; inline-size: 100%; block-size: 100%; }
+:where(.bt-lift > span:first-child) { display: block; }
+.bt-lift > :first-child { transition: transform .4s var(--ease); }
 .bt-lift:before, .bt-lift:after { content: ""; position: absolute; visibility: hidden; transition: visibility 0s .4s; }   /* hidden at rest: behind the tile their edges would show as a thin line */
 .bt-lift:before { inset-block-end: 0; inset-inline-start: calc(var(--offset) / 2); inline-size: 100%; block-size: var(--offset); transform: skewX(-45deg); background: var(--lift-dark, var(--color-black)); }
 .bt-lift:after { inset-inline-start: 0; inset-block-end: calc(var(--offset) / 2); inline-size: var(--offset); block-size: 100%; transform: skewY(-45deg); background: var(--lift-base, var(--color-black)); }
@@ -911,7 +921,9 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
    play/pause: ground to Light Grey 2 (.2s ease-out). Resource title underlines. Footer links drop to 60% (.2s). */
 .bt-row-link { transition: border-color .3s ease; } .bt-row-link small { transition: color .3s ease; }
 .bt-row-link:is(:hover, :focus-visible) small { color: var(--color-black); }
-.bt-external .arrow { display: inline-block; inline-size: 0; margin-inline-start: 0; overflow: hidden; opacity: 0; transition: width .4s, margin-left .4s, opacity .4s; }
+.bt-external { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+.bt-nav .links > li > a.bt-external { gap: 0; padding: 8px 4px; line-height: 1.2; }
+.bt-external .arrow { position: relative; flex-shrink: 0; display: inline-block; inline-size: 0; block-size: 6px; margin-inline-start: 0; opacity: 0; background: url("icons/external-link.svg") -.35px -.5px / 6.85px 6.85px no-repeat; transition: width .4s, margin-left .4s, opacity .4s; }
 .bt-external:is(:hover, :focus-visible) .arrow { inline-size: 6px; margin-inline-start: 4px; opacity: 1; }
 .bt-chip:not(.active):hover { color: var(--color-darkGrey3); } .bt-chip.active:hover { opacity: .75; }
 @media (hover: hover) { a.bt-resource:hover .title { text-decoration: underline; text-underline-offset: .15em; } }
@@ -971,7 +983,8 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-steps .title > img { display: none; inline-size: 32px; block-size: 32px; object-fit: contain; }   /* a product icon, shown on phones in place of the numeral */
 .bt-steps .title:focus-visible { outline: 2px solid var(--color-black); outline-offset: 4px; }
 .bt-steps .details { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .5s ease-out; }
-.bt-steps .details > * { display: flex; flex-direction: column; gap: 24px; min-block-size: 0; overflow: hidden; }
+.bt-steps .details > * { min-block-size: 0; overflow: hidden; }
+:where(.bt-steps .details > *) { display: flex; flex-direction: column; gap: 24px; }
 .bt-steps .details > * > :first-child { margin-block-start: 24px; }
 .bt-steps .details p { max-inline-size: 480px; margin: 0; color: var(--color-darkGrey2); }
 .bt-steps > .active .details { grid-template-rows: 1fr; }
@@ -1061,7 +1074,7 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-model-card .stats { flex: 0 1 0; min-block-size: 0; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; overflow: hidden; opacity: 0; transition: flex-grow .4s var(--ease), opacity .4s var(--ease); }
 .bt-model-card .stats > * { flex: 1 1 auto; min-inline-size: max-content; max-inline-size: 100%; margin: 0; padding-top: 16px; }
 .bt-model-card > .cta { display: grid; grid-template-rows: 0fr; pointer-events: none; transition: grid-template-rows .4s var(--ease); }
-.bt-model-card > .cta > * { display: flex; min-block-size: 0; overflow: hidden; }
+.bt-model-card > .cta > * { min-block-size: 0; overflow: hidden; } :where(.bt-model-card > .cta > *) { display: flex; }
 .bt-model-card.active > .body, a.bt-model-card:focus-visible > .body { background: var(--color-black); color: var(--color-white); }
 .bt-model-card.active > .body:before, a.bt-model-card:focus-visible > .body:before { flex-grow: 0; }
 .bt-model-card.active .badges, a.bt-model-card:focus-visible .badges { opacity: 0; }
@@ -1119,15 +1132,37 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
    picture under it. On hover or focus the copy goes Black (.3s) and the picture grows 5% (.4s, reveal curve). */
 .bt-nav-panel .products { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--grid-gap); margin: 0; padding: 0; list-style: none; }
 .bt-nav-panel .products > li { display: flex; }
+/* Link groups menu (Resources): columns of row links under an eyebrow, three grid columns per link column, and a
+   featured card in the last three. `--span` on .groups is the total; `--columns` and `--rows` on a .group lay its
+   links out column by column. */
+.bt-nav-panel .groups { display: grid; grid-template-columns: repeat(var(--span, 9), minmax(0, 1fr)); column-gap: var(--grid-gap); padding-bottom: var(--grid-gap); }
+.bt-nav-panel .group { grid-column: span calc(var(--columns, 1) * 3); display: flex; flex-direction: column; gap: var(--grid-gap); min-inline-size: 0; }
+.bt-nav-panel .group > .bt-eyebrow { padding-inline: 12px; }
+.bt-nav-panel .rows { display: grid; grid-template-columns: repeat(var(--columns, 1), minmax(0, 1fr)); grid-template-rows: repeat(var(--rows, 4), auto); grid-auto-flow: column; column-gap: var(--grid-gap); align-content: start; margin: 0; padding: 0; list-style: none; }
+.bt-nav-panel .rows .bt-row-link { padding: 10px 4px 10px 12px; font: 400 14px/1.4 var(--beausite); letter-spacing: 0; }
+.bt-row-link:focus-visible { outline: 2px solid var(--color-black); outline-offset: 3px; border-color: var(--color-black); }
+/* Featured card: a 1200:630 cover, then title and source over a rule that goes Black with the link. */
+.bt-featured-card { display: flex; flex-direction: column; gap: 12px; color: var(--color-black); text-decoration: none; }
+.bt-featured-card:focus-visible { outline: 2px solid var(--color-black); outline-offset: 3px; }
+.bt-featured-card > .media { position: relative; aspect-ratio: 1200 / 630; overflow: hidden; background: var(--color-lightGrey2); }
+.bt-featured-card > .media > img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+.bt-featured-card > .body { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--color-lightGrey2); transition: border-color .3s ease; }
+.bt-featured-card .text { display: flex; flex-direction: column; gap: 4px; }
+.bt-featured-card .title { max-inline-size: 13rem; font: 400 14px/1.4 var(--beausite); letter-spacing: 0; }
+.bt-featured-card small { font: 400 12px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); transition: color .3s ease; }
+.bt-featured-card .bt-arrow { flex-shrink: 0; margin: 3px 4px 0 0; }
+.bt-featured-card:is(:hover, :focus-visible) > .body { border-color: var(--color-black); }
+.bt-featured-card:is(:hover, :focus-visible) small { color: var(--color-black); }
 .bt-menu-card { display: flex; flex-direction: column; inline-size: 100%; overflow: hidden; color: var(--color-black); text-decoration: none; }
 .bt-menu-card:focus-visible { outline: 2px solid var(--color-black); outline-offset: 3px; }
 .bt-menu-card > .content { flex: 1 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--color-lightGrey1); }
 .bt-menu-card .title { display: flex; align-items: flex-start; gap: 8px; min-inline-size: 0; font: 400 14px/1.4 var(--beausite); letter-spacing: .01em; }
 .bt-menu-card .title > img { flex-shrink: 0; inline-size: 14px; block-size: 14px; margin-top: 2.8px; object-fit: contain; }
-.bt-menu-card .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-inline-size: 76%; overflow: hidden; font: 350 12px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); transition: color .3s ease; }
+.bt-menu-card .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-inline-size: 76%; overflow: hidden; font: 400 12px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); transition: color .3s ease; }
 .bt-menu-card > .asset { position: relative; flex-shrink: 0; block-size: 156px; overflow: hidden; background: var(--color-lightGrey2); }
 .bt-menu-card > .asset > img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; transition: transform .4s var(--ease-reveal); }
 .bt-menu-card:is(:hover, :focus-visible) .text { color: var(--color-black); }
+.bt-menu-card:has(.title > img) .text { max-inline-size: none; }   /* with a product icon the line runs the card's width */
 .bt-menu-card:is(:hover, :focus-visible) > .asset > img { transform: scale(1.05); }
 /* Menu button: three bars fold into a small cross (.3s ease; the middle bar fades in .2s). */
 .bt-nav .menu span { align-self: center; transition: inline-size .3s ease, transform .3s ease, opacity .2s ease; }
@@ -1144,11 +1179,14 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-mobile-menu .row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; inline-size: 100%; padding: 1rem 0; border: 0; border-bottom: 1px solid var(--color-lightGrey2); background: none; cursor: pointer; text-align: start; text-decoration: none; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; color: var(--color-black); }
 .bt-mobile-menu .row:focus-visible { outline: .125rem solid var(--color-darkGrey3); outline-offset: .25rem; }
 .bt-mobile-menu .row > svg { flex-shrink: 0; margin-inline-end: 4px; transition: transform .4s; }
+.bt-mobile-menu .bt-row-link { font: 400 14px/1.4 var(--beausite); letter-spacing: 0; }
+.bt-mobile-menu .bt-row-link small { letter-spacing: 0; }
 .bt-mobile-menu .row[aria-expanded=true] > svg { transform: rotate(-180deg); }
 .bt-mobile-menu .sub { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .4s var(--ease-reveal); }
 .bt-mobile-menu .sub.expanded { grid-template-rows: 1fr; }
 .bt-mobile-menu .sub > * { min-block-size: 0; overflow: hidden; }
-.bt-mobile-menu .sub > * > * { padding: 1rem 0 1.5rem; }
+:where(.bt-mobile-menu .sub > * > *) { padding: 1rem 0 1.5rem; }
+:where(.bt-mobile-menu .sub > * > :has(> .bt-row-link)) { padding-top: 0; }   /* a list of rows starts right under its heading row */
 .bt-mobile-menu .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--grid-gap); margin-top: 1.5rem; }
 .bt-mobile-menu .actions > li:last-child:nth-child(odd) { grid-column: 1 / -1; }
 @media (min-width: 1025px) { .bt-mobile-menu { display: none; } }
