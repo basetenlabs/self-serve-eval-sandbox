@@ -1,7 +1,7 @@
-import { AlertCircleIcon, CheckIcon, ChevronRightIcon, ExternalLinkIcon, GitPullRequestIcon, LoaderIcon, StarIcon } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import * as React from "react";
 import { Column } from "@/components/brand";
+import { Chevron, External } from "@/components/brand/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -206,11 +206,10 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const savedHere = repo ? favorites.filter((f) => f.repo.toLowerCase() === repo.toLowerCase()).length : 0;
 
   return (
-    <form ref={form} onSubmit={start} onInput={() => setError(null)} aria-label="New run"
-      className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-0">
-      <div className="grid min-w-0 grid-cols-1 content-start gap-10 lg:pr-8">
-        <Column heading="1. Pull requests" aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
-          <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="grid gap-1 sm:grid-cols-3" aria-label="Pull requests">
+    <form ref={form} onSubmit={start} onInput={() => setError(null)} aria-label="New run" className="layout-grid !p-0 gap-y-12">
+      <div className="bt-main grid min-w-0 grid-cols-1 content-start gap-12">
+        <Column heading={<Step n="01">Pull requests</Step>} aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
+          <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="ev-sources" aria-label="Pull requests">
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="No sign-in"
               text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
@@ -221,27 +220,27 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           </RadioGroup.Root>
 
           {source === "quick" && state.github.sign_in && (!state.quick.ready || !!state.github.login) && (
-            <div className="mt-4 animate-enter bg-surface px-4 py-2.5 shadow-[inset_0_0_0_1px_var(--frame)]">
+            <div className="ev-panel animate-enter">
               <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
             </div>
           )}
 
           {source === "suite" && (
-            <div className="mt-4 grid animate-enter grid-cols-1 gap-4 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
-              <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
+            <div className="ev-panel animate-enter">
+              <div className="ev-panel-head">
                 <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
               </div>
               {favorites.length ? (
                 <>
                   <SavedPulls favorites={suite} picked={inSuite} onPick={pickSuite} onFavorite={onFavorite} />
-                  <p className="text-[13px] text-muted-foreground">
+                  <p className="ev-small">
                     {favorites.length > suite.length ? `The newest ${suite.length} run; unstar some to make room for others. ` : ""}
-                    Star more under <b className="font-medium text-foreground">Your pull requests</b>. Repositories that aren't Go or Python need their own install and test commands: run those from there.
+                    Star more under <b className="text-black">Your pull requests</b>. Repositories that aren't Go or Python need their own install and test commands: run those from there.
                   </p>
                 </>
               ) : (
-                <p className="text-[13px] text-muted-foreground">
-                  Nothing starred yet. Under <b className="font-medium text-foreground">Your pull requests</b>, star the pull requests that stand for your team's work.
+                <p className="ev-small">
+                  Nothing starred yet. Under <b className="text-black">Your pull requests</b>, star the pull requests that stand for your team's work.
                   They gather here, from any repository, so the next model gets the same test in one click.
                 </p>
               )}
@@ -249,25 +248,18 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           )}
 
           {source === "repo" && (
-            <div className="mt-4 grid animate-enter grid-cols-1 gap-5 bg-surface p-4 shadow-[inset_0_0_0_1px_var(--frame)]">
-              <div className="-mx-4 -mt-4 border-b border-rule px-4 py-2.5">
+            <div className="ev-panel animate-enter">
+              <div className="ev-panel-head">
                 <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
               </div>
-              <div className="grid grid-cols-1 gap-1.5">
+              <div className="bt-field gap-2">
                 <Label htmlFor="pulls">Repository or pull request links</Label>
-                <div className="relative">
-                  <GitPullRequestIcon className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" />
-                  <textarea
-                    id="pulls" value={text} onChange={(e) => setText(e.target.value)} rows={1} autoComplete="off" spellCheck={false}
-                    placeholder="owner/repo, or paste links to pull requests"
-                    aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
-                    className={cn(
-                      "block max-h-48 min-h-10 w-full resize-none bg-surface py-2.5 pr-3 pl-9 font-mono text-[13px] leading-5 [field-sizing:content]",
-                      "shadow-[inset_0_0_0_1px_var(--rule)] outline-none transition-shadow placeholder:text-muted-foreground/80 hover:shadow-[inset_0_0_0_1px_var(--line)]",
-                      "focus-visible:shadow-[inset_0_0_0_1px_var(--foreground)] aria-invalid:shadow-[inset_0_0_0_1px_var(--danger)]",
-                    )}
-                  />
-                </div>
+                <textarea
+                  id="pulls" value={text} onChange={(e) => setText(e.target.value)} rows={1} autoComplete="off" spellCheck={false}
+                  placeholder="owner/repo, or paste links to pull requests"
+                  aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
+                  className="bt-input ev-pulls"
+                />
                 <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} publicOpen={publicOpen}
                   onSignIn={signedOut ? () => gitHubSignIn.current?.signIn() : undefined} />
               </div>
@@ -287,9 +279,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                         options={LIMITS.map((n) => ({ value: String(n), label: String(n) }))} />
                     )}
                     {pick === "latest" && savedHere > 0 && (
-                      <Button type="button" size="sm" variant="ghost" onClick={() => setPick("choose")}>
-                        <StarIcon className="fill-current" /> {savedHere} saved here: choose
-                      </Button>
+                      <Button variant="ghost" onClick={() => setPick("choose")}>{savedHere} saved here: choose</Button>
                     )}
                   </div>
                   {pick === "choose" && (
@@ -305,23 +295,23 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               )}
 
               {(mode === "repo" || mode === "pasted") && (
-                <details className="group" open={!!needsCommands}>
-                  <summary className="label-mono flex cursor-pointer list-none flex-wrap items-center gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-                    <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-                    Install and test commands {needsCommands ? <Badge variant="warn">Needed for {needsCommands.language}</Badge> : <span className="normal-case tracking-normal">(optional for Go and Python)</span>}
+                <details className="ev-details" open={!!needsCommands}>
+                  <summary>
+                    <Chevron />
+                    Install and test commands {needsCommands ? <Badge variant="warn">Needed for {needsCommands.language}</Badge> : <span className="text-muted-foreground">(optional for Go and Python)</span>}
                   </summary>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <div className="grid gap-1.5">
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="bt-field gap-2">
                       <Label htmlFor="setup">Install</Label>
-                      <Input id="setup" value={setup} onChange={(e) => setSetup(e.target.value)} placeholder="npm ci" className="font-mono text-[13px]" spellCheck={false} />
+                      <Input id="setup" value={setup} onChange={(e) => setSetup(e.target.value)} placeholder="npm ci" className="ev-code-input" spellCheck={false} />
                     </div>
-                    <div className="grid gap-1.5">
+                    <div className="bt-field gap-2">
                       <Label htmlFor="test">Run the PR's tests</Label>
-                      <Input id="test" value={test} onChange={(e) => setTest(e.target.value)} placeholder="npx vitest run {test_files}" className="font-mono text-[13px]" spellCheck={false} />
+                      <Input id="test" value={test} onChange={(e) => setTest(e.target.value)} placeholder="npx vitest run {test_files}" className="ev-code-input" spellCheck={false} />
                     </div>
                   </div>
                   {mode === "pasted" && Object.keys(pastedPulls).length > 1 && (
-                    <p className="mt-2 text-[12.5px] text-muted-foreground">Commands apply to one repository: paste pull requests from one at a time to use them.</p>
+                    <p className="ev-small mt-2">Commands apply to one repository: paste pull requests from one at a time to use them.</p>
                   )}
                 </details>
               )}
@@ -329,58 +319,54 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           )}
         </Column>
 
-        <Column heading="2. Models" aside={<span className="label-mono text-muted-foreground">{models.length} chosen</span>}>
+        <Column heading={<Step n="02">Models</Step>} aside={<span className="label-mono text-muted-foreground">{models.length} chosen</span>}>
           <ModelPicker models={catalog} chosen={chosenModels} onToggle={toggleModel} />
         </Column>
-
       </div>
 
-      <div className="min-w-0 lg:border-l lg:border-dashed lg:border-rule lg:pl-8">
-        <div className="grid gap-10 lg:sticky lg:top-20">
-          <Column heading="3. Start" aside={attempts > 0 && <span className="label-mono text-muted-foreground">{plural(attempts, "attempt")}</span>}>
-            <div className="grid grid-cols-2 bg-surface shadow-[inset_0_0_0_1px_var(--frame)]">
-              <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
-                tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
-                  : "No earlier run to estimate from yet."} />
-              <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
-                tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
-            </div>
-            <dl className="mt-4 grid gap-2 text-[14px]">
-              <PlanRow label="Pull requests">{prs || "–"}</PlanRow>
-              <PlanRow label="Models">
-                {models.length ? [...models.filter(isOpen), ...models.filter((m) => !isOpen(m))].map((m) => (
-                  <span key={m.key} className="flex min-w-0 items-center justify-end gap-2">
-                    <span aria-hidden className={cn("size-2.5 shrink-0", isOpen(m) ? "bg-baseten" : "bg-rival")} />
-                    <span className="truncate">{m.label}</span>
-                  </span>
-                )) : "–"}
-              </PlanRow>
-              <PlanRow label="Sandboxes at once" tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests.">
-                {!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
-              </PlanRow>
-              {state.spend && (
-                <PlanRow label="Last 24 hours" tip="What your runs spent on models in the last 24 hours, judges included, out of your limit.">
-                  <span>{money(state.spend.spent)} <span className="text-muted-foreground">of {money(state.spend.cap)}</span></span>
-                </PlanRow>
-              )}
-            </dl>
-            {error && (
-              <div role="alert" className="mt-4 flex animate-enter items-start gap-2 bg-danger-surface px-3 py-2.5 text-[14px]">
-                <AlertCircleIcon className="mt-0.5 size-4 shrink-0 text-[#AC0EB2] dark:text-[#FFA9FD]" />
-                <span>{error}</span>
+      <div className="bt-aside">
+        <div className="grid gap-12 lg:sticky lg:top-3">
+          <Column heading={<Step n="03">Start</Step>} aside={attempts > 0 && <span className="label-mono text-muted-foreground">{plural(attempts, "attempt")}</span>}>
+            <div className="ev-plan">
+              <div className="ev-plan-stats">
+                <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
+                  tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
+                    : "No earlier run to estimate from yet."} />
+                <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
+                  tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
               </div>
-            )}
-            {needsGitHub && !state.blocked ? (
-              <Button type="button" size="lg" className="mt-5 w-full" onClick={() => gitHubSignIn.current?.signIn()}>
-                <GitHubMark /> Sign in with GitHub to start
-              </Button>
-            ) : <Button type="submit" size="lg" disabled={!!blocked || starting} className="group mt-5 w-full">
-              {starting ? <LoaderIcon className="animate-spin" /> : null}
-              {starting ? "Starting" : "Start run"}
-              {!starting && <ChevronRightIcon className="transition-transform group-hover:translate-x-0.5" />}
-              <Kbd className="ml-1 hidden sm:inline-flex">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
-            </Button>}
-            <p className="mt-3 text-[13px] leading-snug text-muted-foreground" aria-live="polite">{hint}</p>
+              <dl className="bt-kv ev-plan-rows">
+                <PlanRow label="Pull requests">{prs || "–"}</PlanRow>
+                <PlanRow label="Models">
+                  {models.length ? [...models.filter(isOpen), ...models.filter((m) => !isOpen(m))].map((m) => (
+                    <span key={m.key} className="flex min-w-0 items-center justify-end gap-2">
+                      <span aria-hidden className={cn("size-2.5 shrink-0", isOpen(m) ? "bg-baseten" : "bg-rival")} />
+                      <span className="truncate">{m.label}</span>
+                    </span>
+                  )) : "–"}
+                </PlanRow>
+                <PlanRow label="Sandboxes at once" tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests.">
+                  {!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
+                </PlanRow>
+                {state.spend && (
+                  <PlanRow label="Last 24 hours" tip="What your runs spent on models in the last 24 hours, judges included, out of your limit.">
+                    <span>{money(state.spend.spent)} <span className="text-muted-foreground">of {money(state.spend.cap)}</span></span>
+                  </PlanRow>
+                )}
+              </dl>
+              {error && <div role="alert" className="bt-notice error animate-enter">{error}</div>}
+              {needsGitHub && !state.blocked ? (
+                <Button full chevron onClick={() => gitHubSignIn.current?.signIn()}>
+                  <GitHubMark className="size-3.5" /> Sign in with GitHub to start
+                </Button>
+              ) : (
+                <Button type="submit" full chevron={!starting} disabled={!!blocked || starting}>
+                  {starting ? "Starting" : "Start run"}
+                  <Kbd className="max-sm:hidden">{MAC ? "⌘" : "Ctrl"} ↵</Kbd>
+                </Button>
+              )}
+              <p className="ev-small" aria-live="polite">{hint}</p>
+            </div>
           </Column>
           <Readiness state={state} onSignIn={signedOut ? signInFromAside : undefined} />
         </div>
@@ -409,40 +395,38 @@ function takeCommands(): Commands {
   }
 }
 
+/** A column heading with its step number in the site's mono index square. */
+function Step({ n, children }: { n: string; children: React.ReactNode }) {
+  return <span className="inline-flex items-center gap-3"><span className="bt-numeral">{n}</span>{children}</span>;
+}
+
 function SourceTile({ value, title, figure, text, tag }: { value: Source; title: string; figure: string; text: string; tag?: string }) {
   return (
-    <RadioGroup.Item
-      value={value}
-      className={cn(
-        "group relative flex min-h-[104px] flex-col items-start bg-node p-4 text-left sm:min-h-[132px] transition-[background-color,box-shadow] duration-150 outline-none",
-        "hover:bg-node-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-        "data-[state=checked]:bg-surface data-[state=checked]:shadow-[inset_0_0_0_1px_var(--foreground)]",
-      )}
-    >
-      <span className="flex h-5 w-full items-center justify-between">
-        <span className="label-mono text-foreground">{title}</span>
-        {tag && <Badge variant="solid" className="group-data-[state=unchecked]:bg-foreground/80">{tag}</Badge>}
+    <RadioGroup.Item value={value} className="ev-source">
+      <span className="top">
+        <span className="label-mono">{title}</span>
+        {tag && <Badge variant="solid">{tag}</Badge>}
       </span>
-      <span className="num mt-3 text-[26px] leading-8 tracking-[-0.02em]">{figure}</span>
-      <span className="mt-1 text-[13px] leading-snug text-muted-foreground">{text}</span>
-      <span aria-hidden className="absolute top-0 left-0 h-0.5 w-0 bg-foreground transition-[width] duration-300 group-data-[state=checked]:w-full" />
+      <span className="figure">{figure}</span>
+      <span className="text">{text}</span>
     </RadioGroup.Item>
   );
 }
-
-/** What the box understood: a repository and whether it's ready, or how many pull requests. */
+/** What the box understood: a repository and whether it's ready, or how many pull requests. A problem is a line in
+ * Black after a Dark Pink square: the page never colours its words. */
 function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, publicOpen, onSignIn }: {
   id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
   publicOpen: boolean; onSignIn?: () => void;
 }) {
-  const danger = "text-[#AC0EB2] dark:text-[#FFA9FD]";
+  const Bad = ({ children }: { children: React.ReactNode }) => <span className="inline-flex items-baseline gap-2"><span aria-hidden className="ev-dot bad" />{children}</span>;
+  const Ok = () => <span aria-hidden className="ev-dot" />;
   let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{signIn ? "" : " Private ones work when your GitHub login can read them."}</span>;
-  if (mode === "many") body = <span className={danger}>One repository at a time, or paste links to pull requests.</span>;
+  if (mode === "many") body = <Bad>One repository at a time, or paste links to pull requests.</Bad>;
   else if (mode === "pasted") {
     const n = pullCount(pasted.pulls);
     body = (
-      <span className="inline-flex flex-wrap items-center gap-1.5">
-        <CheckIcon className="size-3.5" />
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <Ok />
         {plural(n, "pull request")}{pastedRepos.length > 1 ? ` from ${pastedRepos.length} repositories` : ` from ${pastedRepos[0]}`}
         {(pasted.unknown.length > 0 || pasted.repos.length > 0) && (
           <span className="text-muted-foreground">· ignoring {[...pasted.repos, ...pasted.unknown].slice(0, 3).join(", ")}{pasted.repos.length + pasted.unknown.length > 3 ? "…" : ""}</span>
@@ -450,47 +434,43 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, pu
       </span>
     );
   } else if (mode === "repo") {
-    if (looking) body = <span className="inline-flex items-center gap-1.5 text-muted-foreground"><LoaderIcon className="size-3.5 animate-spin" /> Looking it up</span>;
+    if (looking) body = <span className="inline-flex items-center gap-2 text-muted-foreground"><span aria-hidden className="ev-dot live" /> Looking it up</span>;
     // Signed out, the page reads no repository: say so, with the sign-in right here.
     else if (info?.error && info.repo && onSignIn) body = (
       <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className={danger}>{publicOpen ? <>Can't read <span className="font-mono text-[12px]">{info.repo}</span>. If it's private, sign in with GitHub.</>
-          : <>Sign in with GitHub so the eval can read <span className="font-mono text-[12px]">{info.repo}</span>.</>}</span>
-        <Button type="button" size="sm" variant="outline" onClick={onSignIn}><GitHubMark />Sign in with GitHub</Button>
+        <Bad>{publicOpen ? <>Can't read <code className="ev-code">{info.repo}</code>. If it's private, sign in with GitHub.</>
+          : <>Sign in with GitHub so the eval can read <code className="ev-code">{info.repo}</code>.</>}</Bad>
+        <Button variant="outline" onClick={onSignIn}><GitHubMark className="size-3.5" />Sign in with GitHub</Button>
       </span>
     );
     else if (info?.error) body = (
-      <span className="inline-flex flex-wrap items-center gap-1.5">
-        <span className={danger}>{info.error}</span>
-        {info.install && <a className="inline-flex items-center gap-1 font-medium underline underline-offset-2" href={info.install} target="_blank" rel="noreferrer">Add it on GitHub <ExternalLinkIcon className="size-3.5" /></a>}
+      <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Bad>{info.error}</Bad>
+        {info.install && <a className="bt-link" href={info.install} target="_blank" rel="noreferrer">Add it on GitHub <External /></a>}
       </span>
     );
     else if (info?.repo) body = (
-      <span className="inline-flex flex-wrap items-center gap-1.5">
-        <CheckIcon className="size-3.5" />
-        <span className="font-mono text-[12px]">{info.repo}</span>
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <Ok />
+        <code className="ev-code">{info.repo}</code>
         <Badge>{info.language}</Badge>
         {info.private && <Badge variant="warn">Private</Badge>}
         <span className="text-muted-foreground">{info.defaults ? "Ready: it has default commands." : "Give its install and test commands below."}</span>
       </span>
     );
-  } else if (pasted.unknown.length) body = <span className={danger}>Not a repository or pull request: {pasted.unknown[0]}</span>;
-  return <div id={id} className="min-h-5 text-[13px]" aria-live="polite">{body}</div>;
+  } else if (pasted.unknown.length) body = <Bad>Not a repository or pull request: {pasted.unknown[0]}</Bad>;
+  return <div id={id} className="min-h-5 text-[14px]" aria-live="polite">{body}</div>;
 }
 
 function Segmented({ label, value, onChange, options }: {
   label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[];
 }) {
   return (
-    <div className="grid content-start gap-1.5">
-      <span className="label-mono text-muted-foreground">{label}</span>
-      <div className="flex gap-0.5 bg-node p-0.5" role="radiogroup" aria-label={label}>
+    <div className="bt-field w-auto gap-2">
+      <span className="label-xs text-muted-foreground">{label}</span>
+      <div className="ev-segments" role="radiogroup" aria-label={label}>
         {options.map((o) => (
-          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}
-            className={cn("h-9 min-w-11 px-3 font-mono text-[12px] uppercase tracking-[0.04em] transition-colors",
-              value === o.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
-            {o.label}
-          </button>
+          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}>{o.label}</button>
         ))}
       </div>
     </div>
@@ -503,39 +483,31 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
     { title: "Closed models · the comparison", list: models.filter((m) => !isOpen(m)) },
   ].filter((g) => g.list.length);
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-3">
       {groups.map((g) => (
         <div key={g.title} className="min-w-0">
-          <div className="label-mono mb-2 text-muted-foreground">{g.title}</div>
-          <div className="grid grid-cols-1 gap-1">
+          <div className="label-xs mb-2 text-muted-foreground">{g.title}</div>
+          <ul className="ev-models">
             {g.list.map((m) => {
               const on = chosen.includes(m.key);
               const row = (
-                <label
-                  key={m.key}
-                  className={cn(
-                    "flex min-h-14 cursor-pointer items-center gap-3 px-3 py-2 transition-[background-color,box-shadow] duration-150",
-                    on ? "bg-surface shadow-[inset_0_0_0_1px_var(--foreground)]" : "bg-node hover:bg-node-2",
-                    m.missing && "cursor-not-allowed opacity-50 hover:bg-node",
-                  )}
-                >
+                <label data-on={on || undefined} data-off={m.missing ? true : undefined}>
                   <Checkbox checked={on} disabled={!!m.missing} onCheckedChange={(v) => onToggle(m.key, v === true)} aria-label={m.label} />
-                  <span aria-hidden className={cn("size-3 shrink-0", isOpen(m) ? "bg-[#19E76E]" : "bg-[#3DA6FF]")} />
+                  <span aria-hidden className={cn("size-2.5 shrink-0", isOpen(m) ? "bg-baseten" : "bg-rival")} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-medium">{m.label}</span>
-                    {m.model && <span className="block truncate font-mono text-[11.5px] text-muted-foreground">{m.model}</span>}
-                    <span className="label-mono block text-[10.5px] text-muted-foreground">
-                      {m.missing ? "Needs its API key"
-                        : [m.cost_per_attempt != null ? usd(m.cost_per_attempt) : "No price yet",
-                           m.seconds_per_attempt != null ? dur(m.seconds_per_attempt) : null].filter(Boolean).join(" · ")
-                          + (m.cost_per_attempt != null || m.seconds_per_attempt != null ? " per attempt" : "")}
-                    </span>
+                    <span className="name">{m.label}</span>
+                    {m.model && <span className="id">{m.model}</span>}
+                  </span>
+                  <span className="price">
+                    {m.missing ? "Needs its API key"
+                      : [m.cost_per_attempt != null ? usd(m.cost_per_attempt) : "No price yet",
+                         m.seconds_per_attempt != null ? dur(m.seconds_per_attempt) : null].filter(Boolean).join(" · ")}
                   </span>
                 </label>
               );
-              return m.missing ? <Tip key={m.key} content={m.missing}>{row}</Tip> : row;
+              return <li key={m.key}>{m.missing ? <Tip content={m.missing}>{row}</Tip> : row}</li>;
             })}
-          </div>
+          </ul>
         </div>
       ))}
     </div>
@@ -544,9 +516,9 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
 
 function PlanStat({ label, value, tip }: { label: string; value: React.ReactNode; tip?: string }) {
   const body = (
-    <div className="border-frame px-4 py-3 first:border-r">
-      <div className="label-mono text-[10.5px] text-muted-foreground">{label}</div>
-      <div className="num mt-1 text-[26px] leading-8 tracking-[-0.02em]">{value}</div>
+    <div className="ev-plan-stat">
+      <div className="label-xs text-muted-foreground">{label}</div>
+      <div className="value">{value}</div>
     </div>
   );
   return tip ? <Tip content={tip}>{body}</Tip> : body;
@@ -554,11 +526,11 @@ function PlanStat({ label, value, tip }: { label: string; value: React.ReactNode
 
 /** One line of the plan: a mono label on the left, its value on the right. */
 function PlanRow({ label, tip, children }: { label: string; tip?: string; children: React.ReactNode }) {
-  const row = (
-    <div className="flex items-start justify-between gap-4 border-b border-frame pb-2">
-      <dt className="label-mono shrink-0 pt-0.5 text-muted-foreground">{label}</dt>
-      <dd className="num grid min-w-0 gap-1 text-right">{children}</dd>
-    </div>
+  const dt = <dt>{label}</dt>;
+  return (
+    <>
+      {tip ? <Tip content={tip}>{dt}</Tip> : dt}
+      <dd className="grid min-w-0 justify-items-end gap-1 text-right">{children}</dd>
+    </>
   );
-  return tip ? <Tip content={tip}>{row}</Tip> : row;
 }

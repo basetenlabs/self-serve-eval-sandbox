@@ -117,3 +117,134 @@
 .bt-badge.ev-badge-black { --badge-background: var(--color-black); --badge-color: var(--color-white); }
 a.bt-badge { text-decoration: none; transition: background-color .3s; }
 a.bt-badge.green:hover { --badge-background: var(--color-green); }
+
+/* ---------- Home: hero title over the Model APIs scene, its intro in a White block cut into the corner ---------- */
+.ev-hero { display: flex; flex-direction: column; gap: 24px; padding-block: 24px; }
+.ev-hero-title { margin: 0; font: 400 40px/1.1 var(--beausite); letter-spacing: -.01em; white-space: pre-line; text-wrap: balance; }
+@media (min-width: 801px) { .ev-hero-title { font-size: 56px; letter-spacing: -.02em; } }
+.ev-scene { position: relative; display: flex; flex-direction: column-reverse; }
+.ev-scene > .visual { position: relative; aspect-ratio: 3 / 2; overflow: clip; background: var(--color-lightPink); }
+.ev-scene > .visual > svg { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
+.ev-scene > .corner { display: flex; flex-direction: column; gap: 24px; padding-bottom: 24px; background: var(--color-white); }
+.ev-scene > .corner > p { margin: 0; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey1); }
+.ev-scene .ctas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ev-scene .ctas .bt-button { inline-size: 100%; }
+.ev-scene .ctas .bt-button > span { inline-size: 100%; }
+@media (min-width: 801px) {
+  .ev-scene { display: block; }
+  .ev-scene > .visual { aspect-ratio: 1368 / 440; }
+  .ev-scene > .corner { position: absolute; top: 0; left: 0; inline-size: calc((100% - 11 * var(--grid-gap)) / 3 + 2 * var(--grid-gap) + 12px); padding: 0 12px 24px 0; }
+  .ev-scene .ctas .bt-button.has-chevron .label { min-inline-size: 0; }
+}
+.ev-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px var(--grid-gap); margin: 0; padding: 0; list-style: none; }
+@media (min-width: 1025px) { .ev-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.ev-steps > li { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--color-lightGrey2); }
+.ev-steps h2 { margin: 8px 0 0; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; }
+.ev-steps p { margin: 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
+
+/* A run is going: a Light Green strip (something Baseten runs, live) with a 2px progress line. */
+.ev-live { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding: 16px; background: var(--color-lightGreen); color: var(--color-black); text-decoration: none; transition: background-color .3s; }
+.ev-live:hover { background: var(--color-green); }
+.ev-live .title { font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; }
+.ev-live .label-mono.text-muted-foreground { color: var(--color-blackGreen); }
+.ev-live .watch { display: inline-flex; align-items: center; gap: 8px; margin-inline-start: auto; font: 400 14px/1.4 var(--beausite); }
+.ev-live .meter { position: absolute; inset: auto 0 0; block-size: 2px; background: var(--color-black-10); }
+.ev-live .meter > i { display: block; block-size: 100%; background: var(--color-black); transform-origin: 0 0; transition: transform .4s var(--ease); }
+.ev-scene text { font-family: var(--geist-mono); }
+
+/* ---------- New run ---------- */
+.ev-small { margin: 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
+.ev-code { font: 400 12px/1.4 var(--geist-mono); letter-spacing: .02em; color: var(--color-black); }
+.bt-input.ev-code-input { font: 400 14px/1.4 var(--geist-mono); letter-spacing: 0; }
+.bt-input[aria-invalid=true] { border-color: var(--color-darkPink); }
+.bt-input:hover:not(:focus-visible) { border-color: var(--color-lightGrey3); }
+textarea.bt-input.ev-pulls { min-block-size: 36px; max-block-size: 192px; resize: none; field-sizing: content; font: 400 14px/1.6 var(--geist-mono); letter-spacing: 0; padding-block: 6px; }
+
+/* Where the pull requests come from: three choices on Light Grey 1; the chosen one is Light Pink with a Black corner square. */
+.ev-sources { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--grid-gap); }
+@media (min-width: 640px) { .ev-sources { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ev-source {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-block-size: 132px; margin: 0; padding: 16px; border: 0;
+  background: var(--color-lightGrey1); color: var(--color-black); cursor: pointer; text-align: left; transition: background-color .3s;
+}
+.ev-source:hover { background: var(--color-lightGrey2); }
+.ev-source[data-state=checked] { background: var(--color-lightPink); }
+.ev-source[data-state=checked]:after { content: ""; position: absolute; top: 0; right: 0; inline-size: 12px; block-size: 12px; background: var(--color-black); }
+.ev-source > .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; inline-size: 100%; min-block-size: 20px; padding-inline-end: 12px; }
+.ev-source > .figure { margin-top: 12px; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.ev-source > .text { font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
+.ev-source[data-state=checked] > .text { color: var(--color-darkGrey1); }
+
+/* The chosen source's own controls, under the cards: content on hairlines, no box. */
+.ev-panel { display: flex; flex-direction: column; gap: 24px; margin-top: 12px; }
+.ev-panel-head { padding-bottom: 16px; border-bottom: 1px solid var(--color-lightGrey2); }
+
+/* A folding line: the site's small triangle turns down when open. */
+.ev-details > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; list-style: none; inline-size: fit-content; font: 400 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-black); }
+.ev-details > summary::-webkit-details-marker { display: none; }
+.ev-details > summary > svg { flex-shrink: 0; color: var(--color-darkGrey3); transition: transform .3s; }
+.ev-details[open] > summary > svg { transform: rotate(90deg); color: var(--color-black); }
+
+/* Models: rows on hairlines; a chosen row is Light Grey 1. */
+.ev-models { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-lightGrey2); }
+.ev-models label { display: flex; align-items: center; gap: 12px; min-block-size: 56px; padding: 8px 12px; border-bottom: 1px solid var(--color-lightGrey2); cursor: pointer; transition: background-color .3s; }
+.ev-models label:hover { background: var(--color-lightGrey1); }
+.ev-models label[data-on] { background: var(--color-lightGrey1); }
+.ev-models label[data-off] { cursor: default; background: none; }
+.ev-models label[data-off] .name, .ev-models label[data-off] .id { color: var(--color-darkGrey3); }
+.ev-models .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 14px/1.4 var(--beausite); }
+.ev-models .id { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px/1.4 var(--geist-mono); color: var(--color-darkGrey2); }
+.ev-models .price { flex-shrink: 0; max-inline-size: 40%; text-align: right; font: 400 10px/1.4 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-darkGrey2); }
+
+/* The plan: two figures, the facts, the one primary button. */
+.ev-plan { display: flex; flex-direction: column; gap: 16px; }
+.ev-plan-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--grid-gap); }
+.ev-plan-stat { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--color-lightPink); }
+.ev-plan-stat > .value { font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ev-plan-rows { grid-template-columns: auto minmax(0, 1fr); column-gap: 16px; }
+.ev-plan-rows dd { font-size: 14px; }
+
+/* Pull request lists: rows on hairlines, Light Grey 1 when chosen or hovered. */
+.bt-input.ev-search { block-size: 40px; font-size: 14px; }
+.ev-pulls-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-lightGrey2); }
+.ev-pulls-group { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; padding: 6px 12px; background: var(--color-lightGrey1); border-bottom: 1px solid var(--color-lightGrey2); font: 400 10px/1.4 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-darkGrey2); }
+.ev-pulls-none { padding: 24px 12px; text-align: center; font: 350 14px/1.4 var(--beausite); color: var(--color-darkGrey2); border-bottom: 1px solid var(--color-lightGrey2); }
+.ev-pull { display: flex; align-items: center; gap: 12px; min-block-size: 56px; padding: 8px 12px; border-bottom: 1px solid var(--color-lightGrey2); transition: background-color .3s; }
+label.ev-pull { cursor: pointer; }
+label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
+.ev-pull[data-off] { min-block-size: 48px; }
+.ev-pull .no { flex-shrink: 0; font: 400 12px/1.4 var(--geist-mono); color: var(--color-darkGrey2); }
+.ev-pull .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-black); }
+.ev-pull[data-off] .title { color: var(--color-darkGrey2); }
+.ev-pull .meta { margin-top: 2px; font: 350 12px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); font-variant-numeric: tabular-nums; }
+.ev-check-off { display: grid; place-items: center; flex-shrink: 0; inline-size: 16px; block-size: 16px; border: 1px solid var(--color-lightGrey2); color: var(--color-darkGrey3); }
+.ev-check-off > svg { inline-size: 6px; block-size: 6px; }
+.ev-hit { background: var(--color-lightPink); color: var(--color-black); }
+.ev-icon-button { display: grid; place-items: center; flex-shrink: 0; inline-size: 28px; block-size: 28px; border: 0; background: none; color: var(--color-darkGrey2); cursor: pointer; transition: background-color .3s, color .3s; }
+.ev-icon-button:hover { background: var(--color-lightGrey2); color: var(--color-black); }
+.ev-icon-button:focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
+.ev-save { flex-shrink: 0; min-inline-size: 52px; block-size: 22px; padding: 0 6px; border: 1px solid var(--color-lightGrey2); background: var(--color-white); color: var(--color-darkGrey2); cursor: pointer; font: 400 10px/1 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; transition: background-color .3s, color .3s, border-color .3s; }
+.ev-save:hover { border-color: var(--color-black); color: var(--color-black); }
+.ev-save[aria-pressed=true] { background: var(--color-black); border-color: var(--color-black); color: var(--color-white); }
+.ev-save:focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
+
+/* GitHub device code: the code in mono on Light Grey 1, large enough to read across the room. */
+.ev-code-out { padding: 4px 12px; background: var(--color-lightGrey1); font: 400 24px/32px var(--geist-mono); letter-spacing: .16em; user-select: all; font-variant-numeric: tabular-nums; }
+
+/* Environment checks: a 16px square (Black with a tick, Dark Pink with a cross, Light Grey 2 waiting) and the line. */
+.ev-checks { margin: 0; padding: 0; list-style: none; }
+.ev-checks > li { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--color-lightGrey2); font: 350 14px/20px var(--beausite); letter-spacing: .01em; }
+.ev-checks .mark { display: grid; place-items: center; flex-shrink: 0; inline-size: 16px; block-size: 16px; margin-top: 2px; background: var(--color-black); color: var(--color-white); }
+.ev-checks .mark > svg { inline-size: 8px; block-size: 8px; }
+.ev-checks .mark[data-ok=no] { background: var(--color-darkPink); }
+.ev-checks .mark[data-ok=wait] { background: var(--color-lightGrey2); }
+.ev-checks .fix { display: block; margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--color-darkGrey2); }
+
+/* Runs: the system table; on phones a list of blocks on hairlines. */
+.ev-runs td.ev-go { inline-size: 40px; color: var(--color-darkGrey3); }
+.ev-runs tr:hover td.ev-go { color: var(--color-black); }
+.ev-runs ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-lightGrey2); }
+.ev-run-card { display: grid; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--color-lightGrey2); color: inherit; text-decoration: none; }
+.ev-run-card:active { background: var(--color-lightGrey1); }
+.ev-meter { display: block; block-size: 2px; background: var(--color-lightGrey2); }
+.ev-meter > i { display: block; block-size: 100%; background: var(--color-green); transition: width .7s var(--ease); }

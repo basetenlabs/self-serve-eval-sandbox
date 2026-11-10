@@ -1,4 +1,5 @@
-import { ChevronRightIcon, LockIcon } from "lucide-react";
+import { Chevron } from "@/components/brand/icons";
+import { Badge } from "@/components/ui/badge";
 import { isActive, PhaseBadge, Swatch } from "@/components/brand";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { plural, usd, when } from "@/lib/format";
@@ -10,7 +11,7 @@ import type { Run } from "@/lib/types";
  * a wide screen, a list of blocks on a phone. */
 export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) {
   return (
-    <div className="bg-surface shadow-[inset_0_0_0_1px_var(--frame)]">
+    <div className="ev-runs">
       <Table className="max-sm:hidden">
         <THead>
           <TR>
@@ -30,13 +31,13 @@ export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) 
                 tabIndex={0}
                 onClick={open}
                 onKeyDown={(e) => { if (e.key === "Enter") open(); }}
-                className="group cursor-pointer hover:bg-muted focus-visible:bg-muted focus-visible:outline-offset-[-2px]"
+                className="ev-row group cursor-pointer"
               >
                 <TD className="pl-4"><Title run={r} /></TD>
                 <TD><Status run={r} /></TD>
                 <TD><Results run={r} /></TD>
-                <TD className="text-[13px] whitespace-nowrap text-muted-foreground">{when(r.started)}</TD>
-                <TD><ChevronRightIcon className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" /></TD>
+                <TD className="whitespace-nowrap text-muted-foreground">{when(r.started)}</TD>
+                <TD className="ev-go"><Chevron /></TD>
               </TR>
             );
           })}
@@ -44,14 +45,14 @@ export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) 
       </Table>
       <ul className="sm:hidden" aria-label="Runs">
         {runs.map((r) => (
-          <li key={r.id} className="border-b border-frame last:border-0">
-            <a href={href({ page: "run", id: r.id })} className="grid gap-3 px-4 py-4 active:bg-muted">
+          <li key={r.id}>
+            <a href={href({ page: "run", id: r.id })} className="ev-run-card">
               <span className="flex items-start justify-between gap-3">
                 <Title run={r} link={false} />
                 <Status run={r} />
               </span>
               <Results run={r} />
-              <span className="label-mono text-muted-foreground">{when(r.started)}</span>
+              <span className="label-xs text-muted-foreground">{when(r.started)}</span>
             </a>
           </li>
         ))}
@@ -65,15 +66,15 @@ function Title({ run, link = true }: { run: Run; link?: boolean }) {
   const name = (
     <>
       {run.title}
-      {run.private && <LockIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label="Private repository" />}
+      {run.private && <Badge variant="outline">Private</Badge>}
     </>
   );
   return (
     <span className="grid min-w-0 gap-0.5">
       {link
-        ? <a href={href({ page: "run", id: run.id })} onClick={(e) => e.preventDefault()} className="flex items-center gap-1.5 text-[15px] font-medium">{name}</a>
-        : <span className="flex items-center gap-1.5 text-[15px] font-medium">{name}</span>}
-      <span className="label-mono text-[10.5px] text-muted-foreground">
+        ? <a href={href({ page: "run", id: run.id })} onClick={(e) => e.preventDefault()} className="flex items-center gap-2 text-[16px] font-medium">{name}</a>
+        : <span className="flex items-center gap-2 text-[16px] font-medium">{name}</span>}
+      <span className="label-xs text-muted-foreground">
         {[run.tasks ? plural(run.tasks, "PR") : null, run.models.length > 2 ? `${run.models.length} models` : null,
           run.judged === false ? "Tests only" : null, run.owner !== undefined ? `By ${run.owner ?? "no one recorded"}` : null]
           .filter(Boolean).join(" · ")}
@@ -84,7 +85,7 @@ function Title({ run, link = true }: { run: Run; link?: boolean }) {
 
 /** A chip only when the run isn't simply done: live, stopped or failed. */
 function Status({ run }: { run: Run }) {
-  return run.phase === "done" ? <span className="text-[13px] text-muted-foreground">Done</span> : <PhaseBadge phase={run.phase} />;
+  return run.phase === "done" ? <span className="text-[14px] text-muted-foreground">Done</span> : <PhaseBadge phase={run.phase} />;
 }
 
 /** What each model solved, with its cost per solved task; or how far a live run has got. */
@@ -95,23 +96,23 @@ function Results({ run }: { run: Run }) {
     const p = run.progress;
     if (isActive(run.phase) && p.total) {
       return (
-        <span className="grid gap-1.5 text-[13px]">
+        <span className="grid gap-2 text-[14px]">
           <span className="num">{p.done} of {p.total} attempts finished</span>
-          <span className="h-1.5 bg-node" aria-hidden>
-            <span className="block h-full bg-baseten-2 transition-[width] duration-700 dark:bg-baseten" style={{ width: `${(100 * p.done) / p.total}%` }} />
+          <span className="ev-meter" aria-hidden>
+            <i style={{ width: `${(100 * p.done) / p.total}%` }} />
           </span>
         </span>
       );
     }
     // A run that failed or stopped says why, in its own row.
-    return <span className="line-clamp-2 text-[13px] text-muted-foreground">{run.phase === "done" ? "No results" : run.detail || "Starting"}</span>;
+    return <span className="line-clamp-2 text-[14px] text-muted-foreground">{run.phase === "done" ? "No results" : run.detail || "Starting"}</span>;
   }
   return (
     <span className="grid gap-1.5">
       {results.map((m) => {
         const s = run.summary[m.key];
         return (
-          <span key={m.key} className="grid grid-cols-[minmax(0,12rem)_1fr] items-center gap-3 text-[13px]">
+          <span key={m.key} className="grid grid-cols-[minmax(0,12rem)_1fr] items-center gap-3 text-[14px]">
             <span className="flex min-w-0 items-center gap-2"><Swatch swatch={colors[m.key]} /><span className="truncate">{m.label}</span></span>
             <span className="num whitespace-nowrap"><b className="font-medium">{s.tasks_solved ?? s.solved} solved</b> <span className="text-muted-foreground">· {usd(s.cost_per_solved)} per solved task</span></span>
           </span>

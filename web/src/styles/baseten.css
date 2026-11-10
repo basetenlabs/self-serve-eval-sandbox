@@ -180,15 +180,15 @@ img, svg { display: block; }
 .bt-button .chevron { flex-shrink: 0; inline-size: 16px; block-size: 16px; display: inline-flex; align-items: center; justify-content: center; overflow: clip; }
 /* On hover the chevron slides out to the right and back in from the left. */
 @keyframes bt-chevron { 0% { transform: translate(0); opacity: 1; } 49% { transform: translate(100%); opacity: 0; } 50% { transform: translate(-100%); opacity: 0; } 100% { transform: translate(0); opacity: 1; } }
-.bt-button:is(:hover, :focus-visible):not([aria-disabled=true]) .chevron > svg { animation: bt-chevron .4s var(--ease); }
+.bt-button:is(:hover, :focus-visible):not(:disabled, [aria-disabled=true]) .chevron > svg { animation: bt-chevron .4s var(--ease); }
 @media (min-width: 801px) { .bt-button.has-chevron .label { min-inline-size: 128px; text-align: start; } }
 .bt-button:focus-visible { --button-lift: 5px; }
 .bt-button.primary:focus-visible, .bt-button:not(.secondary):not(.tertiary):focus-visible { --button-hover-background: #242424; }
-.bt-button.secondary:focus-visible { --button-hover-background: var(--color-lightGrey2); }
+.bt-button.secondary:focus-visible:not(:disabled, [aria-disabled=true]) { --button-hover-background: var(--color-lightGrey2); }
 @media (hover: hover) {
   .bt-button:hover { --button-lift: 5px; }
   .bt-button:not(.secondary):not(.tertiary):hover { --button-hover-background: #242424; }
-  .bt-button.secondary:hover { --button-hover-background: var(--color-lightGrey2); }
+  .bt-button.secondary:hover:not(:disabled, [aria-disabled=true]) { --button-hover-background: var(--color-lightGrey2); }
 }
 /* Square icon button (pause, search submit, carousel arrows) */
 .bt-icon-button {
@@ -677,20 +677,21 @@ textarea.bt-input { block-size: auto; min-block-size: 108px; }
 .bt-dialog p { margin: 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey1); }
 .bt-dialog .actions { display: flex; justify-content: flex-end; gap: 12px; }   /* tertiary cancel, then the Black primary that names the action */
 /* App controls the marketing site has no instance of, built from its parts (first used by the App Builder Sandbox). */
-/* Disabled button: Dark Grey 3 label, a primary on Light Grey 2, no lift. */
+/* Disabled button: Dark Grey 3 label, a primary on Light Grey 2, no lift, fill change or chevron slide (the hover and
+   focus rules above skip :disabled and aria-disabled). */
 .bt-button:disabled, .bt-button[aria-disabled=true] { --button-lift: 0px; --button-hover-background: initial; cursor: default; color: var(--color-darkGrey3); }
 .bt-button:disabled > span, .bt-button[aria-disabled=true] > span { color: inherit; }
 .bt-button:is(:disabled, [aria-disabled=true]):not(.secondary):not(.tertiary) { --button-hover-background: var(--color-lightGrey2); }
-.bt-button:disabled .chevron > svg { animation: none; }
 /* Tab bar: the site's tabs side by side over a hairline, for the views of one panel. Inactive tabs are Dark Grey 2
-   (Dark Grey 3 fails contrast at 14px for navigation); the active one is Black on a 1px Black rule. */
-.bt-tabbar { display: flex; gap: 24px; min-inline-size: 0; border-bottom: 1px solid var(--color-lightGrey2); overflow-x: auto; scrollbar-width: none; }
+   (Dark Grey 3 fails contrast at 14px for navigation); the active one is Black on a 1px Black rule. The bar scrolls
+   sideways, so its hairline is drawn inside it: a border would sit outside the scrollport and hide the active rule. */
+.bt-tabbar { display: flex; gap: 24px; min-inline-size: 0; background: linear-gradient(var(--color-lightGrey2), var(--color-lightGrey2)) bottom / 100% 1px no-repeat; overflow-x: auto; scrollbar-width: none; }
 .bt-tabbar > :is(a, button) {
-  flex-shrink: 0; block-size: 36px; margin: 0 0 -1px; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; background: none; cursor: pointer;
+  flex-shrink: 0; block-size: 36px; margin: 0; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; background: none; cursor: pointer;
   font: 400 14px/1.2 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); text-decoration: none; transition: color .3s, border-color .3s;
 }
-.bt-tabbar > :is(a, button):hover { color: var(--color-black); }
-.bt-tabbar > :disabled { color: var(--color-darkGrey3); cursor: default; }
+.bt-tabbar > :is(a, button):not(:disabled, [aria-disabled=true]):hover { color: var(--color-black); }
+.bt-tabbar > :is(:disabled, [aria-disabled=true]) { color: var(--color-darkGrey3); cursor: default; }
 .bt-tabbar > .active, .bt-tabbar > [aria-selected=true] { color: var(--color-black); border-color: var(--color-black); }
 /* Switch: a square 36 x 20 track with a 12px square thumb; Black when on. Use role="switch" and aria-checked. */
 .bt-switch { position: relative; flex-shrink: 0; inline-size: 36px; block-size: 20px; margin: 0; padding: 0; border: 1px solid var(--color-lightGrey3); background: var(--color-lightGrey1); cursor: pointer; transition: background-color .4s var(--ease), border-color .4s var(--ease); }
@@ -698,11 +699,12 @@ textarea.bt-input { block-size: auto; min-block-size: 108px; }
 .bt-switch[aria-checked=true] { background: var(--color-black); border-color: var(--color-black); }
 .bt-switch[aria-checked=true]:after { background: var(--color-white); transform: translateX(16px); }
 .bt-switch:disabled { cursor: default; } .bt-switch:disabled:after { background: var(--color-lightGrey3); }
-/* Info note: a 16px Light Grey 1 square holding a mono "?" opens a 288px Black note (the tooltip). `.dark` on Black panels. */
+/* Info note: a 16px Light Grey 1 square holding a mono "?" opens a 288px Black note (the tooltip). `.dark` on Black panels.
+   The square inverts on hover and focus; set aria-expanded="true" on it while a pinned note is open. */
 .bt-info { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; inline-size: 16px; block-size: 16px; margin: 0; padding: 0; border: 0; background: var(--color-lightGrey1); color: var(--color-darkGrey2); cursor: pointer; vertical-align: middle; font: 400 10px/1 var(--geist-mono); text-transform: none; letter-spacing: 0; transition: background-color .2s ease-out, color .2s ease-out; }
-.bt-info:hover, .bt-info[aria-describedby], .bt-info[aria-expanded=true] { background: var(--color-black); color: var(--color-white); }
+.bt-info:is(:hover, :focus-visible, [aria-expanded=true]) { background: var(--color-black); color: var(--color-white); }
 .bt-info.dark { background: var(--color-darkGrey1); color: var(--color-lightGrey3); }
-.bt-info.dark:is(:hover, [aria-describedby], [aria-expanded=true]) { background: var(--color-white); color: var(--color-black); }
+.bt-info.dark:is(:hover, :focus-visible, [aria-expanded=true]) { background: var(--color-white); color: var(--color-black); }
 .bt-tip { position: absolute; z-index: 80; inline-size: 288px; max-inline-size: calc(100vw - 24px); padding: 12px; background: var(--color-black); color: var(--color-white); font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; text-transform: none; text-align: left; }
 .bt-tip a { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--color-lightGrey3); text-decoration: none; font: 400 10px/1 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; }
 .bt-tip a:hover { color: var(--color-white); }

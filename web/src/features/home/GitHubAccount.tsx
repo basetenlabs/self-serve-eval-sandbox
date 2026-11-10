@@ -1,5 +1,5 @@
-import { CheckIcon, CopyIcon, ExternalLinkIcon, LoaderIcon } from "lucide-react";
 import * as React from "react";
+import { External, Tick } from "@/components/brand/icons";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { post } from "@/lib/api";
@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 type Device = { user_code: string; verification_uri: string; interval: number };
 type Poll = { pending?: boolean; interval?: number; login?: string | null; error?: string };
 
-const link = "font-medium underline decoration-rule underline-offset-4 transition-colors hover:decoration-foreground";
 
 /** Whose GitHub reads your repositories. Hosted, you sign in with GitHub's device code; locally, the `gh` CLI's login.
  * `ref` lets a button elsewhere on the form start the same sign-in. */
@@ -85,13 +84,13 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
   if (!github.sign_in) {
     body = checks.gh_login
       ? <span className="min-w-0 flex-1"><b className="font-medium">@{checks.gh_login}</b> <span className="text-muted-foreground">· through the GitHub CLI on this machine</span></span>
-      : <span className="min-w-0 flex-1 text-muted-foreground">The GitHub CLI here isn't signed in. Run <code className="font-mono text-[12px] text-foreground">gh auth login</code> to read private repositories.</span>;
+      : <span className="min-w-0 flex-1 text-muted-foreground">The GitHub CLI here isn't signed in. Run <code className="ev-code">gh auth login</code> to read private repositories.</span>;
   } else if (login !== null) {
     body = (
       <>
         <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="inline-flex min-w-0 items-center gap-1.5 text-[15px]">
-            <CheckIcon className="size-4 shrink-0" />
+          <span className="inline-flex min-w-0 items-center gap-2 text-[16px]">
+            <span aria-hidden className="ev-dot ok" />
             <span className="truncate">Signed in with GitHub{login ? <> as <b className="font-medium">@{login}</b></> : ""}</span>
           </span>
           <span className="text-muted-foreground">
@@ -101,10 +100,10 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
         <span className="flex shrink-0 items-center gap-4">
           {github.install && (
             <Button asChild variant="outline">
-              <a href={github.install} target="_blank" rel="noreferrer">Add repos on GitHub <ExternalLinkIcon /></a>
+              <a href={github.install} target="_blank" rel="noreferrer">Add repos on GitHub <External /></a>
             </Button>
           )}
-          <button type="button" className={cn(link, "text-muted-foreground hover:text-foreground")} onClick={signOut}>Sign out</button>
+          <button type="button" className="ev-text-button" onClick={signOut}>Sign out</button>
         </span>
       </>
     );
@@ -112,27 +111,27 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
     body = (
       <span className="grid min-w-0 flex-1 gap-3">
         <span className="flex items-baseline justify-between gap-3">
-          <span className="font-medium">Enter this code on GitHub</span>
-          <button type="button" className={cn(link, "text-[12.5px] font-normal text-muted-foreground hover:text-foreground")} onClick={cancel}>Cancel</button>
+          <span className="text-[16px] font-medium">Enter this code on GitHub</span>
+          <button type="button" className="ev-text-button" onClick={cancel}>Cancel</button>
         </span>
         <span className="flex flex-wrap items-center gap-2">
-          <output aria-label="Sign-in code" className="num bg-node px-3 py-1 font-mono text-[24px] leading-8 font-medium tracking-[0.16em] select-all">{device.user_code}</output>
-          <Button type="button" variant="outline" className="h-10" onClick={copy} aria-label="Copy the code">
-            {copied ? <CheckIcon /> : <CopyIcon />} {copied ? "Copied" : "Copy"}
+          <output aria-label="Sign-in code" className="ev-code-out">{device.user_code}</output>
+          <Button type="button" variant="outline" onClick={copy} aria-label="Copy the code">
+            {copied ? <Tick /> : null} {copied ? "Copied" : "Copy"}
           </Button>
-          <Button asChild className="h-10">
-            <a href={device.verification_uri} target="_blank" rel="noreferrer" onClick={() => { copy(); setOpened(true); }}>Open GitHub <ExternalLinkIcon /></a>
+          <Button asChild>
+            <a href={device.verification_uri} target="_blank" rel="noreferrer" onClick={() => { copy(); setOpened(true); }}>Open GitHub <External /></a>
           </Button>
         </span>
-        <ol className="label-mono flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground">
+        <ol className="label-xs flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground">
           {["Open GitHub", "Paste the code", "Approve Baseten Eval Sandbox"].map((step, i) => (
-            <li key={step} className={cn("inline-flex items-center gap-1.5", i === (opened ? 1 : 0) && "text-foreground")}>
-              {opened && i === 0 ? <CheckIcon className="size-3" /> : `${String(i + 1).padStart(2, "0")} ·`} {step}
+            <li key={step} className={cn("inline-flex items-center gap-1.5", i === (opened ? 1 : 0) && "text-black")}>
+              {opened && i === 0 ? <Tick /> : `${String(i + 1).padStart(2, "0")} ·`} {step}
             </li>
           ))}
         </ol>
-        <span className="inline-flex items-center gap-2 text-[12.5px] text-muted-foreground" aria-live="polite">
-          <span aria-hidden className="size-1.5 shrink-0 animate-pulse-dot bg-foreground" />
+        <span className="inline-flex items-center gap-2 text-[14px] text-muted-foreground" aria-live="polite">
+          <span aria-hidden className="ev-dot live" />
           {opened ? "Code copied. Paste it on GitHub and approve; this page signs you in by itself." : "Waiting for you to approve on GitHub."}
         </span>
       </span>
@@ -141,22 +140,22 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
     body = (
       <>
         <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="text-[15px] font-medium">{github.public ? "Public repos need no sign-in." : "Sign in with GitHub to start a run."}</span>
+          <span className="text-[16px] font-medium">{github.public ? "Public repos need no sign-in." : "Sign in with GitHub to start a run."}</span>
           <span className="text-muted-foreground">{github.public ? "Sign in with GitHub to use your private repos." : "The eval reads repos, public ones too, with your own GitHub login."} Only you and the page's admins see your runs.</span>
         </span>
         <Button type="button" onClick={signIn} disabled={busy}>
-          {busy ? <LoaderIcon className="animate-spin" /> : <GitHubMark />} {busy ? "Asking GitHub" : "Sign in with GitHub"}
+          {busy ? <span aria-hidden className="ev-dot live" /> : <GitHubMark className="size-3.5" />} {busy ? "Asking GitHub" : "Sign in with GitHub"}
         </Button>
       </>
     );
   }
   return (
     <div className="grid gap-2">
-      <div className={cn("flex min-h-9 flex-wrap gap-x-3 gap-y-2 text-[13px]", device ? "items-start py-1" : "items-center", github.sign_in && !device && "py-2")}>
+      <div className={cn("flex min-h-9 flex-wrap gap-x-3 gap-y-2 text-[14px]", device ? "items-start py-1" : "items-center", github.sign_in && !device && "py-2")}>
         <GitHubMark className={cn("shrink-0", github.sign_in && !device ? "size-5" : "size-4", device && "mt-0.5")} />
         {body}
       </div>
-      {error && <p role="alert" className="pl-7 text-[12.5px] text-[#AC0EB2] dark:text-[#FFA9FD]">{error}</p>}
+      {error && <p role="alert" className="bt-notice error">{error}</p>}
     </div>
   );
 }
