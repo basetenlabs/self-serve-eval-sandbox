@@ -11,8 +11,10 @@ type Poll = { pending?: boolean; interval?: number; login?: string | null; error
 
 /** Whose GitHub reads your repositories. Hosted, you sign in with GitHub's device code; locally, the `gh` CLI's login.
  * `ref` lets a button elsewhere on the form start the same sign-in. */
-export function GitHubAccount({ github, checks, onChange, ref }: {
+export function GitHubAccount({ github, checks, onChange, ref, forPrivate }: {
   github: Account; checks: Checks; onChange: () => void; ref?: React.Ref<{ signIn: () => void }>;
+  /** Shown under "Private repos": the sign-in is asked for that choice, so it says so. */
+  forPrivate?: boolean;
 }) {
   const [device, setDevice] = React.useState<Device | null>(github.device ?? null); // a reload picks the code back up
   const [busy, setBusy] = React.useState(false);
@@ -136,9 +138,9 @@ export function GitHubAccount({ github, checks, onChange, ref }: {
   } else {
     body = (
       <>
-        <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="text-[16px] font-medium">{github.public ? "Public repos need no sign-in." : "Sign in with GitHub to start a run."}</span>
-          <span className="text-muted-foreground">{github.public ? "Sign in with GitHub to use your private repos." : "The eval reads repos, public ones too, with your own GitHub login."} Only you and the page's admins see your runs.</span>
+        <span className="grid min-w-[16rem] flex-1 gap-0.5">
+          <span className="text-[16px] font-medium">{forPrivate ? "Sign in with GitHub to use private repos." : github.public ? "Public repos need no sign-in." : "Sign in with GitHub to start a run."}</span>
+          <span className="text-muted-foreground">{forPrivate ? "The eval reads a private repository with your own GitHub login." : github.public ? "Sign in with GitHub to use your private repos." : "The eval reads repos, public ones too, with your own GitHub login."} Only you and the page's admins see your runs.</span>
         </span>
         <Button type="button" onClick={signIn} disabled={busy}>
           {busy ? <span aria-hidden className="ev-dot live" /> : <GitHubMark className="size-3.5" />} {busy ? "Asking GitHub" : "Sign in with GitHub"}

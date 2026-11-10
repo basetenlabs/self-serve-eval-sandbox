@@ -950,9 +950,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                                  query.get("q", ""), user))
         if url.path == "/api/trace":
             return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", ""), user))
-        if (report := REPORT_FILE.fullmatch(url.path)) and self.app.visible(self.app.jobs_dir / report[1], user):
-            if report[2] == "html" and (file := self.app.jobs_dir / report[1] / "report.html").is_file():
-                return self.send_body(self.with_fonts(file.read_bytes()), "text/html; charset=utf-8")
+        if (asked := REPORT_FILE.fullmatch(url.path)) and self.app.visible(self.app.jobs_dir / asked[1], user):
+            if asked[2] == "html" and (file := self.app.jobs_dir / asked[1] / "report.html").is_file():
+                page = report.current_html(file.parent) or file.read_bytes()
+                return self.send_body(self.with_fonts(page), "text/html; charset=utf-8")
             return super().do_GET()
         return self.send_error(404)
 

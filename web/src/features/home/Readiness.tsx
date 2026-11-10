@@ -2,16 +2,14 @@ import type * as React from "react";
 import { Chevron, Cross, Tick } from "@/components/brand/icons";
 import { Column } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import type { AppState } from "@/lib/types";
-import { GitHubMark } from "./GitHubAccount";
 
 type Item = { ok: boolean | null; label: string; fix: string; action?: React.ReactNode };
 
 /** What a run needs, each with the one thing to do when it's missing. Locally that's this machine's setup.
  * Hosted, visitors have no terminal and see none of the plumbing: the page's own setup is one line its admins
  * fix, and GitHub is the visitor's own sign-in, needed only for their own repos, so it's never a thing to fix. */
-export function readiness(state: AppState, onSignIn?: () => void): Item[] {
+export function readiness(state: AppState): Item[] {
   const c = state.checks;
   const hosted = state.github.sign_in;
   const baseten = state.models.find((m) => m.provider === "baseten");
@@ -21,8 +19,7 @@ export function readiness(state: AppState, onSignIn?: () => void): Item[] {
   const login = state.github.login;
   const github: Item = hosted
     ? { ok: login ? true : null, label: login ? `GitHub: signed in as @${login}` : "GitHub: needed only for your own repos",
-        fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in to start a run.",
-        action: onSignIn && <Button type="button" variant="outline" className="mt-2" onClick={onSignIn}><GitHubMark className="size-3.5" /> Sign in with GitHub</Button> }
+        fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in under New run to start a run." }
     : { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
   if (hosted) {
     const ready = c.blaxel && c.bl_cli && !!baseten && !baseten.missing && !!claude && !claude.missing && c.judge.ok;
@@ -40,9 +37,9 @@ export function readiness(state: AppState, onSignIn?: () => void): Item[] {
   ];
 }
 
-/** What this page needs to run, folded away once it's all there. `onSignIn` starts the hosted GitHub sign-in. */
-export function Readiness({ state, onSignIn }: { state: AppState; onSignIn?: () => void }) {
-  const items = readiness(state, onSignIn);
+/** What this page needs to run, folded away once it's all there. Sign-in lives in New run, not here. */
+export function Readiness({ state }: { state: AppState }) {
+  const items = readiness(state);
   const missing = items.filter((i) => i.ok === false).length;
   if (!missing) {
     return (

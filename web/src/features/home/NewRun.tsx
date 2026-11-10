@@ -223,7 +223,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                 options={[{ value: "public", label: "Public repos" }, { value: "private", label: "Private repos" }]} />
               {privateRepos && (
                 <div className="ev-panel-head bt-reveal">
-                  <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
+                  <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} forPrivate />
                 </div>
               )}
               <div className="bt-field gap-2">
@@ -342,7 +342,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               <p className="ev-small" aria-live="polite">{hint}</p>
             </div>
           </Column>
-          <Readiness state={state} onSignIn={signedOut ? signIn : undefined} />
+          <Readiness state={state} />
         </div>
       </div>
     </form>

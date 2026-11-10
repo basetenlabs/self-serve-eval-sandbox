@@ -258,6 +258,14 @@ label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
 .ev-pipeline .what { display: none; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
 .ev-pipeline .count { font: 400 16px/1.4 var(--beausite); font-variant-numeric: tabular-nums; }
 .ev-pipeline > li[data-state=todo] .count { color: var(--color-darkGrey2); }
+/* Phones: one row per step, the tick in its own column at the end, after the count, so ticks line up. */
+@media (max-width: 639px) {
+  .ev-pipeline > li { grid-template-columns: minmax(0, 1fr) auto 16px; }
+  .ev-pipeline .head { display: contents; }
+  .ev-pipeline .head > :first-child { grid-column: 1; grid-row: 1; }
+  .ev-pipeline .head > :not(:first-child) { grid-column: 3; grid-row: 1; justify-self: center; }
+  .ev-pipeline .count { grid-column: 2; grid-row: 1; }
+}
 @media (min-width: 640px) {
   .ev-pipeline > li { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 12px 16px; }
   .ev-pipeline .what { display: block; }
