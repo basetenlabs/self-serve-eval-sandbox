@@ -28,7 +28,7 @@ from . import config, report, runner, runtime, tasks
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JOBS = ROOT / "jobs"
-DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash"]
+DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash-1017-fast", "glm-5.3-fast"]
 DEFAULT_LIMIT = 10
 ACTIVE = ("collecting", "checking", "running")
 # An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
