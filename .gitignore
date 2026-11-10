@@ -12,3 +12,5 @@ data/
 tasks/
 *.egg-info/
 build/
+# Baseten's licensed face, fetched by hosted/fonts.mjs at deploy; served only behind the hosted sign-in.
+hosted/fonts/

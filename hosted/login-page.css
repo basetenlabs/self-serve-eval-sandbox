@@ -1,0 +1,78 @@
+/* The public pages before sign-in: the sign-in page (hosted/login-page.mjs) and @blaxel/sign-in's error pages
+   (renderMessage), served as /auth/login.css by hosted/public.mjs. The look is the /baseten-design skill's:
+   the dotted texture, one White block, the site name and one primary button, set in Geist (Beausite is licensed
+   and served only after sign-in). baseten.css is the skill's stylesheet, unchanged; the rules below only place
+   this page's parts. The same file ships in every internal site; change them together. */
+@import url("/auth/baseten.css");
+
+@font-face { font-family: "Geist"; src: url("/auth/fonts/geist.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("/auth/fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+
+:root { color-scheme: light; --bt-texture-url: url("/auth/texture.png"); }
+:focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
+
+.sb-auth { min-block-size: 100dvh; background: var(--background-texture); color: var(--color-black); }
+.sb-auth .frame {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-block-size: 100dvh; padding: var(--section-inset);
+}
+.sb-auth .frame > :is(span, .foot) { display: none; }   /* the error page's empty top and bottom rows; @blaxel/sign-in 0.4.0 puts a footer there */
+
+/* The White block: 448px, four of the site's twelve columns at 1440. */
+.sb-auth .top, .sb-auth .panel { inline-size: min(100%, 448px); background: var(--color-white); }
+.sb-auth .card { display: flex; flex-direction: column; gap: 24px; padding: 24px var(--grid-gutter) var(--grid-gutter); }
+@media (min-width: 801px) { .sb-auth .card { padding: 24px; } }
+.sb-auth .logo { display: block; inline-size: 117px; block-size: 22px; margin-block-end: 40px; }
+.sb-auth h1 { margin: 0; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; text-wrap: balance; }
+@media (min-width: 801px) { .sb-auth h1 { font-size: 40px; line-height: 1.1; } }
+
+/* A failed or refused sign-in: one line on a Light ramp block, then what to do about it. */
+.sb-auth .bt-notice { flex-direction: column; gap: 16px; }
+.sb-auth .bt-notice p { margin: 0; color: var(--color-black); }
+.sb-auth .bt-notice .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; }
+.sb-auth .request { margin: 0; }
+
+/* @blaxel/sign-in's error pages: its logo bar becomes the top of the same White block. */
+.sb-auth .top { display: flex; padding: 24px var(--grid-gutter) 0; }
+@media (min-width: 801px) { .sb-auth .top { padding-inline: 24px; } }
+.sb-auth .top .logo { margin: 0; }
+.sb-auth .top :is(.logo-dark, .divider, .label) { display: none; }
+.sb-auth .top + .panel .card { padding-block-start: 64px; }
+.sb-auth .card-head {
+  display: flex; align-items: center; gap: 10px; inline-size: fit-content; margin: 0; padding: 4px 24px 4px 8px;
+  background: var(--color-lightGrey1); border-bottom: 1px solid var(--color-lightGrey2);
+  font: 400 12px/1.2 var(--geist-mono); letter-spacing: .02em; text-transform: uppercase;
+}
+.sb-auth .card-head > span + span { color: var(--color-darkGrey2); }
+/* The eyebrow's four-dot marker (the skill's assets/icons/marker.svg), drawn here because the package writes the markup. */
+.sb-auth .card-head::before {
+  content: ""; flex-shrink: 0; inline-size: 7px; block-size: 7px; margin-top: -1px; background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='7' viewBox='0 0 7 7'%3E%3Cpath d='M0 0h1.5v1.5H0zM0 5.5h1.5V7H0zM5.5 0H7v1.5H5.5zM5.5 5.5H7V7H5.5z'/%3E%3C/svg%3E") center / 7px 7px no-repeat;
+}
+.sb-auth .notice { padding: 12px 16px; background: var(--color-lightGrey1); font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; }
+.sb-auth .notice[data-tone=error] { background: var(--color-lightPink); }
+.sb-auth .notice p { margin: 0; }
+.sb-auth .btn {
+  /* The package's Reload link, drawn as the skill's .bt-button.secondary: a Light Grey 1 face that lifts 5px on hover. */
+  position: relative; isolation: isolate; display: inline-flex; align-self: flex-start; padding: 0;
+  background: var(--button-hover-background, var(--color-lightGrey1)); color: var(--color-black); text-decoration: none;
+  transition: background-color .4s var(--ease);
+}
+.sb-auth .btn > .btn-label {
+  position: relative; z-index: 1; display: flex; align-items: center; block-size: 36px; padding: 8px 14px;
+  font: 400 14px/1.2 var(--beausite); letter-spacing: .01em; white-space: nowrap;
+  background: var(--button-hover-background, var(--color-lightGrey1));
+  transform: translate(var(--button-lift, 0px), calc(-1 * var(--button-lift, 0px)));
+  transition: transform .4s var(--ease), background-color .4s var(--ease);
+}
+.sb-auth .btn > .btn-label:before, .sb-auth .btn > .btn-label:after { content: ""; position: absolute; }
+.sb-auth .btn > .btn-label:before {
+  top: 100%; left: 0; inline-size: 100%; block-size: var(--button-lift, 0px);
+  transform-origin: 0 0; transform: skew(-45deg); transition: height .4s var(--ease); background: var(--color-lightGrey3);
+}
+.sb-auth .btn > .btn-label:after {
+  top: 0; right: 100%; block-size: 100%; inline-size: var(--button-lift, 0px);
+  transform-origin: 100% 0; transform: skewY(-45deg); transition: width .4s var(--ease); background: var(--color-lightGrey2);
+}
+.sb-auth .btn:focus-visible { --button-lift: 5px; --button-hover-background: var(--color-lightGrey2); }
+@media (hover: hover) { .sb-auth .btn:hover { --button-lift: 5px; --button-hover-background: var(--color-lightGrey2); } }
