@@ -139,7 +139,7 @@ class App:
         for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
                 run["board"] = self.board(run)
-        estimates = self.estimates(runs)
+        estimates = borrowed(self.estimates(runs), catalog)
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "model": m.model,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
@@ -817,6 +817,24 @@ def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | Non
         if owner := read_json(d / ACCESS).get("owner"):
             by_owner[owner] = by_owner.get(owner, 0.0) + cost
     return total, by_owner
+
+
+def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[str, dict]:
+    """A model with no runs yet (a Fast variant: the same weights on their own capacity) takes the cost and time per
+    attempt of the first of its `estimate_from` models that has them, the cost scaled by the two models' output price."""
+    for key, m in catalog.items():
+        if key in found:
+            continue
+        for base in (catalog[k] for k in m.estimate_from if k in catalog and k in found):
+            mine, theirs = m.rate_for(m.model), base.rate_for(base.model)
+            if not mine or not theirs or not theirs.get("output"):
+                continue
+            ratio = mine["output"] / theirs["output"]
+            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r}
+            source = found[base.key]
+            found[key] = {**scale(source), "by_scope": {k: scale(v) for k, v in source["by_scope"].items()}}
+            break
+    return found
 
 
 def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:

@@ -47,7 +47,7 @@ pr-eval serve
 It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then:
 
 1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes) or **Your pull requests**: paste links, or type a repository and pick from its merges.
-2. Choose the models to compare (Claude Opus 5.5 and DeepSeek V4.1 Flash to start).
+2. Choose the models to compare (Claude Opus 5.5, DeepSeek V4.1 Flash 1017 Fast and GLM-5.3 Fast to start).
 3. Press **Start run**. When it finishes, **Open report** shows solve rate, cost per solved task and time per task, with every attempt's diff, trace, test output and the judges' verdicts.
 
 The first run builds the trial image on Blaxel, which takes a few minutes once. Private repositories work through your `gh` login.
@@ -59,7 +59,7 @@ Go and Python repositories have default install and test commands. For anything 
 The page runs this same command:
 
 ```bash
-pr-eval run your-org/your-repo --limit 10 --models claude-opus,deepseek-v4.1-flash
+pr-eval run your-org/your-repo --limit 10 --models claude-opus,deepseek-v4.1-flash-1017-fast,glm-5.3-fast
 pr-eval run                                         # the sample tasks
 pr-eval run your-org/your-repo --pr 123 --pr 456    # exactly these PRs
 pr-eval run https://github.com/o/a/pull/12 x/b#9    # or links, from any number of repositories
@@ -106,7 +106,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Models
 
-`configs/models.toml` lists the models and their prices: `claude-opus`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash`, `nemotron-3.5-super`. To add one, copy an entry and set its Baseten model id and prices.
+`configs/models.toml` lists the models and their prices: `claude-opus`, `glm-5.3`, `glm-5.3-fast`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash`, `deepseek-v4.1-flash-1017-fast`, `nemotron-3.5-super`. To add one, copy an entry and set its Baseten model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own.
 
 ## Development
 

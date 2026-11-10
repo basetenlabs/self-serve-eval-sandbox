@@ -30,6 +30,8 @@ class Model:
     effort: str
     prices: dict[str, dict[str, float]] = field(default_factory=dict)
     max_concurrent: int | None = None  # cap for providers that rate-limit a key
+    # Models whose past runs estimate this one's cost and time until it has its own: the first with a run counts.
+    estimate_from: list[str] = field(default_factory=list)
 
     def price(self, usage: dict[str, dict]) -> float | None:
         """USD for Claude Code's per-model usage, priced from our own table.
