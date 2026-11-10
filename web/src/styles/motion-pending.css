@@ -1,0 +1,63 @@
+/* Pending: motion rules from the /baseten-design motion branch (T-724) that the merged skill stylesheet does not carry
+   yet, copied verbatim (the WebGL box and counting number from its commit 86daf3e, the rest from its Motion block).
+   Delete this file when that branch merges and baseten.css is copied again. */
+/* A number that counts once in view (motion.js animateNumber): layers share one cell as wide as the longest text,
+   right-aligned, so the units digit never moves. Reduced motion shows the final number. */
+.bt-number { position: relative; display: inline-grid; justify-items: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bt-number > * { grid-area: 1 / 1; }
+.bt-number > .sizer { visibility: hidden; }
+@media (prefers-reduced-motion: no-preference) { .bt-number > .value { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); } }
+@media (prefers-reduced-motion: reduce) { .bt-number > .text { display: none; } }
+/* ---------- Motion: WebGL scenes (assets/motion/mount.js mounts one in a .bt-webgl box) ---------- */
+/* The canvas fills its box and fades in over what is behind it once it has rendered. */
+.bt-webgl { position: relative; inline-size: 100%; block-size: 100%; }
+.bt-webgl > canvas { display: block; inline-size: 100%; block-size: 100%; transition: opacity .3s; }
+@starting-style { .bt-webgl > canvas { opacity: 0; } }
+
+/* The merged stylesheet still animates the chevron with a one-off keyframe; the motion branch replaces that rule with
+   the two-copy slide below. Off here until the merged copy drops it. */
+.bt-button:is(:hover, :focus-visible) .chevron > svg { animation: none; }
+
+/* Button chevron: the mark slides out to the right while a second copy slides in from the left, and back on leave. */
+.bt-button .chevron { position: relative; }
+.bt-button .chevron > svg { transition: transform .4s var(--ease), opacity .4s var(--ease); }
+.bt-button .chevron:after { content: ""; position: absolute; inset: 0; background: currentColor; -webkit-mask: var(--chevron-mark) center / 5px 10px no-repeat; mask: var(--chevron-mark) center / 5px 10px no-repeat; transform: translateX(-100%); opacity: 0; transition: transform .4s var(--ease), opacity .4s var(--ease); }
+.bt-button .chevron > svg + svg { position: absolute; inset: 0; margin: auto; transform: translateX(-100%); opacity: 0; }   /* a second copy of another icon, instead of the drawn chevron */
+.bt-button .chevron:has(> svg + svg):after { content: none; }
+:root { --chevron-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 5 10'%3E%3Cpath d='M5 5L0 0V10L5 5Z'/%3E%3C/svg%3E"); }
+.bt-button:focus-visible:not([aria-disabled=true]) .chevron > svg:first-child { transform: translateX(100%); opacity: 0; }
+.bt-button:focus-visible:not([aria-disabled=true]) .chevron:after, .bt-button:focus-visible:not([aria-disabled=true]) .chevron > svg + svg { transform: none; opacity: 1; }
+@media (hover: hover) {
+  .bt-button:hover:not([aria-disabled=true]) .chevron > svg:first-child { transform: translateX(100%); opacity: 0; }
+  .bt-button:hover:not([aria-disabled=true]) .chevron:after, .bt-button:hover:not([aria-disabled=true]) .chevron > svg + svg { transform: none; opacity: 1; }
+}
+.bt-button[aria-disabled=true] { --button-lift: 0px; cursor: default; }
+
+/* Lifting cell: a tile that rises one grid gap up-right out of its cell on hover or focus, on two side faces in its
+   family's Base and Dark (logo tabs in a customer wall). <button class="bt-lift green"><span>…tile…</span></button> */
+.bt-lift { --offset: var(--grid-gap); position: relative; display: block; inline-size: 100%; block-size: 100%; padding: 0; border: 0; background: none; outline: 0; cursor: pointer;
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); transition: clip-path .4s var(--ease); }
+.bt-lift > span { position: relative; z-index: 1; display: block; inline-size: 100%; block-size: 100%; transition: transform .4s var(--ease); }
+.bt-lift:before, .bt-lift:after { content: ""; position: absolute; visibility: hidden; transition: visibility 0s .4s; }   /* hidden at rest: behind the tile their edges would show as a thin line */
+.bt-lift:before { inset-block-end: 0; inset-inline-start: calc(var(--offset) / 2); inline-size: 100%; block-size: var(--offset); transform: skewX(-45deg); background: var(--lift-dark, var(--color-black)); }
+.bt-lift:after { inset-inline-start: 0; inset-block-end: calc(var(--offset) / 2); inline-size: var(--offset); block-size: 100%; transform: skewY(-45deg); background: var(--lift-base, var(--color-black)); }
+.bt-lift.green { --lift-base: var(--color-green); --lift-dark: var(--color-darkGreen); } .bt-lift.pink { --lift-base: var(--color-pink); --lift-dark: var(--color-darkPink); }
+.bt-lift.blue { --lift-base: var(--color-blue); --lift-dark: var(--color-darkBlue); } .bt-lift.gold { --lift-base: var(--color-gold); --lift-dark: var(--color-darkGold); }
+.bt-lift:focus-visible { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
+.bt-lift:focus-visible:before, .bt-lift:focus-visible:after { visibility: visible; transition-delay: 0s; }
+.bt-lift:focus-visible > span { transform: translate(var(--offset), calc(-1 * var(--offset))); }
+@media (hover: hover) {
+  .bt-lift:hover { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
+  .bt-lift:hover:before, .bt-lift:hover:after { visibility: visible; transition-delay: 0s; }
+  .bt-lift:hover > span { transform: translate(var(--offset), calc(-1 * var(--offset))); }
+}
+
+/* Linked card (customer story tiles): the whole card dims to 90%, shrinks to 99% and takes a 5% Black wash. .4s. */
+.bt-press { position: relative; transition: transform .4s, opacity .4s; }
+.bt-press:before { content: ""; position: absolute; inset: 0; z-index: 1; background: var(--color-black); opacity: 0; pointer-events: none; transition: opacity .4s; }
+.bt-press:has(a:focus-visible) { opacity: .9; transform: scale(.99); } .bt-press:has(a:focus-visible):before { opacity: .05; }
+@media (hover: hover) { .bt-press:hover { opacity: .9; transform: scale(.99); } .bt-press:hover:before { opacity: .05; } }
+
+/* Tab panel shown by removing [hidden]: fades in, .3s ease-out, every time it is shown. */
+.bt-reveal { animation: bt-reveal .3s ease-out; }
+@keyframes bt-reveal { from { opacity: 0; } to { opacity: 1; } }

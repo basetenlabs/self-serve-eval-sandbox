@@ -6,8 +6,9 @@ import { Tip } from "@/components/ui/tooltip";
 import { plural } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import type { AppState, Run } from "@/lib/types";
-// The Model APIs scene from the design skill (scripts/make_cube.py --family pink --scene --inline), inline so its
-// terminal face is set in the page's Geist Mono. The phone gets a squarer crop with the cube centred.
+import { useProductHero } from "@/lib/motion";
+// The still Model APIs scene (scripts/make_cube.py --family pink --scene --inline): what shows until the live scene
+// has rendered, and instead of it without WebGL. The phone gets a squarer crop with the cube centred.
 import scene from "@/assets/hero.svg?raw";
 import scenePhone from "@/assets/hero-phone.svg?raw";
 import { fillAgain, NewRun } from "./NewRun";
@@ -24,6 +25,9 @@ const STEPS = [
 // (an organization's owner has to approve it).
 const fromGitHub = new URLSearchParams(location.search).get("setup_action");
 
+// What the terminal on the hero cube's face types, over and over.
+const FACE = ["$ pr-eval run", "replay merged PRs", "open vs closed", "hidden tests", "judges: solved"];
+
 export function HomePage({ state, error, go, hurry }: {
   state: AppState | null; error: string | null; go: (r: Route) => void; hurry: () => void;
 }) {
@@ -34,6 +38,8 @@ export function HomePage({ state, error, go, hurry }: {
   React.useEffect(() => {
     if (fromGitHub) history.replaceState(null, "", location.pathname + location.hash); // a reload doesn't say it again
   }, []);
+  const visual = React.useRef<HTMLDivElement>(null);
+  useProductHero(visual, "model-apis", FACE);
   const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   return (
     <>
@@ -41,8 +47,11 @@ export function HomePage({ state, error, go, hurry }: {
       <Surface className="ev-hero">
         <h1 className="ev-hero-title">{"Find the open model that\ndoes your team's coding work"}</h1>
         <div className="ev-scene">
-          <div className="visual max-sm:hidden" dangerouslySetInnerHTML={{ __html: scene }} />
-          <div className="visual sm:hidden" dangerouslySetInnerHTML={{ __html: scenePhone }} />
+          <div className="visual" ref={visual}>
+            <div className="still max-sm:hidden" dangerouslySetInnerHTML={{ __html: scene }} />
+            <div className="still sm:hidden" dangerouslySetInnerHTML={{ __html: scenePhone }} />
+            <div className="scene bt-webgl" aria-hidden="true" />
+          </div>
           <div className="corner">
             <p>
               Replay your team's merged pull requests with open models on Baseten and a closed model, side by side, each

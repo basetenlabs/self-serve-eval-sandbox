@@ -109,8 +109,9 @@ a.bt-badge.green:hover { --badge-background: var(--color-green); }
 .ev-hero-title { margin: 0; font: 400 40px/1.1 var(--beausite); letter-spacing: -.01em; white-space: pre-line; text-wrap: balance; }
 @media (min-width: 801px) { .ev-hero-title { font-size: 56px; letter-spacing: -.02em; } }
 .ev-scene { position: relative; display: flex; flex-direction: column-reverse; }
-.ev-scene > .visual { position: relative; aspect-ratio: 3 / 2; overflow: clip; background: var(--color-lightPink); }
-.ev-scene > .visual > svg { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
+.ev-scene > .visual { position: relative; aspect-ratio: 339 / 424; overflow: clip; background: var(--color-lightPink); }
+.ev-scene > .visual > .still > svg, .ev-scene > .visual > .scene { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
+.ev-scene > .visual > .scene { pointer-events: none; }   /* the scene reads the pointer from the window */
 .ev-scene > .corner { display: flex; flex-direction: column; gap: 24px; padding-bottom: 24px; background: var(--color-white); }
 .ev-scene > .corner > p { margin: 0; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey1); }
 .ev-scene .ctas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
