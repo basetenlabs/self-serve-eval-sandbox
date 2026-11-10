@@ -73,7 +73,7 @@ class BlaxelFlowTest(unittest.TestCase):
                 mock.patch.object(pipeline.runtime, "build_image", return_value=0) as build, \
                 contextlib.redirect_stdout(io.StringIO()):
             pipeline.ensure_image("image")
-        build.assert_called_once_with("image", None)
+        build.assert_called_once_with("image")
 
     def test_preparation_pins_immutable_image_before_validation(self):
         with tempfile.TemporaryDirectory() as root:
@@ -126,7 +126,6 @@ class BlaxelFlowTest(unittest.TestCase):
             with mock.patch.object(pipeline.tasks, "discover", return_value=[task]), \
                     mock.patch.object(pipeline, "prepare_image", return_value="test-image") as prepare, \
                     mock.patch.object(pipeline, "check", return_value=[task]) as check, \
-                    mock.patch.object(pipeline, "image_claude_version", return_value="test"), \
                     mock.patch.object(pipeline.report, "build", return_value="report.html"), \
                     mock.patch.object(runner, "run"):
                 self.assertEqual(pipeline.execute(job, [], settings), 0)
@@ -191,7 +190,7 @@ class BlaxelFlowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, \
                 mock.patch.object(judge, "problem", return_value=None), \
                 mock.patch.object(app.runtime, "check_connection"), \
-                mock.patch.object(app.pipeline, "image_exists") as image_exists, \
+                mock.patch.object(app.runtime, "image_exists") as image_exists, \
                 mock.patch.object(app.shutil, "which", return_value=None):
             checks = app.App(Path(root)).checks(judge)
         self.assertTrue(checks["blaxel"])

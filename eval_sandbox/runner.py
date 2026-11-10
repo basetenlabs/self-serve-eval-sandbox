@@ -10,7 +10,9 @@ set up alongside the check, and its agent starts only once the check passes.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import secrets
 import shlex
@@ -23,9 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import causes, meter, runtime
 from . import judge as judge_mod
-from . import meter, runtime
-from .config import BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, sandbox_credential
+from .config import (BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, redact_known,
+                     sandbox_credential)
 from .tasks import TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
@@ -191,8 +194,8 @@ def run_agent(container: str, model: Model, placeholder_env: dict, log_path: Pat
     started = time.monotonic()
     result = runtime.execute(container, script, env={**env_vars, **placeholder_env}, timeout=timeout,
                              stdout_path="/logs/agent.jsonl", stderr_path="/logs/agent.stderr")
-    log_path.write_text(result.stdout)
     log_path.with_suffix(".stderr").write_text(result.stderr)
+    runtime.download(container, "/logs/agent.jsonl", log_path)  # streamed: the log can be tens of MB
     for path in (log_path, log_path.with_suffix(".stderr")):
         redact_file(path)
     compact_stream(log_path)
@@ -202,14 +205,12 @@ def run_agent(container: str, model: Model, placeholder_env: dict, log_path: Pat
 
 def summarize_stream(path: Path) -> dict:
     """Pull the numbers the report needs out of Claude Code's stream-json output."""
-    result, tool_calls, assistant_turns = None, {}, 0
+    result, tool_calls, assistant_turns, version = None, {}, 0, None
     retries, retry_ms, rate_limited = 0, 0, 0
-    for line in path.read_text(errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") == "system" and event.get("subtype") == "api_retry":
+    for event in events(path):
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            version = event.get("claude_code_version")
+        elif event.get("type") == "system" and event.get("subtype") == "api_retry":
             # Provider backoff is time spent waiting on our rate limit, not on the model.
             retries += 1
             retry_ms += int(event.get("retry_delay_ms") or 0)
@@ -222,7 +223,8 @@ def summarize_stream(path: Path) -> dict:
         elif event.get("type") == "result":
             result = event
     summary = {"tool_calls": tool_calls, "assistant_messages": assistant_turns, "api_retries": retries,
-               "rate_limited_retries": rate_limited, "retry_wait_seconds": round(retry_ms / 1000, 1)}
+               "rate_limited_retries": rate_limited, "retry_wait_seconds": round(retry_ms / 1000, 1),
+               "claude_code_version": version}
     if result:
         summary.update({
             "subtype": result.get("subtype"), "is_error": bool(result.get("is_error")),
@@ -235,27 +237,44 @@ def summarize_stream(path: Path) -> dict:
     return summary
 
 
+def events(path: Path):
+    """Each JSON event of a stream log, read a line at a time: a log can be tens of MB."""
+    if not path.is_file():
+        return
+    with path.open(errors="replace") as lines:
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                yield event
+
+
 # Of the raw stream events --include-partial-messages adds, only these carry usage.
 KEPT_STREAM_EVENTS = {"message_start", "message_delta"}
 
 
 def compact_stream(path: Path) -> None:
-    """Drop the per-token stream events, which would make each log several times larger."""
-    kept, dropped = [], False
-    for line in path.read_text(errors="replace").splitlines():
-        if '"stream_event"' in line:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                event = {}
-            if event.get("type") == "stream_event" and (event.get("event") or {}).get("type") not in KEPT_STREAM_EVENTS:
-                dropped = True
-                continue
-        kept.append(line)
+    """Drop the per-token stream events, which would make each log several times larger. A line at a time."""
+    if not path.is_file():
+        return
+    tmp, dropped = path.with_suffix(".jsonl.tmp"), False
+    with path.open(errors="replace") as lines, tmp.open("w") as kept:
+        for line in lines:
+            if '"stream_event"' in line:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    event = {}
+                if event.get("type") == "stream_event" and (event.get("event") or {}).get("type") not in KEPT_STREAM_EVENTS:
+                    dropped = True
+                    continue
+            kept.write(line if line.endswith("\n") else line + "\n")
     if dropped:
-        tmp = path.with_suffix(".jsonl.tmp")
-        tmp.write_text("\n".join(kept) + "\n")
         tmp.replace(path)
+    else:
+        tmp.unlink()
 
 
 PROXY_OUTPUT = re.compile(r"\bout=(\d+)")
@@ -290,23 +309,18 @@ def rebuild_usage(stream: Path, model: Model, proxy_log: Path | None = None) -> 
     messages: dict[str, tuple[str, dict]] = {}   # message id -> (model id, usage), in order
     final_output: dict[str, int] = {}
     streaming: dict[str | None, str] = {}       # parent tool call -> message being streamed
-    if stream.is_file():
-        for line in stream.read_text(errors="replace").splitlines():
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "assistant":
-                message = event.get("message") or {}
-                # "<synthetic>" messages are Claude Code's own (an API error shown as a reply)
-                if message.get("id") and message.get("model") != "<synthetic>":
-                    messages[message["id"]] = (message.get("model") or model.model, message.get("usage") or {})
-            elif event.get("type") == "stream_event":
-                inner, parent = event.get("event") or {}, event.get("parent_tool_use_id")
-                if inner.get("type") == "message_start":
-                    streaming[parent] = (inner.get("message") or {}).get("id")
-                elif inner.get("type") == "message_delta" and streaming.get(parent):
-                    final_output[streaming[parent]] = int((inner.get("usage") or {}).get("output_tokens") or 0)
+    for event in events(stream):
+        if event.get("type") == "assistant":
+            message = event.get("message") or {}
+            # "<synthetic>" messages are Claude Code's own (an API error shown as a reply)
+            if message.get("id") and message.get("model") != "<synthetic>":
+                messages[message["id"]] = (message.get("model") or model.model, message.get("usage") or {})
+        elif event.get("type") == "stream_event":
+            inner, parent = event.get("event") or {}, event.get("parent_tool_use_id")
+            if inner.get("type") == "message_start":
+                streaming[parent] = (inner.get("message") or {}).get("id")
+            elif inner.get("type") == "message_delta" and streaming.get(parent):
+                final_output[streaming[parent]] = int((inner.get("usage") or {}).get("output_tokens") or 0)
     usage: dict[str, dict] = {}
     for message_id, (model_id, u) in messages.items():
         counts = usage.setdefault(model_id, {"inputTokens": 0, "cacheReadInputTokens": 0,
@@ -319,7 +333,10 @@ def rebuild_usage(stream: Path, model: Model, proxy_log: Path | None = None) -> 
         counts["outputTokens"] += final_output.get(message_id, int(u.get("output_tokens") or 0))
     finished = list(messages)[:-1]  # the last message may have been cut off mid-answer
     complete = bool(messages) and all(m in final_output for m in finished)
-    proxied = PROXY_OUTPUT.findall(proxy_log.read_text(errors="replace")) if proxy_log and proxy_log.is_file() else []
+    proxied = []
+    if proxy_log and proxy_log.is_file():
+        with proxy_log.open(errors="replace") as lines:
+            proxied = [n for line in lines for n in PROXY_OUTPUT.findall(line)]
     if proxied and len(usage) == 1:
         # The proxy logs each finished request's output, so the count is complete.
         next(iter(usage.values()))["outputTokens"] = sum(int(n) for n in proxied)
@@ -369,8 +386,28 @@ def block_lookups(container: str, domains: list[str] | None = None, routing: lis
 
 
 def container_name(run_id: str) -> str:
-    slug = re.sub(r"[^a-z0-9-]", "-", run_id.lower()).strip("-")[:42]
+    # Blaxel refuses a name over 49 characters: "pr-eval-", the slug, "-" and 8 hex digits.
+    slug = re.sub(r"[^a-z0-9-]", "-", run_id.lower())[:32].strip("-")
     return f"pr-eval-{slug or 'trial'}-{secrets.token_hex(4)}"
+
+
+class StepFailed(runtime.RuntimeError):
+    """A sandbox or file error, and the step of the attempt it happened at (causes.STEPS)."""
+
+    def __init__(self, step: str, whose: str, error: BaseException):
+        super().__init__(str(error))
+        self.step, self.whose, self.error = step, whose, error
+
+
+@contextlib.contextmanager
+def at(step: str, whose: str = "the agent's"):
+    """Name the step any sandbox or file error inside belongs to; an inner step's name stays."""
+    try:
+        yield
+    except StepFailed:
+        raise
+    except (runtime.RuntimeError, OSError) as exc:
+        raise StepFailed(step, whose, exc) from exc
 
 
 def start_container(name: str, run_id: str, settings: Settings, memory: int | None = None) -> None:
@@ -395,42 +432,50 @@ def sandbox_memory(task: Task, settings: Settings) -> int:
     return max(settings.memory, int(task.meta["environment"].get("memory_mb", 0)))
 
 
-def prepare_workspace(container: str, task: Task, log_dir: Path) -> tuple[str | None, dict]:
+def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "the agent's") -> tuple[str | None, dict]:
     """Base source in /workspace, dependencies installed, both committed as the baseline.
 
-    Returns (invalid reason or None, setup stats). The baseline includes whatever setup
-    wrote outside .gitignore and CACHES, so the agent's diff is only the agent's.
+    Returns (invalid reason or None, setup stats); its log is log_dir/setup.log. A sandbox error
+    raises StepFailed, naming the step. The baseline includes whatever setup wrote outside
+    .gitignore and CACHES, so the agent's diff is only the agent's.
     """
-    runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
     commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
-    code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
-                                 f"git init -q -b main && printf '%s\\n' {' '.join(map(shlex.quote, CACHES))} "
-                                 f">>.git/info/exclude && git add -A && {commit} base", timeout=300)
+    with at("upload", whose):
+        runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
+        code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
+                                     f"git init -q -b main && printf '%s\\n' {' '.join(map(shlex.quote, CACHES))} "
+                                     f">>.git/info/exclude && git add -A && {commit} base", timeout=300)
     if code != 0:
         (log_dir / "setup.log").write_text(out)
         return "workspace-error", {}
     started = time.monotonic()
     timeout = int(task.meta["environment"].get("setup_timeout_sec", 900))
     logs = []
-    for wait in (10, 30, None):  # a download can drop mid-file, and installing dependencies again is harmless
-        code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
-        logs.append(out)
-        if code == 0 or timed_out or wait is None or not DROPPED_DOWNLOAD.search(out):
-            break
-        time.sleep(wait)
-    (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
-    stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
-    if code != 0:
-        return ("setup-timeout" if timed_out else "setup-error"), stats
-    code, out, timed_out = sh(container, f"git add -A && {commit} setup", timeout=120)
-    if code or timed_out:
-        return "setup-commit-error", stats
-    code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
-    if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
-        return "workspace-error", stats
+    with at("setup", whose):
+        for wait in (10, 30, None):  # a download can drop mid-file, and installing dependencies again is harmless
+            code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
+            logs.append(out)
+            if code == 0 or timed_out or wait is None or not DROPPED_DOWNLOAD.search(out):
+                break
+            time.sleep(wait)
+        (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
+        stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
+        if code != 0:
+            return ("setup-timeout" if timed_out else "setup-error"), stats
+        code, out, timed_out = sh(container, f"git add -A && {commit} setup", timeout=120)
+        if code or timed_out:
+            return "setup-commit-error", stats
+        code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
+        if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
+            return "workspace-error", stats
     stats["baseline"] = out.strip()
-    block_lookups(container, ["blocked.invalid"])
+    with at("network", whose):
+        block_lookups(container, ["blocked.invalid"])
     return None, stats
+
+
+# The most of an agent's patch held in memory, for the judges, who are shown far less of it.
+PATCH_IN_MEMORY = 8 << 20
 
 
 def capture_patch(container: str, baseline: str, local: Path) -> tuple[str, str]:
@@ -446,7 +491,10 @@ def capture_patch(container: str, baseline: str, local: Path) -> tuple[str, str]
         raise runtime.RuntimeError("Could not capture the agent patch.")
     runtime.download(container, "/workspace/.git/pr-eval.patch", local)
     redact_file(local)
-    patch = local.read_bytes().decode(errors="replace")
+    with local.open("rb") as file:  # the judges read at most a few tens of KB of it
+        patch = file.read(PATCH_IN_MEMORY).decode(errors="replace")
+    if (size := local.stat().st_size) > PATCH_IN_MEMORY:
+        patch += f"\n... [{size - PATCH_IN_MEMORY} more bytes in agent.patch]\n"
     code, numstat, timed_out = sh(container, f"git diff --cached --numstat {baseline}", timeout=60)
     if code or timed_out:
         raise runtime.RuntimeError("Could not capture patch statistics.")
@@ -526,7 +574,8 @@ def prepare_trial(task: Task, trial_dir: Path, run_id: str, settings: Settings) 
     try:
         memory = sandbox_memory(task, settings)
         stage(live, "sandboxes", started_at=ready.started_at)
-        start_container(ready.container, run_id, settings, memory)
+        with at("boot"):
+            start_container(ready.container, run_id, settings, memory)
         stage(live, "setup", started_at=ready.started_at)
         ready.reason, ready.setup = prepare_workspace(ready.container, task, trial_dir)
     except Exception as exc:  # noqa: BLE001 - an attempt's errors are run_trial's to record
@@ -543,9 +592,20 @@ def discard(ready: Ready, trial_dir: Path) -> None:
     shutil.rmtree(trial_dir, ignore_errors=True)
 
 
+# The file in an attempt's folder that shows why it wasn't scored, by invalid reason.
+LOGS = {"workspace-error": "setup.log", "setup-error": "setup.log", "setup-timeout": "setup.log",
+        "setup-commit-error": "setup.log", "agent-crashed": "agent.stderr", "provider-error": "error.log",
+        "verifier-apply-error": "verification/apply.log", "verifier-timeout": "verifier.log",
+        "task-unstated-name": "verifier.log", "judge-error": "judge.json"}
+
+
 def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: str, settings: Settings,
               ready: Ready | None = None) -> dict:
-    """One attempt, in a sandbox `ready` from prepare_trial or one of its own."""
+    """One attempt, in a sandbox `ready` from prepare_trial or one of its own.
+
+    An attempt that isn't scored says why (causes.py): `step`, `cause` and `log`, and `transient`
+    when trying it again could go differently.
+    """
     rerun_after = ready.rerun_after if ready else fresh_folder(trial_dir)
     container = ready.container if ready else container_name(run_id)
     verifier = container_name(run_id)
@@ -567,13 +627,23 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         # Only the starting code and its dependencies, like the agent's sandbox: the patch
         # and the hidden tests go in after the agent's sandbox is gone.
         try:
-            start_container(verifier, run_id, settings, memory)
+            with at("boot", "the verifier's"):
+                start_container(verifier, run_id, settings, memory)
         finally:
             created.set()
-        return prepare_workspace(verifier, task, verify_dir)
+        return prepare_workspace(verifier, task, verify_dir, "the verifier's")
 
-    def finish(outcome: str, reason: str | None = None) -> dict:
+    def finish(outcome: str, reason: str | None = None, *, step: str | None = None, cause: str | None = None,
+               log: str | None = None, transient: bool = False) -> dict:
         result["outcome"], result["invalid_reason"] = outcome, reason
+        if outcome == "invalid":
+            verifier_side = (reason or "").startswith("verifier-") and reason not in LOGS
+            base = (reason or "").removeprefix("verifier-") if verifier_side else reason
+            result["step"] = step or causes.REASONS.get(base, ("runner",))[0]
+            result["cause"] = cause or causes.sentence(result)
+            log = log or (("verification/" if verifier_side else "") + LOGS[base] if base in LOGS else None)
+            result["log"] = log if log and (trial_dir / log).is_file() else None
+            result["transient"] = transient
         result["finished_at"] = now()
         if STOPPING.is_set():
             result["outcome"] = "interrupted"
@@ -581,10 +651,19 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             write_json(trial_dir / "result.json", result)
         return result
 
+    def lost(exc: Exception, step: str, whose: str = "the agent's") -> dict:
+        if isinstance(exc, StepFailed):
+            step, whose, exc = exc.step, exc.whose, exc.error
+        cause = causes.describe(exc, step, whose)
+        (trial_dir / "error.log").write_text(f"{cause}\n\n{causes.details(exc)}\n")
+        return finish("invalid", "sandbox-error", step=step, cause=cause, log="error.log",
+                      transient=causes.transient(exc))
+
     live = trial_dir / "stage.json"
     helper, verifier_ready = ThreadPoolExecutor(max_workers=1), None
     charged = None  # None until the agent starts
     meter_url, ticket = meter.url(), None
+    step = "boot"
     try:
         if meter_url:
             # Hosted: the key stays on the page, and every call from the sandbox, the agent's or the
@@ -607,10 +686,13 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
+        step = "network"
         block_lookups(container, domains, routing)
+        step = "upload"
         prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
+        step = "agent"
         stage(live, "agent", started_at=result["started_at"])
         # The agent ran, so it spent: charged below, or unpriced in `finally` if this ends first. Through
         # the meter every call is in the ledger already.
@@ -628,12 +710,15 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         if "subtype" not in agent and not agent["timed_out"]:
             return finish("invalid", "agent-crashed")
         if agent.get("is_error") and PROVIDER_ERROR.search(agent.get("final_message", "")):
+            (trial_dir / "error.log").write_text(redact_known(agent.get("final_message", "")) + "\n")
             return finish("invalid", "provider-error")
+        step = "save"
         patch, numstat = capture_patch(container, result["setup"]["baseline"], trial_dir / "agent.patch")
         result["diff"] = diff_stats(numstat)
 
         # A finished top-level process is not proof its detached children stopped.
         # Destroy the entire agent VM BEFORE any hidden tests leave this host.
+        step = "tests"
         stage(live, "tests", started_at=result["started_at"], diff=result["diff"])
         runtime.delete(container)
         alive.remove(container)
@@ -642,8 +727,9 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             return finish("invalid", "verifier-" + reason)
         runtime.upload(verifier, trial_dir / "agent.patch", "/tmp/agent.patch")
         if patch.strip():
-            code, _, timed_out = sh(verifier, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
+            code, out, timed_out = sh(verifier, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
             if code or timed_out:
+                (verify_dir / "apply.log").write_text(out)
                 return finish("invalid", "verifier-apply-error")
         set_aside = set_aside_agent_tests(verifier, result["verifier_setup"]["baseline"])
         tests = run_tests(verifier, task, trial_dir / "verifier.log")
@@ -655,8 +741,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             result["tests"]["unstated_name"] = name
             return finish("invalid", "task-unstated-name")
     except (runtime.RuntimeError, OSError) as exc:
-        (trial_dir / "error.log").write_text(str(exc))
-        return finish("invalid", "sandbox-error")
+        return lost(exc, step)
     finally:
         if ticket:  # revoked before the sandbox is gone, whatever ended the attempt
             ticket.unlink(missing_ok=True)
@@ -675,11 +760,12 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
                 runtime.delete(name)
             except runtime.RuntimeError as exc:
                 result["cleanup_error"] = str(exc)
-                finish("invalid", "sandbox-cleanup-error")
+                (trial_dir / "error.log").write_text(f"{exc}\n")
+                finish("invalid", "sandbox-cleanup-error", log="error.log")
         helper.shutdown(wait=False)
 
     if result.get("cleanup_error"):
-        return finish("invalid", "sandbox-cleanup-error")
+        return finish("invalid", "sandbox-cleanup-error", log="error.log")
     if not patch.strip():
         result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
         return finish("failed")
@@ -730,11 +816,13 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
     if settings.judge and earlier and earlier != UNSTATED and not earlier.startswith(PASSING_CHECK_FAILURES):
         return json.loads((log_dir / "result.json").read_text())  # checked in this image before; only the screen was new
     live = log_dir / "stage.json"
+    step = "boot"
     try:
         stage(live, "sandboxes", run_id=run_id)
         start_container(container, run_id, settings, sandbox_memory(task, settings))
         stage(live, "setup", run_id=run_id)
-        reason, record["setup"] = prepare_workspace(container, task, log_dir)
+        reason, record["setup"] = prepare_workspace(container, task, log_dir, "the check's")
+        step = "tests"
         if reason:
             record["status"] = reason
             return record
@@ -761,7 +849,10 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
             record["status"] = "valid"
         return record
     except (runtime.RuntimeError, OSError) as exc:
-        record["status"] = f"sandbox-error: {exc}"
+        if isinstance(exc, StepFailed):
+            step, exc = exc.step, exc.error
+        record["status"] = "sandbox-error: " + causes.describe(exc, step, "the check's")
+        (log_dir / "error.log").write_text(f"{record['status']}\n\n{causes.details(exc)}\n")
         return record
     finally:
         try:
@@ -774,7 +865,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
 
 
 # Check results that say nothing about the task itself; such a task is checked again.
-PASSING_CHECK_FAILURES = ("sandbox-error", "docker-error", "setup-timeout", "timeout", "workspace-error")
+PASSING_CHECK_FAILURES = ("sandbox-error", "setup-timeout", "timeout", "workspace-error")
 # The check's status for a task whose tests need what its request never states (judge.screen).
 UNSTATED = "request-misses-tests"
 
@@ -904,30 +995,124 @@ def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_di
 
 
 def trial_runner(models: list[Model], settings: Settings, run_id: str):
-    """Runs one pending trial within its model's own limit. A broken trial is saved, never raised."""
+    """Runs one pending trial within its model's own limit, and once more if it was lost to something
+    passing (causes.transient). A broken trial is saved, never raised."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
 
-    def trial(job, ready: Ready | None = None) -> dict:
+    def once(job, ready: Ready | None) -> dict:
         task, model, attempt, path = job
         try:
-            with limits[model.key]:
-                return run_trial(task, model, attempt, path, run_id, settings, ready)
+            return run_trial(task, model, attempt, path, run_id, settings, ready)
         except Exception as exc:  # noqa: BLE001 - one broken trial must not stop the run
             result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
-                      "attempt": attempt, "outcome": "invalid", "invalid_reason": f"runner-error: {exc}"}
+                      "attempt": attempt, "outcome": "invalid", "invalid_reason": "runner-error", "step": "runner",
+                      "cause": "pr-eval itself failed on this attempt.", "log": "error.log", "transient": False,
+                      "finished_at": now()}
             if not STOPPING.is_set():
                 path.mkdir(parents=True, exist_ok=True)
+                (path / "error.log").write_text(causes.details(exc) + "\n")
                 write_json(path / "result.json", result)
+            return result
+
+    def trial(job, ready: Ready | None = None) -> dict:
+        with limits[job[1].key]:
+            result = once(job, ready)
+            if result.get("transient") and not STOPPING.is_set():
+                first = {k: result.get(k) for k in ("invalid_reason", "step", "cause")}
+                print(f"  {result['trial']}: {result['cause']} Trying it once more.", flush=True)
+                result = once(job, None)
+                result["first_try"] = first
+                if result.get("outcome") != "interrupted":
+                    write_json(job[3] / "result.json", result)
             return result
 
     return trial
 
 
+# A run whose first attempts all fail the same way, at the same step, on more than one task stops there:
+# a broken sandbox image, upload or provider fails every attempt alike, and the rest would only repeat it.
+SAME_FAILURES = 3
+
+
+class Halted(Exception):
+    """The run stopped early: its attempts all failed the same way. Says how."""
+
+
+class SameFailure:
+    """Watches finished attempts; says why to stop once the first SAME_FAILURES all failed alike."""
+
+    def __init__(self):
+        self.failed, self.tasks, self.other = [], set(), False
+        self.lock = threading.Lock()
+
+    def __call__(self, result) -> str | None:
+        if not isinstance(result, dict) or result.get("outcome") in (None, "interrupted"):
+            return None  # a check, an attempt left for its check, or one cut short by a stop
+        with self.lock:
+            if not lost(result):
+                self.other = True
+                return None
+            self.failed.append(causes.signature(result))
+            self.tasks.add(result.get("task_id"))
+            if self.other or len(self.failed) < SAME_FAILURES or len(set(self.failed)) > 1 or len(self.tasks) < 2:
+                return None
+            step, cause = self.failed[0]
+            words = causes.STEPS.get(step, step).lower()
+            return (f"Stopped early: the first {len(self.failed)} attempts all failed the same way ({words}). "
+                    f"{cause} That is not the models' doing, so the run's other attempts were not started. "
+                    "Resume the run once it is fixed.")
+
+
+def free_memory_mb() -> int | None:
+    """Memory this process may still use, in MB: its container's limit less what the container uses,
+    else what the kernel says is available, else half of what the machine has."""
+    try:
+        limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        if limit != "max":
+            used = int(Path("/sys/fs/cgroup/memory.current").read_text())
+            return (int(limit) - used) >> 20
+    except (OSError, ValueError):
+        pass
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) >> 10
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        return (os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")) >> 21
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+# What this process holds at most for one attempt, in MB, by design: two sandboxes each uploading a
+# task's source (the SDK sends three 5 MB parts at a time), each command's output tail (runtime.OUTPUT_LIMIT,
+# stdout and stderr), the agent's patch (PATCH_IN_MEMORY) and its log, read a line at a time.
+ATTEMPT_MB = 80
+# One Claude Code process grading an attempt (judge.ask_claude), measured on the hosted page's sandbox.
+JUDGE_PROCESS_MB = 400
+# Kept free for this process itself and anything else on the machine that grows meanwhile.
+RESERVE_MB = 768
+
+
+def fit(requested: int, free_mb: int | None = None) -> tuple[int, int, int | None]:
+    """How many attempts may run at once, and Claude Code judges grade at once, in this machine's free
+    memory: (attempts, judge processes, free MB). Unknown memory changes nothing."""
+    free_mb = free_memory_mb() if free_mb is None else free_mb
+    if free_mb is None:
+        return requested, requested, None
+    spare = max(free_mb - RESERVE_MB, 0)
+    attempts = max(1, min(requested, spare // ATTEMPT_MB))
+    judges = max(1, min(attempts, (spare - attempts * ATTEMPT_MB) // JUDGE_PROCESS_MB))
+    return attempts, judges, free_mb
+
+
 def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
         run_id: str, on_result=None) -> None:
-    """Run every trial not already finished in `job_dir`, a few at a time."""
-    in_parallel(pending_trials(tasks, models, attempts, job_dir), trial_runner(models, settings, run_id),
-                settings.concurrency, run_id, on_result)
+    """Run every trial not already finished in `job_dir`, a few at a time. Raises Halted if they all fail alike."""
+    pending = pending_trials(tasks, models, attempts, job_dir)
+    in_parallel(pending, trial_runner(models, settings, run_id), settings.concurrency, run_id, on_result,
+                halt=SameFailure())
 
 
 class Verdict:
@@ -1024,24 +1209,26 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
         return item[2] + (attempts if kind == "early" and not verdicts[item[0].id].known.is_set() else 0)
 
     # Checks first, then trials attempt by attempt, so a stopped run is left balanced.
-    in_parallel(jobs, work, settings.concurrency, run_id, then=then, order=order)
+    in_parallel(jobs, work, settings.concurrency, run_id, then=then, order=order, halt=SameFailure())
 
 
-def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, then=None, order=None) -> None:
+def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, then=None, order=None,
+                halt=None) -> None:
     """`work` on each job, `workers` at a time; `on_result(result, done, total)` as each lands.
 
     `then(job, result)` may return more jobs to do. They wait behind the others, unless
-    `order` (a sort key) puts them sooner. Ctrl-C, or Stop on the page, drops what hasn't
-    finished and removes the run's sandboxes, so the work in flight fails fast instead
-    of being waited for.
+    `order` (a sort key) puts them sooner. Once `halt(result)` gives a reason, nothing more
+    starts: the work in flight finishes, then Halted says that reason. Ctrl-C, or Stop on the
+    page, drops what hasn't finished and removes the run's sandboxes, so the work in flight
+    fails fast instead of being waited for.
     """
-    waiting, running, done, total = list(jobs), {}, 0, len(jobs)
+    waiting, running, done, total, halted = list(jobs), {}, 0, len(jobs), None
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        while waiting or running:
+        while (waiting and not halted) or running:
             if order:
                 waiting.sort(key=order)
-            while waiting and len(running) < workers:
+            while waiting and len(running) < workers and not halted:
                 job = waiting.pop(0)
                 running[pool.submit(work, job)] = job
             finished, _ = wait(running, return_when=FIRST_COMPLETED)
@@ -1053,6 +1240,10 @@ def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, 
                 total += len(more)
                 if on_result:
                     on_result(result, done, total)
+                if halt and not halted and (halted := halt(result)):
+                    print(halted, flush=True)
+        if halted:
+            raise Halted(halted)
     except KeyboardInterrupt:
         STOPPING.set()
         pool.shutdown(wait=False, cancel_futures=True)
@@ -1060,73 +1251,6 @@ def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, 
         raise
     finally:
         pool.shutdown(wait=True)
-
-
-def retest(job_dir: Path, tasks_dir: Path, settings: Settings, *, force: bool = False, on_result=None) -> None:
-    """Run the hidden tests again from each attempt's saved diff, with its own tests set aside.
-
-    For runs graded before set_aside_agent_tests existed. No model is called: the diff
-    is applied to a fresh copy of the starting code, and the judge's verdict is kept.
-    Only attempts whose diff touched a test file can change, so only those are rerun.
-    """
-    todo = []
-    for trial_dir in sorted((job_dir / "trials").iterdir()):
-        path, patch = trial_dir / "result.json", trial_dir / "agent.patch"
-        if not path.is_file() or not patch.is_file():
-            continue
-        result = json.loads(path.read_text())
-        if result["outcome"] in ("solved", "failed") and result.get("tests") and "set_aside" not in result["tests"] \
-                and (force or "retested" not in result) and touches_tests(patch.read_text(errors="replace")):
-            todo.append((trial_dir, result))
-    todo.sort(key=lambda job: job[1]["outcome"] != "failed")  # failures first: they are the ones likely to change
-    run_id = f"retest-{job_dir.name}"
-    in_parallel(todo, lambda job: retest_trial(*job, load_task(tasks_dir / job[1]["task_id"]), settings, run_id),
-                settings.concurrency, run_id, on_result)
-
-
-def touches_tests(patch: str) -> bool:
-    return any(TEST_FILE.search(path) for path in re.findall(r"^diff --git a/(\S+) b/", patch, re.M))
-
-
-def retest_trial(trial_dir: Path, result: dict, task: Task, settings: Settings, run_id: str) -> dict:
-    log_dir = trial_dir / "retest"
-    log_dir.mkdir(exist_ok=True)
-    container = container_name(run_id)
-    try:
-        start_container(container, run_id, settings, sandbox_memory(task, settings))
-        reason, setup = prepare_workspace(container, task, log_dir)
-        if reason:
-            return {"trial": result["trial"], "error": reason}
-        runtime.upload(container, trial_dir / "agent.patch", "/tmp/agent.patch")
-        code, out, _ = sh(container, "git apply --binary --whitespace=nowarn /tmp/agent.patch && git add -A", timeout=120)
-        if code:
-            (log_dir / "apply.log").write_text(out)
-            return {"trial": result["trial"], "error": "the saved diff doesn't apply"}
-        set_aside = set_aside_agent_tests(container, setup["baseline"])
-        tests = run_tests(container, task, log_dir / "verifier.log")
-    except (runtime.RuntimeError, OSError) as exc:
-        return {"trial": result["trial"], "error": f"sandbox-error: {exc}"}
-    finally:
-        try:
-            runtime.delete(container)
-        except runtime.RuntimeError:
-            pass  # the retest still stands; `pr-eval cleanup` removes the sandbox
-    tests.pop("output")
-    if tests["timed_out"] or STOPPING.is_set():
-        return {"trial": result["trial"], "error": "stopped or timed out; left as it was"}
-    before = {"outcome": result["outcome"], "tests": result["tests"]}
-    verdict = (result.get("judge") or {}).get("verdict")
-    solved = tests["passed"] and verdict in ("pass", None)  # None: a run scored on tests alone
-    result.update(outcome="solved" if solved else "failed", tests={**tests, "set_aside": set_aside},
-                  retested={"at": now(), "before": before})
-    old_log = trial_dir / "verifier.log"
-    if old_log.is_file():
-        old_log.replace(trial_dir / "verifier.before-retest.log")
-    (log_dir / "verifier.log").replace(old_log)
-    write_json(trial_dir / "result.json", result)
-    return {"trial": result["trial"], "before": before["outcome"], "after": result["outcome"],
-            "tests": f"{'passed' if before['tests'].get('passed') else 'failed'} -> "
-                     f"{'passed' if tests['passed'] else 'failed'}", "judge": verdict}
 
 
 def cleanup(run_id: str | None = None, workspace: str | None = None) -> list[str]:

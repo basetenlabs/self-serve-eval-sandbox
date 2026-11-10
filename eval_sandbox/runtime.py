@@ -267,15 +267,46 @@ def upload(name: str, local: Path, remote: str) -> None:
 
 
 def download(name: str, remote: str, local: Path, *, optional: bool = False) -> None:
-    """An optional file may well not exist, so only a required one is tried twice."""
+    """Copy a sandbox file to `local`, streamed to disk: an agent's log can be tens of MB, and many
+    attempts finish at once. An optional file may well not exist, so only a required one is tried twice."""
     def transfer():
-        local.write_bytes(get(name).fs.read_binary(remote))
+        fetch(get(name), remote, local)
 
     try:
         transfer() if optional else twice(transfer)
-    except Exception:
+    except Exception as exc:
         if not optional:
-            raise RuntimeError(f"Could not download {remote}.")
+            raise RuntimeError(f"Could not download {remote}.") from exc
+
+
+def fetch(sandbox, remote: str, local: Path) -> None:
+    """The file's bytes into `local` a megabyte at a time, never the whole file in memory."""
+    from blaxel.core.common.settings import settings
+    fs = sandbox.fs
+    url = f"{fs.url}/filesystem/{fs.format_path(remote)}"
+    headers = {**settings.headers, **fs.sandbox_config.headers, "Accept": "application/octet-stream"}
+    part = local.with_name(local.name + ".part")
+    with fs.get_client() as client, client.stream("GET", url, headers=headers) as response:
+        if not response.is_success:
+            raise RuntimeError(f"Reading {remote} answered {response.status_code}.")
+        with part.open("wb") as out:
+            for chunk in response.iter_bytes(1 << 20):
+                out.write(chunk)
+    part.replace(local)
+
+
+# The most of a command's output, each of stdout and stderr, that comes back from the sandbox: its end,
+# where errors and test summaries are. Many attempts run at once, and a chatty install or test run
+# can print far more than anyone reads.
+OUTPUT_LIMIT = 1 << 20
+
+
+def tails(*paths: str) -> str:
+    """Shell that writes each file's last OUTPUT_LIMIT bytes to <file>.tail, saying how much it left out."""
+    return "; ".join(
+        f"s=$(stat -c %s {p} 2>/dev/null || echo 0); {{ [ \"$s\" -le {OUTPUT_LIMIT} ] || "
+        f"printf '[%s earlier bytes not kept]\\n' $((s - {OUTPUT_LIMIT})); tail -c {OUTPUT_LIMIT} {p} 2>/dev/null; }} >{p}.tail"
+        for p in paths)
 
 
 @dataclass
@@ -311,8 +342,12 @@ def execute(name: str, script: str, *, timeout: int, env: dict | None = None,
     # its certificate cache). Give the workload a clean, user-owned home instead.
     # Node's built-in fetch (corepack, for one) ignores HTTPS_PROXY unless told,
     # and the firewall drops direct egress, so pnpm setups would time out.
+    # Only the end of each output comes back (OUTPUT_LIMIT); a caller that names stdout_path reads that
+    # file itself, with download().
+    wanted = [err] if stdout_path else [out, err]
     command = (f"mkdir -p /logs/home && env -i {variables} {forwarded} HOME=/logs/home "
-               f"CI=1 TZ=UTC NODE_USE_ENV_PROXY=1 bash -c {shlex.quote(script)} >{out} 2>{err}")
+               f"CI=1 TZ=UTC NODE_USE_ENV_PROXY=1 bash -c {shlex.quote(script)} >{out} 2>{err}; "
+               f"code=$?; {tails(*wanted)}; exit $code")
     try:
         sandbox.process.exec({"name": process_name, "command": command, "working_dir": "/workspace",
                               "env": env or {}, "wait_for_completion": False, "keep_alive": True,
@@ -333,8 +368,11 @@ def execute(name: str, script: str, *, timeout: int, env: dict | None = None,
             p = sandbox.process.wait(process_name, max_wait=30_000, interval=250)
         if p.status not in ("completed", "failed", "killed", "stopped"):
             raise RuntimeError("Blaxel process completion could not be confirmed.")
-        stdout = sandbox.fs.read_binary(out).decode(errors="replace")
-        stderr = sandbox.fs.read_binary(err).decode(errors="replace")
+        if timed_out:  # killed before it wrote its tails
+            sandbox.process.exec({"name": process_name + "-tail", "command": tails(*wanted),
+                                  "working_dir": "/workspace", "wait_for_completion": True, "timeout": 60})
+        stdout = "" if stdout_path else sandbox.fs.read_binary(out + ".tail").decode(errors="replace")
+        stderr = sandbox.fs.read_binary(err + ".tail").decode(errors="replace")
         return Execution(-1 if timed_out else p.exit_code, stdout, stderr, timed_out)
     except RuntimeError:
         raise
@@ -383,20 +421,3 @@ def cleanup(run_id: str | None = None, selected: str | None = None) -> list[str]
     if failed:
         raise RuntimeError(f"Could not delete {', '.join(failed)}; run pr-eval cleanup again.")
     return removed
-
-
-def image_claude_version(image: str, region: str = "us-pdx-1", run_id: str = "image-probe") -> str | None:
-    """Best effort, for the report: a failed probe must not fail the run."""
-    from types import SimpleNamespace
-    name = "pr-eval-probe-" + secrets.token_hex(4)
-    try:
-        create(name, run_id, SimpleNamespace(workspace=workspace(), image=image, memory=2048, region=region))
-        result = execute(name, "claude --version", timeout=60)
-        return result.stdout.split()[0] if not result.code and result.stdout.split() else None
-    except RuntimeError:
-        return None
-    finally:
-        try:
-            delete(name)
-        except RuntimeError:
-            pass  # labelled with the run, so `pr-eval cleanup` finds it

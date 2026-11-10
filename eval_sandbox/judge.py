@@ -77,6 +77,14 @@ CLAUDE_ENV = {"DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERR
 
 _slots: dict[tuple, threading.BoundedSemaphore] = {}
 _slots_lock = threading.Lock()
+# A Claude Code judge grades in a process of its own, a few hundred MB: at most this many at once in
+# this process, which a run sets from the machine's free memory (runner.fit). None: no gate.
+_processes: threading.BoundedSemaphore | None = None
+
+
+def limit_processes(count: int | None) -> None:
+    global _processes
+    _processes = threading.BoundedSemaphore(count) if count else None
 
 
 def parse(reply: str | None) -> dict:
@@ -232,8 +240,9 @@ def ask_claude(judge: Judge, system: str, user: str) -> dict:
         with tempfile.TemporaryDirectory(prefix="pr-eval-judge-") as home:
             env = {"PATH": os.environ.get("PATH", ""), "HOME": home, "CLAUDE_CONFIG_DIR": home, **CLAUDE_ENV, **credential}
             try:
-                done = subprocess.run(command, input=user, capture_output=True, text=True, cwd=home, env=env,
-                                      timeout=CLAUDE_TIMEOUT)
+                with _processes or contextlib.nullcontext():
+                    done = subprocess.run(command, input=user, capture_output=True, text=True, cwd=home, env=env,
+                                          timeout=CLAUDE_TIMEOUT)
             except subprocess.TimeoutExpired:
                 last_error = f"Claude Code took over {CLAUDE_TIMEOUT} seconds"
                 continue

@@ -114,12 +114,12 @@ class RuntimeTests(unittest.TestCase):
             sandbox.fs.write_binary.side_effect = ConnectionResetError()
             with self.assertRaisesRegex(runtime.RuntimeError, "Could not upload f"):
                 runtime.upload("sb", Path(d) / "f", "/tmp/f")
-            sandbox.fs.read_binary.side_effect = FileNotFoundError()
-            runtime.download("sb", "/logs/proxy.log", Path(d) / "p", optional=True)
-            self.assertEqual(sandbox.fs.read_binary.call_count, 1)  # an optional file may simply not exist
-            with self.assertRaises(runtime.RuntimeError):
-                runtime.download("sb", "/workspace/.git/pr-eval.patch", Path(d) / "p")
-            self.assertEqual(sandbox.fs.read_binary.call_count, 3)
+            with mock.patch.object(runtime, "fetch", side_effect=FileNotFoundError()) as fetch:
+                runtime.download("sb", "/logs/proxy.log", Path(d) / "p", optional=True)
+                self.assertEqual(fetch.call_count, 1)  # an optional file may simply not exist
+                with self.assertRaises(runtime.RuntimeError):
+                    runtime.download("sb", "/workspace/.git/pr-eval.patch", Path(d) / "p")
+                self.assertEqual(fetch.call_count, 3)
 
     def test_a_large_file_uploads_in_parts_read_from_disk_without_mmap(self):
         # A task's ~200 MB source, uploaded by an attempt per model at once: read whole, 20 copies

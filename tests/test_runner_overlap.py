@@ -49,7 +49,7 @@ class FakeRuntime:
             self.delete(name)
         return removed
 
-    def prepare(self, name, task, log_dir):
+    def prepare(self, name, task, log_dir, *_):
         self.owner[name] = task.id
         time.sleep(SETUP_SECONDS)
         self.log("setup", name)
