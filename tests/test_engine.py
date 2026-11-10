@@ -239,15 +239,18 @@ class EarlyStopTests(unittest.TestCase):
             with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
                 job = pipeline.new_job(pipeline.Request(task_ids=["t"]), [], None, name="r1", jobs_dir=Path(d))
             job.meta.update(tasks=["t"], checked=True)
+            seen = []
             with mock.patch.object(pipeline, "restore_tasks", return_value=[]), \
                     mock.patch.object(pipeline, "prepare_image", return_value="img"), \
                     mock.patch.object(pipeline, "check", return_value=[]), \
-                    mock.patch.object(pipeline.report, "build"), \
+                    mock.patch.object(pipeline.report, "build",
+                                      side_effect=lambda p: seen.append(pipeline.Job(p).meta["status"]["phase"])), \
                     mock.patch.object(runner, "run", side_effect=runner.Halted("Stopped early: because.")), \
                     mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(pipeline.execute(job, [], runner.Settings()), 1)
             status = pipeline.Job(job.path).meta["status"]
         self.assertEqual((status["phase"], status["detail"]), ("failed", "Stopped early: because."))
+        self.assertEqual(seen[-1:], ["failed"])  # the report is rebuilt after the status, so it says why
 
 
 class MemoryTests(unittest.TestCase):
