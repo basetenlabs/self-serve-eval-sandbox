@@ -1,4 +1,4 @@
-import { Raycaster, Vector2 } from 'three'
+import { Raycaster, Vector2 } from '../../lib/three.js'
 /** Normalized device coordinates (-1..1, y up) of a client position relative to `element`. */
 export function toNdc({ clientX, clientY }, element, target = new Vector2()) {
 	const bounds = element.getBoundingClientRect()

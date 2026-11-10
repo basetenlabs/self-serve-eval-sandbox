@@ -1,4 +1,4 @@
-import { Color, ShaderMaterial } from 'three'
+import { Color, ShaderMaterial } from '../../lib/three.js'
 import { DARK_COLOR, parseFacePattern, PRODUCTS } from '../palette.js'
 import { aastep, faceGrid } from '../shaders/common.js'
 import { perlinNoise3D } from '../shaders/noise.js'

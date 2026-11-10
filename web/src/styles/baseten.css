@@ -876,23 +876,27 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
   .bt-button:hover:not(:disabled, [aria-disabled=true]) .chevron:after, .bt-button:hover:not(:disabled, [aria-disabled=true]) .chevron > svg + svg { transform: none; opacity: 1; }
 }
 
-/* Lifting cell: a tile that rises one grid gap up-right out of its cell on hover or focus, on two side faces in its
-   family's Base and Dark (logo tabs in a customer wall). <button class="bt-lift green"><span>…tile…</span></button> */
-.bt-lift { --offset: var(--grid-gap); position: relative; display: block; inline-size: 100%; block-size: 100%; padding: 0; border: 0; background: none; outline: 0; cursor: pointer;
+/* Lifting cell: a tile or card that rises one grid gap up-right out of its cell on hover or focus, on two side faces
+   in its family's Base and Dark (logo tabs in a customer wall, tool cards). The first child is the face that moves;
+   the cell itself can be the control, or hold links and buttons (it lifts while one of them has keyboard focus).
+   <button class="bt-lift green"><span>…tile…</span></button>   <div class="bt-lift blue"><article class="bt-card">…<a>…</a></article></div> */
+.bt-lift { --offset: var(--grid-gap); position: relative; display: block; inline-size: 100%; block-size: 100%;
   clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); transition: clip-path .4s var(--ease); }
-.bt-lift > span { position: relative; z-index: 1; display: block; inline-size: 100%; block-size: 100%; transition: transform .4s var(--ease); }
+:is(button, a).bt-lift { padding: 0; border: 0; background: none; outline: 0; color: inherit; text-align: inherit; text-decoration: none; cursor: pointer; }
+.bt-lift > :first-child { position: relative; z-index: 1; inline-size: 100%; block-size: 100%; transition: transform .4s var(--ease); }
+.bt-lift > span:first-child { display: block; }
 .bt-lift:before, .bt-lift:after { content: ""; position: absolute; visibility: hidden; transition: visibility 0s .4s; }   /* hidden at rest: behind the tile their edges would show as a thin line */
 .bt-lift:before { inset-block-end: 0; inset-inline-start: calc(var(--offset) / 2); inline-size: 100%; block-size: var(--offset); transform: skewX(-45deg); background: var(--lift-dark, var(--color-black)); }
 .bt-lift:after { inset-inline-start: 0; inset-block-end: calc(var(--offset) / 2); inline-size: var(--offset); block-size: 100%; transform: skewY(-45deg); background: var(--lift-base, var(--color-black)); }
 .bt-lift.green { --lift-base: var(--color-green); --lift-dark: var(--color-darkGreen); } .bt-lift.pink { --lift-base: var(--color-pink); --lift-dark: var(--color-darkPink); }
 .bt-lift.blue { --lift-base: var(--color-blue); --lift-dark: var(--color-darkBlue); } .bt-lift.gold { --lift-base: var(--color-gold); --lift-dark: var(--color-darkGold); }
-.bt-lift:focus-visible { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
-.bt-lift:focus-visible:before, .bt-lift:focus-visible:after { visibility: visible; transition-delay: 0s; }
-.bt-lift:focus-visible > span { transform: translate(var(--offset), calc(-1 * var(--offset))); }
+.bt-lift:is(:focus-visible, :has(:focus-visible)) { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
+.bt-lift:is(:focus-visible, :has(:focus-visible)):before, .bt-lift:is(:focus-visible, :has(:focus-visible)):after { visibility: visible; transition-delay: 0s; }
+.bt-lift:is(:focus-visible, :has(:focus-visible)) > :first-child { transform: translate(var(--offset), calc(-1 * var(--offset))); }
 @media (hover: hover) {
   .bt-lift:hover { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
   .bt-lift:hover:before, .bt-lift:hover:after { visibility: visible; transition-delay: 0s; }
-  .bt-lift:hover > span { transform: translate(var(--offset), calc(-1 * var(--offset))); }
+  .bt-lift:hover > :first-child { transform: translate(var(--offset), calc(-1 * var(--offset))); }
 }
 
 /* Linked card (customer story tiles): the whole card dims to 90%, shrinks to 99% and takes a 5% Black wash. .4s. */
@@ -907,7 +911,6 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-row-link:is(:hover, :focus-visible) small { color: var(--color-black); }
 .bt-external .arrow { display: inline-block; inline-size: 0; margin-inline-start: 0; overflow: hidden; opacity: 0; transition: width .4s, margin-left .4s, opacity .4s; }
 .bt-external:is(:hover, :focus-visible) .arrow { inline-size: 6px; margin-inline-start: 4px; opacity: 1; }
-.bt-icon-button { transition: background-color .2s ease-out; }
 .bt-chip:not(.active):hover { color: var(--color-darkGrey3); } .bt-chip.active:hover { opacity: .75; }
 @media (hover: hover) { a.bt-resource:hover .title { text-decoration: underline; text-underline-offset: .15em; } }
 .bt-footer a:focus-visible { opacity: .6; }
@@ -917,6 +920,10 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-logo-tabs > button:is(:hover, :focus-visible) { color: var(--color-darkGrey2); } .bt-logo-tabs > button:is(:hover, :focus-visible) img { opacity: .6; }
 .bt-logo-tabs > [aria-selected=true] { background: var(--color-lightGrey1); color: var(--color-black); } .bt-logo-tabs > [aria-selected=true] img { opacity: 1; }
 
+/* Dialog arrival: the wash fades in (.3s) and the dialog drops 8px into place (.4s, reveal curve), like a menu panel. */
+.bt-scrim { animation: bt-reveal .3s ease; }
+.bt-dialog { animation: bt-drop .4s var(--ease-reveal); }
+@keyframes bt-drop { from { opacity: 0; transform: translateY(-8px); } }
 /* Tab panel shown by removing [hidden]: fades in, .3s ease-out, every time it is shown. */
 .bt-reveal { animation: bt-reveal .3s ease-out; }
 @keyframes bt-reveal { from { opacity: 0; } to { opacity: 1; } }
@@ -928,24 +935,70 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-fade-stack.shift > * { translate: 0 30px; transition: opacity .3s ease-out, translate .3s ease-out, visibility 0s linear .3s; }
 .bt-fade-stack.shift > .active { translate: 0 0; transition: opacity .3s ease-out .3s, translate .3s ease-out .3s, visibility 0s; }
 
-/* Step list (auto-advancing features): rows on hairlines; the active one is full strength and open, the others 50%
-   (75% on hover or focus; 20% on phones). A 2px line under the active row fills with the time left; a play/pause
-   button sits at its right. motion.js steps() runs the timer. Open and close: .5s ease-out; fade: .4s ease-out.
-   <ol class="bt-steps"><li class="active"><button class="title">…</button><div class="details"><div>…</div></div><i class="timer"></i></li> */
+/* Step list (auto-advancing features): rows on hairlines, 24px above and below; the active one is full strength and
+   open, the others 50% (75% on hover or focus; 20% on phones). A 2px Green line on the active row's rule fills with
+   the time left; a play/pause button sits at the right of its title. motion.js steps() runs it.
+   Open and close: .5s ease-out; fade: .4s ease-out.
+   <ol class="bt-steps"><li class="active"><h3><button class="title"><span class="bt-numeral">01</span><span>Deploy</span></button></h3>
+     <div class="details"><div><p>…</p><div class="bt-ctas">…</div></div></div><i class="timer"></i></li>…</ol> */
 .bt-steps { margin: 0; padding: 0; list-style: none; }
-.bt-steps > li { position: relative; border-bottom: 1px solid var(--color-lightGrey2); transition: opacity .4s ease-out; }
+.bt-steps > li { position: relative; display: flex; flex-direction: column; padding-block: 24px; border-bottom: 1px solid var(--color-lightGrey2); transition: opacity .4s ease-out, border-color .4s ease-out; }
 .bt-steps > li:not(.active) { opacity: .5; }
 .bt-steps > li:not(.active):is(:hover, :focus-within) { opacity: .75; }
-.bt-steps .title { display: flex; align-items: center; justify-content: space-between; gap: 12px; inline-size: 100%; padding: 16px 0; border: 0; background: none; cursor: pointer; text-align: start; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; color: var(--color-black); }
-.bt-steps .title:focus-visible { outline: 1px solid var(--color-black); outline-offset: 2px; }
-.bt-steps .details { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .5s ease-out, visibility 0s linear .5s; }
-.bt-steps .details > * { min-block-size: 0; overflow: hidden; }
-.bt-steps .details > * > :last-child { margin-bottom: 0; padding-bottom: 16px; }
-.bt-steps > .active .details { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .5s ease-out, visibility 0s; }
-.bt-steps .timer { position: absolute; inset: auto 0 -1px; block-size: 2px; background: var(--color-black); transform-origin: left center; transform: scaleX(0); }
+.bt-steps :is(h2, h3, h4) { margin: 0; font: inherit; }
+.bt-steps .title { display: flex; align-items: center; gap: 12px; inline-size: 100%; margin: 0; padding: 0 48px 0 0; border: 0; background: none; cursor: pointer; text-align: start; font: 400 24px/1.25 var(--beausite); letter-spacing: -.01em; color: inherit; }
+.bt-steps .title > :last-child { flex: 1 1 0; min-inline-size: 0; }
+.bt-steps .title > img { display: none; inline-size: 32px; block-size: 32px; object-fit: contain; }   /* a product icon, shown on phones in place of the numeral */
+.bt-steps .title:focus-visible { outline: 2px solid var(--color-black); outline-offset: 4px; }
+.bt-steps .details { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .5s ease-out; }
+.bt-steps .details > * { display: flex; flex-direction: column; gap: 24px; min-block-size: 0; overflow: hidden; }
+.bt-steps .details > * > :first-child { margin-block-start: 24px; }
+.bt-steps .details p { max-inline-size: 480px; margin: 0; color: var(--color-darkGrey2); }
+.bt-steps > .active .details { grid-template-rows: 1fr; }
+.bt-steps .media { display: none; }   /* this step's artwork, on phones only: a square under the copy */
+.bt-steps .timer { position: absolute; inset-inline-start: 0; inset-block-end: -1px; inline-size: 100%; block-size: 2px; background: var(--color-green); transform-origin: left center; transform: scaleX(0); pointer-events: none; }
 .bt-steps > .active .timer { will-change: transform; }
-.bt-steps .control { position: absolute; inset-block-start: 14px; inset-inline-end: 0; }
-@media (max-width: 800.98px) { .bt-steps > li:not(.active) { opacity: .2; } }
+.bt-steps .control { position: absolute; inset-block-start: 20.5px; inset-inline-end: 0; }
+.bt-steps .control:focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
+@media (max-width: 800.98px) {
+  .bt-steps > li { border-block: 1px solid transparent; }
+  .bt-steps > li.active { border-color: var(--color-lightGrey2); }
+  .bt-steps > li:not(.active), .bt-steps > li:not(.active):is(:hover, :focus-within) { opacity: .2; }
+  .bt-steps .title { align-items: flex-start; gap: 64px; padding: 0; font-size: 20px; line-height: 1.3; }
+  .bt-steps .title > .bt-numeral:has(+ img), .bt-steps .timer, .bt-steps .control { display: none; }
+  .bt-steps .title > img { display: block; order: 1; }
+  .bt-steps .media { position: relative; display: block; margin-block-start: 24px; aspect-ratio: 1; overflow: clip; background: var(--step-color, var(--color-green)); }
+  .bt-steps .media > img { position: absolute; inset-block-start: 50%; inset-inline-start: 40px; block-size: calc(100% - 80px); max-block-size: 80%; inline-size: auto; max-inline-size: none; translate: 0 -50%; }
+}
+/* Features section around a step list: copy and steps in columns 1 to 6, one frame in 7 to 12 as tall as the section
+   (816px, less on short screens). The frame holds the glitch scene (a photo broken into drifting pixels, tinted with
+   the step's colour) and the steps' artwork, right-aligned at 80% width, swapping with the step. The dot texture
+   fills what the list leaves over, so the section keeps its height as rows open. blocks/features.js mounts it.
+   <section class="bt-surface layout-grid bt-features"><div class="content"><header>…eyebrow, h2, p…</header>
+     <div class="steps-area"><ol class="bt-steps">…</ol><i class="filler"></i></div></div>
+     <div class="frame"><div class="bt-webgl"></div><div class="bt-fade-stack shift"><img …>…</div></div></section> */
+.bt-features > .content { grid-column: 1 / -1; min-inline-size: 0; }
+.bt-features > .content > header { margin-block-end: 40px; }
+.bt-features > .content > header > .bt-eyebrow { margin-bottom: 32px; }
+.bt-features > .content > header > :is(h2, h3) { margin: 0; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; }
+.bt-features > .content > header > p { max-inline-size: 330px; margin: 24px 0 0; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; }
+.bt-features > .frame { display: none; }
+.bt-features .filler { display: none; }
+@media (min-width: 801px) {
+  .bt-features { --surface-height: min(816px, 100lvh - var(--nav-height, 0px)); min-block-size: var(--surface-height); padding: 24px; grid-template-rows: minmax(0, 1fr); overflow: clip; }
+  .bt-features > .content { grid-column: 1 / span 6; display: flex; flex-direction: column; min-block-size: 0; }
+  .bt-features > .content > header { margin-block-end: 72px; }
+  .bt-features > .content > header > :is(h2, h3) { font-size: 40px; line-height: 1.1; white-space: pre-line; }
+  .bt-features .steps-area { --filler-gap: 20px; display: flex; flex: 1 0 auto; flex-direction: column; min-block-size: calc(var(--steps-block-size, 0px) + var(--filler-gap)); }
+  .bt-features .filler { display: block; flex: 1 1 0; min-block-size: 0; margin-block-start: var(--filler-gap); background: var(--background-texture); }
+  .bt-features > .frame { display: block; position: relative; grid-column: 7 / -1; min-inline-size: 0; min-block-size: 0; overflow: clip; background: var(--step-color, var(--color-green)); transition: background-color .3s ease-out; }
+  .bt-features > .frame > .bt-webgl { position: absolute; inset: 0; pointer-events: none; }
+  .bt-features > .frame > .bt-fade-stack { position: relative; inline-size: 100%; block-size: 100%; }
+  .bt-features > .frame > .bt-fade-stack > * { position: absolute; inset-block-start: 50%; inset-inline-end: 0; inline-size: auto; block-size: auto; max-inline-size: 80%; max-block-size: 75%; object-fit: contain; object-position: right center; translate: 0 calc(-50% + 30px); }
+  .bt-features > .frame > .bt-fade-stack > .active { translate: 0 -50%; }
+  .bt-features > .frame > .note { position: absolute; inset-inline-end: 32px; inset-block-end: 32px; max-inline-size: calc(100% - 64px); padding-inline-start: 12px; animation: bt-reveal .3s ease-out both; }
+  .bt-features > .frame > .note:before { content: ""; position: absolute; inset: 0 auto auto 0; inline-size: 12px; block-size: 12px; background: var(--color-green); translate: 0 -100%; }
+}
 /* A group dimmed while another one is in play (platform features): 30%, .4s ease-out. */
 .bt-dim { transition: opacity .4s ease-out; } .bt-dim.inactive { opacity: .3; }
 
@@ -1042,6 +1095,20 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-nav-overlay { block-size: max(0px, calc(100dvh - var(--nav-height, 0px))); opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility 0s .3s; }
 .bt-nav-overlay.open { opacity: 1; visibility: visible; transition: opacity .3s ease; }
 .bt-header.switched .bt-nav-panel { transition: none; }
+/* Products menu: five cards across the panel. Each card: icon and name with a line of copy on Light Grey 1, a 156px
+   picture under it. On hover or focus the copy goes Black (.3s) and the picture grows 5% (.4s, reveal curve). */
+.bt-nav-panel .products { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--grid-gap); margin: 0; padding: 0; list-style: none; }
+.bt-nav-panel .products > li { display: flex; }
+.bt-menu-card { display: flex; flex-direction: column; inline-size: 100%; overflow: hidden; color: var(--color-black); text-decoration: none; }
+.bt-menu-card:focus-visible { outline: 2px solid var(--color-black); outline-offset: 3px; }
+.bt-menu-card > .content { flex: 1 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--color-lightGrey1); }
+.bt-menu-card .title { display: flex; align-items: flex-start; gap: 8px; min-inline-size: 0; font: 400 14px/1.4 var(--beausite); letter-spacing: .01em; }
+.bt-menu-card .title > img { flex-shrink: 0; inline-size: 14px; block-size: 14px; margin-top: 2.8px; object-fit: contain; }
+.bt-menu-card .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-inline-size: 76%; overflow: hidden; font: 350 12px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); transition: color .3s ease; }
+.bt-menu-card > .asset { position: relative; flex-shrink: 0; block-size: 156px; overflow: hidden; background: var(--color-lightGrey2); }
+.bt-menu-card > .asset > img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; transition: transform .4s var(--ease-reveal); }
+.bt-menu-card:is(:hover, :focus-visible) .text { color: var(--color-black); }
+.bt-menu-card:is(:hover, :focus-visible) > .asset > img { transform: scale(1.05); }
 /* Menu button: three bars fold into a small cross (.3s ease; the middle bar fades in .2s). */
 .bt-nav .menu span { align-self: center; transition: inline-size .3s ease, transform .3s ease, opacity .2s ease; }
 .bt-nav .menu[aria-expanded=true] span { inline-size: 1.125rem; }

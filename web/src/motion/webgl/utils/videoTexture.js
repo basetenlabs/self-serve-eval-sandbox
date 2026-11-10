@@ -1,4 +1,4 @@
-import { SRGBColorSpace, VideoTexture } from 'three'
+import { SRGBColorSpace, VideoTexture } from '../../lib/three.js'
 /**
  * Settles when `video` has a frame WebGL can upload, or the source errors.
  * `loadeddata` fires before a frame is decoded, so the picture would pop in late.

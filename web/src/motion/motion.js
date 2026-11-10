@@ -8,7 +8,7 @@
  *
  * Timings and curves are the site's (see references/motion.md for the full table).
  */
-import { gsap } from 'gsap'
+import { gsap } from './lib/gsap.js'
 
 // The site sets this once for every tween on the page: a tween without its own ease is linear.
 gsap.defaults({ ease: 'none' })
@@ -344,6 +344,16 @@ const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }
  *
  *   <span class="bt-number" data-count="up" data-min="0" data-max="1200" data-duration="1500"
  *         data-prefix="$" data-suffix="B"></span>
+ *
+ * @param {HTMLElement} element
+ * @param {object} [options]  Each falls back to the element's data attribute of the same name.
+ * @param {'up' | 'down' | 'random'} [options.type]  `data-count`. Default `up`.
+ * @param {number} [options.min]       Default 0.
+ * @param {number} [options.max]       Default 100.
+ * @param {number} [options.duration]  Milliseconds. Default 1500.
+ * @param {string} [options.prefix]
+ * @param {string} [options.suffix]
+ * @returns {() => void} Stops it.
  */
 export function animateNumber(element, options = {}) {
 	const data = element.dataset
@@ -1163,7 +1173,7 @@ export function rollingNumber(element, initial = element.textContent.trim()) {
 				.map((char) =>
 					/\d/.test(char)
 						? `<span class="digit" aria-hidden="true"><span class="sizer">${char}</span><span class="strip">${STRIP.map((digit) => `<span>${digit}</span>`).join('')}</span></span>`
-						: `<span aria-hidden="true">${char}</span>`,
+						: `<span class="char" aria-hidden="true">${char}</span>`,
 				)
 				.join('')}`
 		}

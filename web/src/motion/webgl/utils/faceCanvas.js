@@ -1,4 +1,4 @@
-import { CanvasTexture, LinearFilter, NoColorSpace } from 'three'
+import { CanvasTexture, LinearFilter, NoColorSpace } from '../../lib/three.js'
 import { createVideoTexture } from './videoTexture.js'
 
 /**
@@ -149,7 +149,9 @@ function createHelper(context, height) {
 			{ size = 44, x = 22, lineHeight = 1.5, charsPerSecond = 28, hold = 2 } = {},
 		) {
 			const total = lines.reduce((sum, line) => sum + line.length + 1, 0)
-			let typed = Math.floor((time % (total / charsPerSecond + hold)) * charsPerSecond)
+			// The cycle starts fully typed (a still first frame is never blank), holds, then types again
+			const typing = total / charsPerSecond
+			let typed = Math.floor(((time + typing) % (typing + hold)) * charsPerSecond)
 			const shown = []
 			for (const line of lines) {
 				if (typed <= 0) break

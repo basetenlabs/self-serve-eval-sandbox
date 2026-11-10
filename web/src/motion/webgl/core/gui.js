@@ -14,6 +14,8 @@ export function createNullGui() {
 		refresh() {},
 		dispose() {},
 		hidden: true,
+		// Scenes may park helper nodes (a file input) in the panel's element
+		element: document.createElement('div'),
 	}
 	return node
 }

@@ -1,4 +1,4 @@
-import { CanvasTexture, SRGBColorSpace } from 'three'
+import { CanvasTexture, SRGBColorSpace } from '../../../lib/three.js'
 const TITLE_CANVAS_WIDTH = 1024
 const ICON_CANVAS_WIDTH = 512
 // In world units, like the faces

@@ -17,7 +17,7 @@ function Confirm({ trigger, title, description, action, cancel = "Cancel", onCon
     <AlertDialogPrimitive.Root>
       <AlertDialogPrimitive.Trigger asChild>{trigger}</AlertDialogPrimitive.Trigger>
       <AlertDialogPrimitive.Portal>
-        <AlertDialogPrimitive.Overlay className="ev-scrim" />
+        <AlertDialogPrimitive.Overlay className="bt-scrim" />
         <AlertDialogPrimitive.Content className="bt-dialog ev-dialog">
           <div>
             <AlertDialogPrimitive.Title asChild><h2>{title}</h2></AlertDialogPrimitive.Title>

@@ -1,4 +1,11 @@
-import { DataTexture, Mesh, NearestFilter, PlaneGeometry, RGBAFormat, ShaderMaterial } from 'three'
+import {
+	DataTexture,
+	Mesh,
+	NearestFilter,
+	PlaneGeometry,
+	RGBAFormat,
+	ShaderMaterial,
+} from '../../../../lib/three.js'
 import {
 	CELL_SIZE,
 	CORNER_RADIUS,

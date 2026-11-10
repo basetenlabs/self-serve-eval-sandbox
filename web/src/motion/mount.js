@@ -21,7 +21,7 @@
  * The box carries `data-webgl-scene` (the scene name) and `data-webgl-state`:
  * `loading`, `ready`, `still` (reduced motion, at rest) or `fallback`.
  */
-import { gsap } from 'gsap'
+import { gsap } from './lib/gsap.js'
 import { createWebGLRuntime } from './webgl/core/runtime.js'
 
 // The site sets this once for every tween on the page: a tween without its own ease is linear.
@@ -37,7 +37,7 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
  * @param {number} [options.settle=2.5]     Reduced motion: seconds the scene runs before it rests.
  * @param {boolean} [options.reducedMotion] Force the reduced-motion behaviour on or off (default: the media query).
  * @param {Function} [options.Pane]         Tweakpane's `Pane` class, to tune the scene's parameters live.
- * @param {(reason: 'initialization' | 'context-lost') => void} [options.onFallback]
+ * @param {(reason: 'initialization' | 'context-lost', error?: unknown) => void} [options.onFallback]
  */
 export function mountScene(container, scene, options = {}) {
 	const { poster, settle = 2.5, Pane, onFallback } = options
@@ -53,7 +53,7 @@ export function mountScene(container, scene, options = {}) {
 	container.dataset.webglScene = scene.name
 	container.dataset.webglState = 'loading'
 
-	function fallback(reason) {
+	function fallback(reason, error) {
 		if (failed) return
 		failed = true
 		// Clear the reference first: disposal itself emits a context-loss event.
@@ -66,7 +66,7 @@ export function mountScene(container, scene, options = {}) {
 		if (poster) {
 			container.style.background = `url("${poster}") center / cover no-repeat`
 		}
-		onFallback?.(reason)
+		onFallback?.(reason, error)
 	}
 
 	function onContextLost(event) {
@@ -144,8 +144,8 @@ export function mountScene(container, scene, options = {}) {
 		container.dataset.webglState = 'ready'
 		// Context-loss events do not bubble; capture them from the child canvas.
 		container.addEventListener('webglcontextlost', onContextLost, true)
-	} catch {
-		fallback('initialization')
+	} catch (error) {
+		fallback('initialization', error)
 	}
 
 	const observer = new IntersectionObserver(([entry]) => {

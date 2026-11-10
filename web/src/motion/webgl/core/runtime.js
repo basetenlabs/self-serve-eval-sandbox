@@ -1,4 +1,4 @@
-import { Scene, WebGLRenderer } from 'three'
+import { Scene, WebGLRenderer } from '../../lib/three.js'
 import { createCamera, updateCameraAspect } from './camera.js'
 import { disposeObject3D, materialTextures } from './dispose.js'
 import { createNullGui } from './gui.js'

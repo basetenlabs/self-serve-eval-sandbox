@@ -1,4 +1,4 @@
-import { Box3, BoxGeometry, MathUtils, Mesh, Plane, Vector2, Vector3 } from 'three'
+import { Box3, BoxGeometry, MathUtils, Mesh, Plane, Vector2, Vector3 } from '../../lib/three.js'
 import { breakpoints } from '../core/breakpoints.js'
 import { defineScene } from '../core/types.js'
 import { createProductCubeMaterial, pointerOnGridFace } from '../objects/productCube.js'

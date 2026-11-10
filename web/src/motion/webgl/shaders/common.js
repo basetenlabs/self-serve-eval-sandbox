@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Mesh } from 'three'
+import { BufferAttribute, BufferGeometry, Mesh } from '../../lib/three.js'
 /** `float aastep(float sdf)`: 0 below zero, 1 above, smoothed over ~1px. */
 export const aastep = /* glsl */ `
   float aastep(float sdf) {

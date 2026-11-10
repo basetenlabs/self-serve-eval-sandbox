@@ -10,7 +10,7 @@ import {
 	Plane,
 	ShaderMaterial,
 	Vector3,
-} from 'three'
+} from '../../lib/three.js'
 import { defineScene } from '../core/types.js'
 const MAX_INSTANCES = 60
 /** Per-instance hover colors, cycled: side faces / top and -X faces. */

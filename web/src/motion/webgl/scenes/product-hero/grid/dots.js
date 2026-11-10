@@ -5,7 +5,7 @@ import {
 	InstancedBufferGeometry,
 	Mesh,
 	ShaderMaterial,
-} from 'three'
+} from '../../../../lib/three.js'
 /** Dots are pixel-sized quads facing the camera, so they stay round on the floor. */
 const vertexShader = /* glsl */ `
   attribute vec3 aCenter;

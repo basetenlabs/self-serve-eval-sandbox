@@ -1,4 +1,4 @@
-import { Color, NearestFilter, ShaderMaterial, SRGBColorSpace, TextureLoader, Vector2 } from 'three'
+import { Color, NearestFilter, ShaderMaterial, SRGBColorSpace, TextureLoader, Vector2 } from '../../lib/three.js'
 import { defineScene } from '../core/types.js'
 import { createStore } from '../core/store.js'
 import { BRAND_COLORS } from '../palette.js'

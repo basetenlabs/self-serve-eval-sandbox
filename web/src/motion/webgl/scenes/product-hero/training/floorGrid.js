@@ -1,4 +1,10 @@
-import { Color, Float32BufferAttribute, GridHelper, LineSegments, ShaderMaterial } from 'three'
+import {
+	Color,
+	Float32BufferAttribute,
+	GridHelper,
+	LineSegments,
+	ShaderMaterial,
+} from '../../../../lib/three.js'
 import { valueNoise3D } from '../../../shaders/noise.js'
 const GRID_SIZE = 20
 const GRID_DIVISIONS = 40

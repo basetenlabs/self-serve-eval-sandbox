@@ -1,4 +1,4 @@
-import { Color, Mesh, PlaneGeometry, ShaderMaterial } from 'three'
+import { Color, Mesh, PlaneGeometry, ShaderMaterial } from '../../../lib/three.js'
 import { getProduct } from '../../palette.js'
 import { valueNoise3D } from '../../shaders/noise.js'
 import { createMouseTrail } from '../../utils/mouseTrail.js'
@@ -112,9 +112,18 @@ const dotsFragmentShader = /* glsl */ `
     gl_FragColor.rgb *= gl_FragColor.a;
   }
 `
-/** Model APIs (pink): the hero cube sits on striped, dotted lanes that react to the pointer. */
-export function createModelApisHeroScene({ product = getProduct('model-apis'), videoUrl } = {}) {
+/**
+ * Model APIs (pink): the hero cube sits on striped, dotted lanes that react to the pointer.
+ * @param {import('./shared.js').ProductHeroOptions} [options]
+ */
+export function createModelApisHeroScene({
+	product = getProduct('model-apis'),
+	videoUrl,
+	zoom,
+	trailFade,
+} = {}) {
 	return defineProductHeroScene({
+		zoom,
 		name: 'Product Hero · Model APIs',
 		create(context) {
 			const { scene, renderer, pointer, gui } = context
@@ -176,6 +185,7 @@ export function createModelApisHeroScene({ product = getProduct('model-apis'), v
 				product,
 				gridCellColor: CUBE_GRID_CELL_COLOR,
 				videoUrl,
+				trailFade,
 			})
 			gui.addBinding(stripesUniforms.uIntensity, 'value', {
 				label: 'Floor intensity',

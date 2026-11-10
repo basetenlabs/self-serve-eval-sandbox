@@ -16,7 +16,7 @@
  *   Cells light up as requests pass, flash when one arrives, and light under the pointer.
  *
  * Every scene: the cube's mark breathes, its left face plays footage (or a drawn face), the
- * pointer over its front opens white holes along its trail, and the camera is the shared isometric
+ * pointer over its front eases white holes open along its trail (0.5s in, 1.5s out), and the camera is the shared isometric
  * one (zoom 3.04; 1.5 on phones, where the visual turns portrait).
  *
  *   <section class="bt-surface layout-grid bt-product-hero">
@@ -48,7 +48,23 @@ export const PRODUCT_HERO_SCENES = {
 	grid: { create: createGridHeroScene, product: 'grid' },
 }
 
-export function mountProductHero(root, { scene, color, pattern, videoUrl, face, ...mountOptions }) {
+/**
+ * @param {HTMLElement} root  The `.bt-product-hero` section (or any element holding a `.scene`).
+ * @param {object} options
+ * @param {'dedicated-inference' | 'model-apis' | 'training' | 'sandbox' | 'grid'} options.scene
+ * @param {string} [options.color]    Base colour of the cube (default: the scene's product).
+ * @param {string} [options.pattern]  5x5 mark, rows separated by " \\ ", "1" = hole.
+ * @param {string} [options.videoUrl] Footage for the cube's left face.
+ * @param {HTMLCanvasElement} [options.face]  A drawn face instead (`createFaceCanvas`).
+ * @param {number | ((size: { width: number, height: number }) => number)} [options.zoom]
+ *   Camera zoom for a pane that is not the page hero (see ProductHeroOptions in scenes/product-hero/shared.js).
+ * @param {boolean} [options.trailFade]  False: cells open the frame the pointer arrives, as on the site's product pages.
+ * Remaining options go to `mountScene` (poster, settle, reducedMotion, onFallback).
+ */
+export function mountProductHero(
+	root,
+	{ scene, color, pattern, videoUrl, face, zoom, trailFade, ...mountOptions },
+) {
 	const entry = PRODUCT_HERO_SCENES[scene]
 	if (!entry) throw new Error(`No product hero scene "${scene}"`)
 	const look = getProduct(entry.product)
@@ -56,7 +72,7 @@ export function mountProductHero(root, { scene, color, pattern, videoUrl, face, 
 	root.style.setProperty('--product-base', product.color)
 	return mountScene(
 		root.querySelector('.scene'),
-		entry.create({ product, videoUrl: face || videoUrl }),
+		entry.create({ product, videoUrl: face || videoUrl, zoom, trailFade }),
 		mountOptions,
 	)
 }

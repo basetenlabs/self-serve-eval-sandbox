@@ -9,7 +9,7 @@ import {
 	ShaderMaterial,
 	Vector2,
 	Vector3,
-} from 'three'
+} from '../../../lib/three.js'
 import { pointerOnGridFace } from '../../objects/productCube.js'
 import { getProduct } from '../../palette.js'
 import { perlinNoise3D, simplexNoise2D } from '../../shaders/noise.js'
@@ -358,12 +358,16 @@ const clusterShaders = {
  * receding along the view direction (one level per wave) and turning grey.
  * The orthographic camera does not show the move, so layers stay put on screen.
  * Further back layers fade out, then come back on the ground with a new layout.
+ * @param {import('./shared.js').ProductHeroOptions} [options]
  */
 export function createDedicatedHeroScene({
 	product = getProduct('dedicated-inference'),
 	videoUrl,
+	zoom,
+	trailFade,
 } = {}) {
 	return defineProductHeroScene({
+		zoom,
 		name: 'Product Hero · Dedicated',
 		create(context) {
 			const { scene, camera, pointer, size, gui } = context
@@ -519,6 +523,7 @@ export function createDedicatedHeroScene({
 				product,
 				gridCellColor: CUBE_GRID_CELL_COLOR,
 				videoUrl,
+				trailFade,
 			})
 			gui.addButton({ title: 'Replay' }).on('click', replay)
 			const wavesFolder = gui.addFolder({ title: 'Waves & layers' })

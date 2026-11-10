@@ -9,7 +9,7 @@ import {
 	ShaderMaterial,
 	Vector2,
 	WebGLRenderTarget,
-} from 'three'
+} from '../../lib/three.js'
 const fragmentShader = /* glsl */ `
   uniform sampler2D uPreviousTrail;
   uniform vec2 uPointerUv;

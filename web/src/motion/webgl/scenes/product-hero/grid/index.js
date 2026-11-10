@@ -1,4 +1,4 @@
-import { Color, Vector2 } from 'three'
+import { Color, Vector2 } from '../../../../lib/three.js'
 import { getProduct } from '../../../palette.js'
 import { shuffle } from '../../../utils/random.js'
 import { createHeroProductCube, defineProductHeroScene, isPortraitHero } from '../shared.js'
@@ -33,9 +33,16 @@ const easeOutCubic = (t) => 1 - (1 - t) ** 3
  * out to the edges of the view. Cells light up as requests pass over them and flash when one
  * arrives; hovered cells light up too. The routes follow the desktop or the mobile layout, switched
  * at the same breakpoint as the camera zoom.
+ * @param {import('../shared.js').ProductHeroOptions} [options]
  */
-export function createGridHeroScene({ product = getProduct('grid'), videoUrl } = {}) {
+export function createGridHeroScene({
+	product = getProduct('grid'),
+	videoUrl,
+	zoom,
+	trailFade,
+} = {}) {
 	return defineProductHeroScene({
+		zoom,
 		name: 'Product Hero · Grid',
 		create(context) {
 			const { scene, pointer, size, gui } = context
@@ -99,6 +106,7 @@ export function createGridHeroScene({ product = getProduct('grid'), videoUrl } =
 				product,
 				gridCellColor: product.background,
 				videoUrl,
+				trailFade,
 			})
 			/** A layout on the floor: its routes and cells, and the dots running on them. */
 			const createNetwork = (layout) => {

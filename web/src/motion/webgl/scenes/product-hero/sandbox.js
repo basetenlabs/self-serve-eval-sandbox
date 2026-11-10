@@ -6,7 +6,7 @@ import {
 	InstancedMesh,
 	Matrix4,
 	ShaderMaterial,
-} from 'three'
+} from '../../../lib/three.js'
 import { pointerOnGridFace } from '../../objects/productCube.js'
 import { DARK_COLOR, getProduct, parseFacePattern } from '../../palette.js'
 import { aastep, faceGrid } from '../../shaders/common.js'
@@ -154,9 +154,16 @@ const gridFragmentShader = /* glsl */ `
 `
 /**
  * Sandbox (yellow): the hero cube floats over a 9×9 floor of cubes that keep swapping places.
+ * @param {import('./shared.js').ProductHeroOptions} [options]
  */
-export function createSandboxHeroScene({ product = getProduct('sandbox'), videoUrl } = {}) {
+export function createSandboxHeroScene({
+	product = getProduct('sandbox'),
+	videoUrl,
+	zoom,
+	trailFade,
+} = {}) {
 	return defineProductHeroScene({
+		zoom,
 		name: 'Product Hero · Sandbox',
 		create(context) {
 			const { scene, pointer, gui } = context
@@ -218,6 +225,7 @@ export function createSandboxHeroScene({ product = getProduct('sandbox'), videoU
 				product,
 				gridCellColor: GRID_TOP_COLOR,
 				videoUrl,
+				trailFade,
 			})
 			const squaresFolder = gui.addFolder({ title: 'Grid squares' })
 			squaresFolder.addBinding(gridUniforms.uNoiseFrequency, 'value', {

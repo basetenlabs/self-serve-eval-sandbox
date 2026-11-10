@@ -1,4 +1,4 @@
-import { gsap } from 'gsap'
+import { gsap } from '../../../lib/gsap.js'
 import {
 	BoxGeometry,
 	Color,
@@ -13,7 +13,7 @@ import {
 	Vector2,
 	Vector3,
 	Vector4,
-} from 'three'
+} from '../../../lib/three.js'
 import { breakpoints } from '../../core/breakpoints.js'
 import { defineScene } from '../../core/types.js'
 import { BRAND_COLORS } from '../../palette.js'

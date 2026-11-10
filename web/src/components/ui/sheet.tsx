@@ -12,7 +12,7 @@ const SheetClose = DialogPrimitive.Close;
 function SheetContent({ className, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="ev-scrim" />
+      <DialogPrimitive.Overlay className="bt-scrim" />
       <DialogPrimitive.Content className={cn("ev-sheet", className)} {...props}>
         {children}
         <DialogPrimitive.Close className="ev-close absolute top-3 right-3" aria-label="Close"><Cross /></DialogPrimitive.Close>

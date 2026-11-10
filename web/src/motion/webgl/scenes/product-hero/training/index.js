@@ -1,20 +1,34 @@
-import { Color } from 'three'
+import { Color } from '../../../../lib/three.js'
 import { pointerOnGridFace } from '../../../objects/productCube.js'
 import { getProduct } from '../../../palette.js'
 import { createHeroProductCube, defineProductHeroScene } from '../shared.js'
 import { createCubeTrail } from './cubeTrail.js'
 import { createFloorGrid } from './floorGrid.js'
 import { createTrainingFlow } from './flow.js'
-/** Training (blue): loss-curve lines and particles converge into the cube and leave as a trail. */
-export function createTrainingHeroScene({ product = getProduct('training'), videoUrl } = {}) {
+/**
+ * Training (blue): loss-curve lines and particles converge into the cube and leave as a trail.
+ * @param {import('../shared.js').ProductHeroOptions} [options]
+ */
+export function createTrainingHeroScene({
+	product = getProduct('training'),
+	videoUrl,
+	zoom,
+	trailFade,
+} = {}) {
 	return defineProductHeroScene({
+		zoom,
 		name: 'Product Hero · Training',
 		create(context) {
 			const { scene, pointer, size, gui } = context
 			scene.background = new Color('#F4F7F9')
 			createCubeTrail(scene, gui.addFolder({ title: 'Cube trail' }), product.color)
 			const floorGrid = createFloorGrid(scene, gui.addFolder({ title: 'Floor grid' }))
-			const cube = createHeroProductCube(context, { product, gridCellColor: '#D4EBFF', videoUrl })
+			const cube = createHeroProductCube(context, {
+				product,
+				gridCellColor: '#D4EBFF',
+				videoUrl,
+				trailFade,
+			})
 			const flow = createTrainingFlow(scene, gui, size, product.color)
 			return {
 				update(frame) {

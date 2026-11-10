@@ -6,7 +6,7 @@ import {
 	Mesh,
 	ShaderMaterial,
 	Vector2,
-} from 'three'
+} from '../../../../lib/three.js'
 import { valueNoise3D } from '../../../shaders/noise.js'
 /** 6×6 bundle of lines: rows map to height, columns to depth. */
 const LANE_SIDE = 6

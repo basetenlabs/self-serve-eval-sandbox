@@ -1,4 +1,4 @@
-import { gsap } from 'gsap'
+import { gsap } from '../../lib/gsap.js'
 import {
 	BackSide,
 	BoxGeometry,
@@ -8,7 +8,7 @@ import {
 	Raycaster,
 	ShaderMaterial,
 	Vector2,
-} from 'three'
+} from '../../lib/three.js'
 import { toNdc } from '../core/pointer.js'
 import { createStore } from '../core/store.js'
 import { defineScene } from '../core/types.js'

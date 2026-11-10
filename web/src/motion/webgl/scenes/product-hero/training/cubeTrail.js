@@ -1,4 +1,4 @@
-import { Color, Mesh, PlaneGeometry, ShaderMaterial } from 'three'
+import { Color, Mesh, PlaneGeometry, ShaderMaterial } from '../../../../lib/three.js'
 const fragmentShader = /* glsl */ `
   uniform vec3 uColor;
   uniform float uIntensity;

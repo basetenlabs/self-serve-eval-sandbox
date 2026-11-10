@@ -1,4 +1,4 @@
-import { OrthographicCamera, PerspectiveCamera } from 'three'
+import { OrthographicCamera, PerspectiveCamera } from '../../lib/three.js'
 export function createCamera(config) {
 	const near = config.near ?? 0.1
 	const far = config.far ?? 100

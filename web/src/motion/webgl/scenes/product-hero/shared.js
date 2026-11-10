@@ -1,4 +1,5 @@
-import { BoxGeometry, Mesh } from 'three'
+import { gsap } from '../../../lib/gsap.js'
+import { BoxGeometry, Mesh } from '../../../lib/three.js'
 import { breakpoints } from '../../core/breakpoints.js'
 import { defineScene } from '../../core/types.js'
 import { createProductCubeMaterial } from '../../objects/productCube.js'
@@ -17,16 +18,32 @@ const PRODUCT_HERO_CAMERA = {
 }
 /** Below the `md` breakpoint the host's visual turns portrait: the camera zooms out, and scenes can lay out differently. */
 export const isPortraitHero = () => window.innerWidth < breakpoints.md
+/**
+ * Options every product hero scene takes.
+ * @typedef {object} ProductHeroOptions
+ * @property {{ color: string, background?: string, pattern: string }} [product]  The cube's look (default: the scene's own product).
+ * @property {string | HTMLCanvasElement} [videoUrl]  The cube's left face: footage URL, or a canvas from `createFaceCanvas`.
+ * @property {number | ((size: { width: number, height: number }) => number)} [zoom]
+ *   Camera zoom. Default as on the site: 3.04, or 1.5 when the window is under 801px wide (the
+ *   visual turns portrait there). A pane inside an app sets its own: a number, or a function of
+ *   the canvas size, called on every resize. The cube is 1 unit wide in a view 6 units tall at zoom 1.
+ * @property {boolean} [trailFade]  Default true: the cube's cells ease in under the pointer
+ *   (0.5s sine.out) and ease back out (1.5s), as the cube in the home page's products row does.
+ *   False is the site's product-page behaviour: cells open at full depth the frame the pointer arrives.
+ */
+
 /** `defineScene` for a product hero: the shared camera, zoomed out below the `md` breakpoint. */
-export function defineProductHeroScene({ name, create }) {
+export function defineProductHeroScene({ name, create, zoom: zoomOption }) {
 	return defineScene({
 		name,
 		camera: PRODUCT_HERO_CAMERA,
 		create(context) {
 			const { camera, gui } = context
 			const zoom = { mobile: MOBILE_ZOOM }
+			let size = context.size
 			const fitCamera = () => {
-				camera.zoom = isPortraitHero() ? zoom.mobile : DESKTOP_ZOOM
+				if (typeof zoomOption === 'function') camera.zoom = zoomOption(size)
+				else camera.zoom = zoomOption ?? (isPortraitHero() ? zoom.mobile : DESKTOP_ZOOM)
 				camera.updateProjectionMatrix()
 			}
 			const controller = create(context) ?? {}
@@ -37,16 +54,21 @@ export function defineProductHeroScene({ name, create }) {
 				.on('change', fitCamera)
 			return {
 				...controller,
-				resize(size) {
+				resize(next) {
+					size = next
 					fitCamera()
-					controller.resize?.(size)
+					controller.resize?.(next)
 				},
 			}
 		},
 	})
 }
+/** Cell depth under the pointer eases in when the pointer reaches the grid face (as in scenes/products.js). */
+const TRAIL_INTENSITY_TWEEN = { duration: 0.5, ease: 'sine.out' }
+/** Slower ease out when the pointer leaves the grid face. */
+const TRAIL_LEAVE_DURATION = 1.5
 /** The hero product cube at the origin, with its own pointer trail and code video. */
-export function createHeroProductCube({ scene, renderer }, options) {
+export function createHeroProductCube({ scene, renderer }, { trailFade = true, ...options }) {
 	const trail = createMouseTrail(renderer)
 	// `videoUrl`: footage, or a canvas from `createFaceCanvas` (utils/faceCanvas.js).
 	const video = createFaceClip(options.videoUrl)
@@ -57,15 +79,31 @@ export function createHeroProductCube({ scene, renderer }, options) {
 	})
 	const mesh = new Mesh(new BoxGeometry(), material)
 	scene.add(mesh)
+	/** Scales the trail on the cube, so its cells ease in instead of jumping. */
+	const trailIntensity = { value: trailFade ? 0 : 1 }
+	let trailOn = false
 	return {
 		mesh,
 		/** `pointerUv`: where to paint the trail on the grid face (see `pointerOnGridFace`), or null. */
 		update({ delta, elapsed }, pointerUv) {
 			uniforms.uTime.value = elapsed
 			video.update?.(elapsed)
+			if (trailFade) {
+				if (trailOn !== !!pointerUv) {
+					trailOn = !!pointerUv
+					gsap.to(trailIntensity, {
+						value: Number(trailOn),
+						...TRAIL_INTENSITY_TWEEN,
+						duration: trailOn ? TRAIL_INTENSITY_TWEEN.duration : TRAIL_LEAVE_DURATION,
+						overwrite: true,
+					})
+				}
+				uniforms.uTrailInfluence.value = trailIntensity.value
+			}
 			trail.update(pointerUv, delta)
 		},
 		dispose() {
+			gsap.killTweensOf(trailIntensity)
 			trail.dispose()
 			video.dispose()
 		},
