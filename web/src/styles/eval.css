@@ -146,9 +146,10 @@ textarea.bt-input.ev-pulls { min-block-size: 36px; max-block-size: 192px; resize
 
 /* Where the pull requests come from: three choices on Light Grey 1; the chosen one is Light Pink with a Black corner square. */
 .ev-sources { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--grid-gap); }
-@media (min-width: 640px) { .ev-sources { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 640px) { .ev-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* A source is a lifting cell (.bt-lift pink): it rises up-right on its Pink faces on hover and focus. */
-.ev-source > span {
+/* .bt-lift.ev-source: the skill's .bt-lift > span:first-child sets the face to display block; the face here is a column. */
+.bt-lift.ev-source > span {
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-block-size: 132px; padding: 16px;
   background: var(--color-lightGrey1); color: var(--color-black); text-align: left; transition: transform .4s var(--ease), background-color .3s;
 }

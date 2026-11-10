@@ -19,18 +19,24 @@ import { GitHubAccount, GitHubMark } from "./GitHubAccount";
 import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPicker";
 import { Readiness } from "./Readiness";
 
-type Source = "quick" | "repo" | "suite";
+type Source = "quick" | "repo";
+type Visibility = "public" | "private";
 type Pick = "latest" | "choose";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 type Commands = { setup: string; test: string };
 const LIMITS = [5, 10, 20, 40];
+const MODELS_KEY = "pr-eval-models-2"; // a new name when the default models change, so everyone starts on them once
 const QUICK_MINUTES = 35; // every quick-sample attempt starts at once; the slowest attempt sets the end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
 export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) => void; hurry: () => void }) {
   const [stored, setSource] = useStored<string>("pr-eval-source", "quick");
-  const source: Source = stored === "repo" || stored === "suite" ? stored : "quick";
+  const source: Source = stored === "repo" || stored === "suite" ? "repo" : "quick"; // "suite" was a source once: starred PRs live under Any repo now
+  // Any repo, public or private: only a private repository needs the person's own GitHub sign-in.
+  const [storedVisibility, setVisibility] = useStored<string>("pr-eval-visibility", "public");
+  const visibility: Visibility = storedVisibility === "private" ? "private" : "public";
+  const privateRepos = source === "repo" && visibility === "private";
   const [text, setText] = useStored("pr-eval-pulls", "");
   const [handed] = React.useState(takeCommands);
   React.useEffect(() => { try { sessionStorage.removeItem(COMMANDS); } catch { /* private window */ } }, []);
@@ -44,7 +50,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const [looking, setLooking] = React.useState(false);
   const usable = state.models.filter((m) => !m.missing);
   const defaults = usable.filter((m) => m.default).map((m) => m.key);
-  const [storedModels, setStoredModels] = useStored<string[] | null>("pr-eval-models", null);
+  const [storedModels, setStoredModels] = useStored<string[] | null>(MODELS_KEY, null);
   const chosenModels = (storedModels ?? defaults).filter((k) => usable.some((m) => m.key === k));
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
@@ -52,14 +58,15 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const gitHubSignIn = React.useRef<{ signIn: () => void }>(null);
   const signedOut = state.github.sign_in && !state.github.login;
   const publicOpen = !!state.github.public; // the page reads public repositories itself: sign-in is for private ones
-  // The Environment panel's sign-in: the quick sample may not show the GitHub box, so open Your pull requests first.
+  // A sign-in asked from anywhere (the Environment panel, a repository the page can't read) opens Private repos first,
+  // where the GitHub box is.
   const [signInNext, setSignInNext] = React.useState(false);
   React.useEffect(() => {
     if (signInNext && gitHubSignIn.current) { setSignInNext(false); gitHubSignIn.current.signIn(); }
-  }, [signInNext, source]);
-  const signInFromAside = () => {
+  }, [signInNext, source, visibility]);
+  const signIn = () => {
     if (gitHubSignIn.current) gitHubSignIn.current.signIn();
-    else { setSource("repo"); setSignInNext(true); }
+    else { setSource("repo"); setVisibility("private"); setSignInNext(true); }
   };
   const [favorites, save] = useFavorites(state.favorites);
   const [saveProblem, setSaveProblem] = React.useState<string | null>(null);
@@ -68,23 +75,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     void save(pull, saved).then((problem) => problem && setSaveProblem(`Couldn't save it. ${problem}`));
   };
   const github = state.github.login; // a GitHub sign-in can open private repositories, so look again
-  // The eval suite: every starred pull request, from any repository, less the ones unticked for this run.
-  const [skipped, setSkipped] = React.useState<string[]>([]);
-  const suite = favorites.slice(0, state.max_limit);
-  const inSuite = (f: Favorite) => !skipped.includes(`${f.repo.toLowerCase()}#${f.number}`);
-  const suitePulls = suite.filter(inSuite).reduce<Record<string, number[]>>((acc, f) => {
-    const repo = Object.keys(acc).find((r) => r.toLowerCase() === f.repo.toLowerCase()) ?? f.repo; // GitHub names ignore case
-    return { ...acc, [repo]: [...(acc[repo] ?? []), f.number] };
-  }, {});
-  const pickSuite = (f: Favorite, on: boolean) => {
-    const key = `${f.repo.toLowerCase()}#${f.number}`;
-    setSkipped(on ? skipped.filter((k) => k !== key) : [...skipped, key]);
-  };
 
   // What was typed: one repository to take PRs from, or links to exact pull requests.
   const pasted = React.useMemo(() => parsePasted(text), [text]);
   const pastedRepos = Object.keys(pasted.pulls);
-  const mode = source === "quick" ? "quick" : source === "suite" ? "suite" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
+  const mode = source === "quick" ? "quick" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
   const repo = mode === "repo" ? pasted.repos[0] : null;
 
   // The install and test commands last started with each repository come back with it.
@@ -124,12 +119,12 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const lookups = mode === "pasted" ? pastedRepos.flatMap((r) => checked[r] ?? []) : info ? [info] : [];
   const lookupError = lookups.find((l) => l.error)?.error;
   const needsCommands = lookups.find((l) => l.repo && !l.error && l.defaults === false);
-  const prs = mode === "quick" ? state.quick.tasks : mode === "suite" ? pullCount(suitePulls) : mode === "pasted" ? pullCount(pastedPulls)
+  const prs = mode === "quick" ? state.quick.tasks : mode === "pasted" ? pullCount(pastedPulls)
     : mode === "repo" && !info?.error ? (pick === "choose" ? chosen.length : limit) : 0;
 
   // Price from a run over the same repositories when there is one: a large repository costs far more per attempt.
   const scope = (mode === "quick" ? state.quick.names ?? []
-    : mode === "suite" ? Object.keys(suitePulls) : mode === "pasted" ? Object.keys(pastedPulls) : repo ? [repo] : [])
+    : mode === "pasted" ? Object.keys(pastedPulls) : repo ? [repo] : [])
       .map((r) => r.toLowerCase()).sort().join(",");
   const catalog = state.models.map((m) => ({ ...m, ...m.by_scope?.[scope] }));
   const models = catalog.filter((m) => chosenModels.includes(m.key));
@@ -142,21 +137,21 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
-  // The quick sample's tasks are already collected, so it runs without GitHub, and public repositories need no
-  // sign-in when the page reads them itself: GitHub sign-in is for private repositories.
-  const needsGitHub = signedOut && !publicOpen && !(mode === "quick" && state.quick.ready);
+  // The quick sample's tasks are already collected and public repositories are read with the page's own login, so
+  // GitHub sign-in is for private repositories only.
+  const needsGitHub = signedOut && (privateRepos || (mode === "quick" && !state.quick.ready));
   const blocked = !!state.blocked || needsGitHub || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
   const hint = state.blocked ? state.blocked
-    : needsGitHub ? "Sign in with GitHub to start a run: the eval reads repositories, public ones too, with your own GitHub login."
+    : needsGitHub ? (privateRepos ? "Sign in with GitHub to start: a private repository is read with your own GitHub login."
+      : "Sign in with GitHub to start a run.")
     : over ? `This run would cost about ${usd(cost)}, and you have ${usd(left)} left of your ${usd(state.spend!.cap)} for the last 24 hours. Choose fewer pull requests or models.`
     : !models.length ? "Choose at least one model."
     : checking ? "Checking the pull requests on GitHub."
     : lookupError ? "Pick a repository the page can read."
     : needsCommands && !commandsGiven ? `Give the install and test commands for ${needsCommands.language}.`
-    : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request."
-      : mode === "suite" ? "Star or tick at least one pull request." : "Name a repository or paste pull request links.")
+    : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request." : "Name a repository or paste pull request links.")
     : "Runs keep going if you close this page.";
 
   const toggleModel = (key: string, on: boolean) => {
@@ -170,16 +165,15 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     setError(null);
     setStarting(true);
     const which = mode === "quick" ? { quick: true }
-      : mode === "suite" ? { pulls: suitePulls }
       : mode === "pasted" ? { pulls: pastedPulls }
         : pick === "choose" ? { pulls: { [repo!]: chosen } } : { repo, limit };
-    const res = await post("/api/runs", { ...which, models: chosenModels, ...(mode === "suite" ? {} : { setup, test }) });
+    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test });
     setStarting(false);
     if (res.error || !res.id) {
       setError(res.error ?? "The run didn't start.");
       return;
     }
-    if (commandsFor && mode !== "suite" && (setup.trim() || test.trim())) setKept({ ...kept, [commandsFor]: { setup, test } });
+    if (commandsFor && (setup.trim() || test.trim())) setKept({ ...kept, [commandsFor]: { setup, test } });
     hurry();
     go({ page: "run", id: res.id });
   }
@@ -213,10 +207,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="No sign-in"
               text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
-              text={signedOut && !publicOpen ? "Sign in with GitHub, then paste pull request links or pick from a repository's latest merges."
-                : "Paste pull request links, or pick from a repository's latest merges."} />
-            <SourceTile value="suite" title="Your eval suite" figure={plural(favorites.length, "PR")}
-              text="Every pull request you starred, from any repository. Run it again when a new model comes out." />
+              text="Public or private. Paste pull request links, or pick from a repository's latest merges." />
           </RadioGroup.Root>
           {saveProblem && <div role="alert" className="bt-notice error mt-3">{saveProblem}</div>}
 
@@ -226,33 +217,15 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             </div>
           )}
 
-          {source === "suite" && (
-            <div className="ev-panel bt-reveal">
-              <div className="ev-panel-head">
-                <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
-              </div>
-              {favorites.length ? (
-                <>
-                  <SavedPulls favorites={suite} picked={inSuite} onPick={pickSuite} onFavorite={onFavorite} />
-                  <p className="ev-small">
-                    {favorites.length > suite.length ? `The newest ${suite.length} run; unstar some to make room for others. ` : ""}
-                    Star more under <b className="text-black">Your pull requests</b>. Repositories that aren't Go or Python need their own install and test commands: run those from there.
-                  </p>
-                </>
-              ) : (
-                <p className="ev-small">
-                  Nothing starred yet. Under <b className="text-black">Your pull requests</b>, star the pull requests that stand for your team's work.
-                  They gather here, from any repository, so the next model gets the same test in one click.
-                </p>
-              )}
-            </div>
-          )}
-
           {source === "repo" && (
             <div className="ev-panel bt-reveal">
-              <div className="ev-panel-head">
-                <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
-              </div>
+              <Segmented label="Repositories" value={visibility} onChange={(v) => setVisibility(v)}
+                options={[{ value: "public", label: "Public repos" }, { value: "private", label: "Private repos" }]} />
+              {privateRepos && (
+                <div className="ev-panel-head bt-reveal">
+                  <GitHubAccount ref={gitHubSignIn} github={state.github} checks={state.checks} onChange={hurry} />
+                </div>
+              )}
               <div className="bt-field gap-2">
                 <Label htmlFor="pulls">Repository or pull request links</Label>
                 <textarea
@@ -261,8 +234,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                   aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
                   className="bt-input ev-pulls"
                 />
-                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} publicOpen={publicOpen}
-                  onSignIn={signedOut ? () => gitHubSignIn.current?.signIn() : undefined} />
+                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} publicOpen={publicOpen} privateRepos={privateRepos}
+                  onSignIn={signedOut ? signIn : undefined} />
               </div>
 
               {(mode === "empty" || mode === "pasted") && (
@@ -357,7 +330,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               </dl>
               {error && <div role="alert" className="bt-notice error animate-enter">{error}</div>}
               {needsGitHub && !state.blocked ? (
-                <Button full chevron onClick={() => gitHubSignIn.current?.signIn()}>
+                <Button full chevron onClick={signIn}>
                   <GitHubMark className="size-3.5" /> Sign in with GitHub to start
                 </Button>
               ) : (
@@ -369,7 +342,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               <p className="ev-small" aria-live="polite">{hint}</p>
             </div>
           </Column>
-          <Readiness state={state} onSignIn={signedOut ? signInFromAside : undefined} />
+          <Readiness state={state} onSignIn={signedOut ? signIn : undefined} />
         </div>
       </div>
     </form>
@@ -382,7 +355,7 @@ export function fillAgain(again: Again) {
   try {
     localStorage.setItem("pr-eval-source", JSON.stringify(again.quick ? "quick" : "repo"));
     if (!again.quick) localStorage.setItem("pr-eval-pulls", JSON.stringify(links.join("\n")));
-    localStorage.setItem("pr-eval-models", JSON.stringify(again.models));
+    localStorage.setItem(MODELS_KEY, JSON.stringify(again.models));
     sessionStorage.setItem(COMMANDS, JSON.stringify({ setup: again.setup ?? "", test: again.test ?? "" }));
   } catch { /* private window: the form stays as it was */ }
 }
@@ -417,13 +390,13 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
 }
 /** What the box understood: a repository and whether it's ready, or how many pull requests. A problem is a line in
  * Black after a Dark Pink square: the page never colours its words. */
-function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, publicOpen, onSignIn }: {
+function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, publicOpen, privateRepos, onSignIn }: {
   id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
-  publicOpen: boolean; onSignIn?: () => void;
+  publicOpen: boolean; privateRepos: boolean; onSignIn?: () => void;
 }) {
   const Bad = ({ children }: { children: React.ReactNode }) => <span className="inline-flex items-baseline gap-2"><span aria-hidden className="ev-dot bad" />{children}</span>;
   const Ok = () => <span aria-hidden className="ev-dot" />;
-  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{signIn ? "" : " Private ones work when your GitHub login can read them."}</span>;
+  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{privateRepos && !signIn ? " Private ones work when your GitHub login can read them." : ""}</span>;
   if (mode === "many") body = <Bad>One repository at a time, or paste links to pull requests.</Bad>;
   else if (mode === "pasted") {
     const n = pullCount(pasted.pulls);
