@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Empty, Eyebrow, isActive, LiveDot, PhaseBadge, Spacer, Surface } from "@/components/brand";
+import { Empty, Eyebrow, isActive, LiveDot, PhaseBadge, Surface } from "@/components/brand";
 import { Back, Chevron, External } from "@/components/brand/icons";
 import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -53,15 +53,14 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   const board = <TabsTrigger value="board">{active ? "Live" : "Board"}</TabsTrigger>;
   const results = <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>;
   return (
-    <>
+    // One surface: a run is one page, so no texture band splits its header, steps and views.
+    <Surface className="ev-run">
       <RunHeader run={run} state={state} sentence={sentence} hurry={hurry} go={go} />
-      <Spacer />
-      <Surface aria-label="Run steps">
+      <section aria-label="Run steps">
         <Pipeline run={run} />
         <RunNotes run={run} />
-      </Surface>
-      <Spacer />
-      <Surface>
+      </section>
+      <div>
         <Tabs value={current} onValueChange={(v) => go({ page: "run", id, tab: v }, true)}>
           <TabsList aria-label="Run views" className="mb-10">
             {/* A finished run opens on its results, so they come first; a live run leads with the board. */}
@@ -78,8 +77,8 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
           </TabsContent>
           <TabsContent value="tasks">{report ? <Tasks report={report} openId={task ?? null} onOpen={open} /> : <Loading />}</TabsContent>
         </Tabs>
-      </Surface>
-    </>
+      </div>
+    </Surface>
   );
 }
 
@@ -110,7 +109,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
   const vs = ordered(run.models).map((m) => m.label).join(" vs ");
   const reportUrl = run.report ? `/${run.report.replace(/^\//, "")}` : null;
   return (
-    <Surface as="header">
+    <header>
       <a href={href({ page: "home" })} className="bt-link text-darkGrey2">
         <span className="chevron"><Back /></span>All runs
       </a>
@@ -158,7 +157,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
         </div>
       </div>
       {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("bt-notice mt-6", message.tone)}>{message.text}</div>}
-    </Surface>
+    </header>
   );
 }
 

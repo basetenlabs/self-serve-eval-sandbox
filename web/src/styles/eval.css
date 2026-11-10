@@ -294,3 +294,7 @@ label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
 
 /* Radix keeps a hidden native radio beside each choice for forms; square like every mark on the site. */
 input[type=radio] { border-radius: 0; }
+
+/* The run page is one surface: header, steps and views sit in it 48px apart (64 on desktop), no band between. */
+.ev-run { display: flex; flex-direction: column; gap: 48px; }
+@media (min-width: 801px) { .ev-run { gap: 64px; } }
