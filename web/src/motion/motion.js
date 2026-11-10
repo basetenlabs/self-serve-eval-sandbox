@@ -9,6 +9,7 @@
  * Timings and curves are the site's (see references/motion.md for the full table).
  */
 import { gsap } from './lib/gsap.js'
+import { h, svg } from './dom.js'
 
 // The site sets this once for every tween on the page: a tween without its own ease is linear.
 gsap.defaults({ ease: 'none' })
@@ -335,21 +336,23 @@ export function rotateLogos(list, { interval = 2000 } = {}) {
 
 /* ---------- Numbers ---------- */
 
-const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
-
 /**
- * A whole number that animates once in view: counts min → max (`up`) or max → min (`down`) over
+ * A number that animates once in view: counts min → max (`up`) or max → min (`down`) over
  * `duration` ms on power2.out and stops, or keeps moving between random numbers in the range
  * (`random`, each step `duration` ms on power2.inOut) while it is on screen.
  *
  *   <span class="bt-number" data-count="up" data-min="0" data-max="1200" data-duration="1500"
  *         data-prefix="$" data-suffix="B"></span>
+ *   <span class="bt-number" data-count="up" data-max="0.063" data-decimals="3" data-prefix="$"></span>
+ *
+ * For a number that also changes after it has counted (a live metric), use `liveNumber`.
  *
  * @param {HTMLElement} element
  * @param {object} [options]  Each falls back to the element's data attribute of the same name.
  * @param {'up' | 'down' | 'random'} [options.type]  `data-count`. Default `up`.
  * @param {number} [options.min]       Default 0.
  * @param {number} [options.max]       Default 100.
+ * @param {number} [options.decimals]  Digits after the point. Default 0.
  * @param {number} [options.duration]  Milliseconds. Default 1500.
  * @param {string} [options.prefix]
  * @param {string} [options.suffix]
@@ -360,16 +363,20 @@ export function animateNumber(element, options = {}) {
 	const type = options.type ?? data.count ?? 'up'
 	const min = Number(options.min ?? data.min ?? 0)
 	const max = Number(options.max ?? data.max ?? 100)
+	const decimals = Number(options.decimals ?? data.decimals ?? 0)
 	const duration = Number(options.duration ?? data.duration ?? 1500)
 	const prefix = options.prefix ?? data.prefix ?? ''
 	const suffix = options.suffix ?? data.suffix ?? ''
-	// Rounded first, so a count crossing zero never shows "-0"
-	const toText = (number) => `${prefix}${numberFormat.format(Math.round(number) || 0)}${suffix}`
+	const toText = numberText({ decimals, prefix, suffix })
 	const start = type === 'down' ? max : min
 	const end = type === 'up' ? max : min
 	const sizer = [toText(min), toText(max)].reduce((a, b) => (b.length > a.length ? b : a))
-	element.innerHTML = `<span class="value">${toText(end)}</span><span class="sizer" aria-hidden="true">${sizer}</span><span class="text" aria-hidden="true">${toText(start)}</span>`
-	const text = element.querySelector('.text')
+	const text = h('span', { class: 'text', 'aria-hidden': 'true' }, toText(start))
+	element.replaceChildren(
+		h('span', { class: 'value' }, toText(end)),
+		h('span', { class: 'sizer', 'aria-hidden': 'true' }, sizer),
+		text,
+	)
 	const write = (number) => {
 		const content = toText(number)
 		if (text.textContent !== content) text.textContent = content
@@ -395,7 +402,7 @@ export function animateNumber(element, options = {}) {
 		// Each repeat starts from the last number shown and runs to a new random one
 		const progress = { number: last }
 		tween = gsap.to(progress, {
-			number: () => gsap.utils.random(min, max, 1),
+			number: () => gsap.utils.random(min, max, 10 ** -decimals),
 			duration: duration / 1000,
 			ease: 'power2.inOut',
 			repeat: -1,
@@ -411,6 +418,17 @@ export function animateNumber(element, options = {}) {
 		observer.disconnect()
 		tween?.kill()
 	}
+}
+
+/** `(number) => text` with thousands separators, fixed decimals and the prefix and suffix. */
+function numberText({ decimals = 0, prefix = '', suffix = '' }) {
+	const format = new Intl.NumberFormat('en-US', {
+		minimumFractionDigits: decimals,
+		maximumFractionDigits: decimals,
+	})
+	const scale = 10 ** decimals
+	// Rounded first, so a count crossing zero never shows "-0"
+	return (number) => `${prefix}${format.format(Math.round(number * scale) / scale || 0)}${suffix}`
 }
 
 /* ---------- Tabs and steps ---------- */
@@ -457,9 +475,9 @@ export function tabs(tablist, panels, { onChange, initialIndex = 0 } = {}) {
 }
 
 const PLAY_ICON =
-	'<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3 1.5L10.5 6L3 10.5V1.5Z" fill="currentColor"/></svg>'
+	'<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3 1.5L10.5 6L3 10.5V1.5Z" fill="currentColor"/></svg>'
 const PAUSE_ICON =
-	'<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 1.5H5V10.5H2.5V1.5Z" fill="currentColor"/><path d="M7 1.5H9.5V10.5H7V1.5Z" fill="currentColor"/></svg>'
+	'<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 1.5H5V10.5H2.5V1.5Z" fill="currentColor"/><path d="M7 1.5H9.5V10.5H7V1.5Z" fill="currentColor"/></svg>'
 
 /**
  * Auto-advancing step list (`.bt-steps`), as in the site's feature sections. Desktop: every
@@ -509,7 +527,7 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 		if (seconds > 0 && desktop.matches) rows[active]?.append(control)
 		else control.remove()
 		const paused = timer.isPausedBy('manual')
-		control.innerHTML = paused ? PLAY_ICON : PAUSE_ICON
+		control.replaceChildren(svg(paused ? PLAY_ICON : PAUSE_ICON))
 		control.setAttribute('aria-label', paused ? 'Resume autoplay' : 'Pause autoplay')
 		// Hold while attention is on what is showing
 		if (hovered === active || focused === active || frameHeld) timer.pause('hover')
@@ -1020,23 +1038,31 @@ export function revealText(element, { from = 0.3, start = 0.85, end = 0.35 } = {
 	const words = text.split(/\s+/)
 	const letterCount = words.reduce((count, word) => count + word.length, 0)
 	let letterIndex = 0
-	const original = element.innerHTML
+	const original = [...element.childNodes]
 	element.classList.add('bt-reveal-text')
 	element.style.setProperty('--from', from)
 	element.style.setProperty('--fade', LETTER_FADE)
-	const escape = (value) =>
-		value.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char])
-	element.innerHTML = `<span class="bt-sr-only">${escape(text)}</span><span aria-hidden="true">${words
-		.map(
-			(word) =>
-				`<span class="word">${[...word]
-					.map(
-						(letter) =>
-							`<span class="letter" style="--threshold:${(letterIndex++ / letterCount) * (1 - LETTER_FADE)}">${escape(letter)}</span>`,
-					)
-					.join('')}</span>`,
+	const visual = h('span', { 'aria-hidden': 'true' })
+	words.forEach((word, index) => {
+		if (index) visual.append(' ')
+		visual.append(
+			h(
+				'span',
+				{ class: 'word' },
+				[...word].map((letter) =>
+					h(
+						'span',
+						{
+							class: 'letter',
+							style: `--threshold:${(letterIndex++ / letterCount) * (1 - LETTER_FADE)}`,
+						},
+						letter,
+					),
+				),
+			),
 		)
-		.join(' ')}</span>`
+	})
+	element.replaceChildren(h('span', { class: 'bt-sr-only' }, text), visual)
 
 	let frame = 0
 	let animationFrame = 0
@@ -1095,7 +1121,7 @@ export function revealText(element, { from = 0.3, start = 0.85, end = 0.35 } = {
 	update()
 	return () => {
 		stopListening()
-		element.innerHTML = original
+		element.replaceChildren(...original)
 	}
 }
 
@@ -1109,12 +1135,17 @@ const GLYPHS = '0123456789#$%&*+/<>?'
 export function odometer(element, value = element.textContent.trim()) {
 	const chars = [...value]
 	element.classList.add('bt-odometer', 'idle')
-	element.innerHTML = `<span class="bt-sr-only">${value}</span>${chars
-		.map(
-			(char) =>
-				`<span class="char" aria-hidden="true"><span class="sizer">${char}</span><span class="glyph">${char}</span></span>`,
-		)
-		.join('')}`
+	element.replaceChildren(
+		h('span', { class: 'bt-sr-only' }, value),
+		...chars.map((char) =>
+			h(
+				'span',
+				{ class: 'char', 'aria-hidden': 'true' },
+				h('span', { class: 'sizer' }, char),
+				h('span', { class: 'glyph' }, char),
+			),
+		),
+	)
 	const glyphs = [...element.querySelectorAll('.glyph')]
 	const write = (index, text) => {
 		if (glyphs[index].textContent !== text) glyphs[index].textContent = text
@@ -1159,40 +1190,145 @@ export function odometer(element, value = element.textContent.trim()) {
 const STRIP = Array.from({ length: 20 }, (_, index) => index % 10)
 
 /**
- * A value that changes while it is shown (a calculator total): `set(value)` rolls each digit's
- * strip to its number in 0.55s power3.out.
+ * A value that changes while it is shown (a calculator total, a live metric): `set(value)` rolls
+ * each digit's strip to its number in 0.55s power3.out. Digits are matched from the right, so
+ * "980" → "1,024" rolls the three it had and brings the new one up from 0. Characters that are
+ * not digits (a currency sign, a unit, a space) are swapped in place. Reduced motion sets the
+ * value with no roll.
+ *
+ * @param {HTMLElement} element
+ * @param {string | number} [initial]  Default: the element's text.
+ * @returns {{ set(value: string | number, options?: { immediate?: boolean }): void }}
  */
 export function rollingNumber(element, initial = element.textContent.trim()) {
 	element.classList.add('bt-odometer')
+	const label = h('span', { class: 'bt-sr-only' })
+	const position = (digit) => (-(10 + Number(digit)) / STRIP.length) * 100
+	const shape = (value) => value.replace(/\d/g, '0')
 	let shown = ''
-	function set(value) {
+	/** Each digit's strip and the digit it shows, left to right. */
+	let digits = []
+	function build(value) {
+		// Where each digit was, counted from the right, so a longer or shorter value still rolls
+		const before = digits.map(({ digit }) => digit).reverse()
+		digits = []
+		const cells = [...value].map((char) => {
+			if (!/\d/.test(char)) return h('span', { class: 'char', 'aria-hidden': 'true' }, char)
+			const strip = h(
+				'span',
+				{ class: 'strip' },
+				STRIP.map((digit) => h('span', {}, String(digit))),
+			)
+			digits.push({ strip, digit: '0' })
+			return h(
+				'span',
+				{ class: 'digit', 'aria-hidden': 'true' },
+				h('span', { class: 'sizer' }, char),
+				strip,
+			)
+		})
+		digits.forEach((entry, index) => {
+			entry.digit = before[digits.length - 1 - index] ?? '0'
+			gsap.set(entry.strip, { yPercent: position(entry.digit) })
+		})
+		element.replaceChildren(label, ...cells)
+	}
+	function set(value, { immediate = false } = {}) {
 		value = String(value)
 		const first = !shown
-		if (value.length !== shown.length || first) {
-			element.innerHTML = `<span class="bt-sr-only"></span>${[...value]
-				.map((char) =>
-					/\d/.test(char)
-						? `<span class="digit" aria-hidden="true"><span class="sizer">${char}</span><span class="strip">${STRIP.map((digit) => `<span>${digit}</span>`).join('')}</span></span>`
-						: `<span class="char" aria-hidden="true">${char}</span>`,
-				)
-				.join('')}`
+		if (first || shape(value) !== shape(shown)) build(value)
+		else {
+			// Same layout: only the characters that are not digits may have changed
+			const cells = [...element.children].slice(1)
+			;[...value].forEach((char, index) => {
+				if (!/\d/.test(char) && cells[index].textContent !== char) cells[index].textContent = char
+			})
 		}
-		element.firstElementChild.textContent = value
-		const cells = [...element.children].slice(1)
-		;[...value].forEach((char, index) => {
-			const strip = cells[index]?.querySelector('.strip')
-			if (!strip) {
-				if (cells[index]) cells[index].textContent = char
-				return
-			}
-			const yPercent = (-(10 + Number(char)) / STRIP.length) * 100
-			if (first || value.length !== shown.length || reducedMotion()) gsap.set(strip, { yPercent })
-			else gsap.to(strip, { yPercent, duration: 0.55, ease: 'power3.out', overwrite: true })
+		label.textContent = value
+		const targets = [...value].filter((char) => /\d/.test(char))
+		digits.forEach((entry, index) => {
+			entry.digit = targets[index]
+			const yPercent = position(entry.digit)
+			if (first || immediate || reducedMotion()) {
+				gsap.killTweensOf(entry.strip)
+				gsap.set(entry.strip, { yPercent })
+			} else gsap.to(entry.strip, { yPercent, duration: 0.55, ease: 'power3.out', overwrite: true })
 		})
 		shown = value
 	}
 	set(initial)
 	return { set }
+}
+
+/**
+ * A metric that counts up once when it comes on screen, then rolls to each new value: the two
+ * number motions in one, for values that update while the page is open.
+ *
+ *   const latency = liveNumber(element, { value: 98.5, decimals: 1, suffix: ' ms' })
+ *   latency.set(101.2)     // rolls, 0.55s power3.out
+ *
+ * Before it has been on screen `set` only stores the value. Reduced motion shows the value and
+ * changes it with no motion.
+ *
+ * @param {HTMLElement} element
+ * @param {object} [options]  Each falls back to the element's data attribute of the same name.
+ * @param {number} [options.value]     Default: the number in the element's text.
+ * @param {number} [options.from]      Where the first count starts. Default 0.
+ * @param {number} [options.decimals]  Digits after the point. Default 0.
+ * @param {string} [options.prefix]
+ * @param {string} [options.suffix]
+ * @param {number} [options.duration]  First count, in milliseconds (power2.out). Default 1500.
+ * @returns {{ set(value: number): void, dispose(): void }}
+ */
+export function liveNumber(element, options = {}) {
+	const data = element.dataset
+	const toText = numberText({
+		decimals: Number(options.decimals ?? data.decimals ?? 0),
+		prefix: options.prefix ?? data.prefix ?? '',
+		suffix: options.suffix ?? data.suffix ?? '',
+	})
+	const from = Number(options.from ?? data.from ?? 0)
+	const duration = Number(options.duration ?? data.duration ?? 1500)
+	let value = Number(options.value ?? data.value ?? element.textContent.replace(/[^0-9.-]/g, ''))
+	// `.bt-number` stacks its children in one cell for animateNumber; the digits here sit in a row
+	element.classList.remove('bt-number')
+	const roller = rollingNumber(element, toText(reducedMotion() ? value : from))
+	let counted = false
+	let tween
+	const observer = new IntersectionObserver(([entry]) => {
+		if (!entry.isIntersecting) return
+		observer.disconnect()
+		counted = true
+		if (reducedMotion()) return roller.set(toText(value), { immediate: true })
+		const progress = { number: from }
+		tween = gsap.to(progress, {
+			number: value,
+			duration: duration / 1000,
+			ease: 'power2.out',
+			onUpdate: () => roller.set(toText(progress.number), { immediate: true }),
+			onComplete: () => {
+				tween = undefined
+				roller.set(toText(value), { immediate: true })
+			},
+		})
+	})
+	observer.observe(element)
+	return {
+		set(next) {
+			value = Number(next)
+			if (!counted) {
+				if (reducedMotion()) roller.set(toText(value), { immediate: true })
+				return
+			}
+			tween?.kill()
+			tween = undefined
+			roller.set(toText(value))
+		},
+		dispose() {
+			observer.disconnect()
+			tween?.kill()
+		},
+	}
 }
 
 /**
@@ -1277,6 +1413,7 @@ export function marquee(
  * | `.bt-logos[data-rotate]`                          | rotateLogos                    |
  * | `.bt-logos > i.hole`, `[data-texture-hole]`       | alignTexture                   |
  * | `.bt-number[data-count]`                          | animateNumber                  |
+ * | `[data-live-number]` (`data-value`, `data-decimals`, …) | liveNumber, shown only; call it yourself to keep `set` |
  * | `[data-odometer]`                                 | odometer                       |
  * | `[data-reveal-text]`                              | revealText                     |
  * | `.bt-accordion` (`data-single` for one at a time) | accordion                      |
@@ -1302,6 +1439,7 @@ export function initMotion(root = document) {
 	})
 	each('.bt-logos[data-rotate]', (list) => rotateLogos(list))
 	each('.bt-number[data-count]', (number) => animateNumber(number))
+	each('[data-live-number]', (number) => liveNumber(number))
 	each('[data-odometer]', (element) => odometer(element))
 	each('[data-reveal-text]', (element) => revealText(element))
 	each('.bt-accordion', (element) =>

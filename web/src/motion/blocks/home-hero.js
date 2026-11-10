@@ -24,6 +24,7 @@
  *   keyboard-focusing the picker holds it too;
  * - the floor cells under the pointer saturate and fade back (half-life 0.8s).
  */
+import { h } from '../dom.js'
 import { mountScene } from '../mount.js'
 import { tabListKeyboard } from '../motion.js'
 import { createHomeHeroScene, createHomeHeroSlider } from '../webgl/scenes/home-hero/index.js'
@@ -41,27 +42,41 @@ export function mountHomeHero(root, { slides, autoplaySeconds = 8, ...mountOptio
 
 	// Picker and card
 	const switcher = root.querySelector('.switcher')
-	switcher.innerHTML = `
-		<div class="icons" role="tablist" aria-label="Products">
-			${slides
-				.map(
-					(slide, index) => `
-			<button type="button" role="tab" aria-label="${slide.name}" aria-selected="${index === 0}" tabindex="${index === 0 ? 0 : -1}"
-				class="${index === 0 ? 'active' : ''}" style="--slide-background:${slide.background}">
-				<img src="${slide.icon}" alt="" width="24" height="24"><span class="tooltip" aria-hidden="true">${slide.name}</span>
-			</button>`,
-				)
-				.join('')}
-			<span class="timer" aria-hidden="true"></span>
-		</div>
-		<div class="card" role="tabpanel">
-			${slides
-				.map(
-					(slide, index) =>
-						`<div class="slide"${index === 0 ? '' : ' hidden'}><strong>${slide.name}</strong>${slide.description ? `<span>${slide.description}</span>` : ''}</div>`,
-				)
-				.join('')}
-		</div>`
+	switcher.replaceChildren(
+		h(
+			'div',
+			{ class: 'icons', role: 'tablist', 'aria-label': 'Products' },
+			slides.map((slide, index) =>
+				h(
+					'button',
+					{
+						type: 'button',
+						role: 'tab',
+						'aria-label': slide.name,
+						'aria-selected': String(index === 0),
+						tabindex: index === 0 ? 0 : -1,
+						class: index === 0 ? 'active' : '',
+						style: `--slide-background:${slide.background}`,
+					},
+					h('img', { src: slide.icon, alt: '', width: 24, height: 24 }),
+					h('span', { class: 'tooltip', 'aria-hidden': 'true' }, slide.name),
+				),
+			),
+			h('span', { class: 'timer', 'aria-hidden': 'true' }),
+		),
+		h(
+			'div',
+			{ class: 'card', role: 'tabpanel' },
+			slides.map((slide, index) =>
+				h(
+					'div',
+					{ class: 'slide', hidden: index !== 0 },
+					h('strong', {}, slide.name),
+					slide.description && h('span', {}, slide.description),
+				),
+			),
+		),
+	)
 	const tablist = switcher.querySelector('.icons')
 	const tabs = [...tablist.querySelectorAll('[role="tab"]')]
 	const timer = tablist.querySelector('.timer')

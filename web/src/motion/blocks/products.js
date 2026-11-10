@@ -27,13 +27,14 @@
  * - the pointer over the centred cube's front opens white holes along its trail (0.5s in, 1.5s out);
  * - the card and tab icon swap at once, no fade.
  */
+import { h, svg } from '../dom.js'
 import { mountScene } from '../mount.js'
 import { tabListKeyboard } from '../motion.js'
 import { createProductsScene } from '../webgl/scenes/products.js'
 
 /** The tab mark: a square that unfolds into an arrow on hover and focus (see .bt-arrow in baseten.css). */
 export const ARROW_SVG =
-	'<svg class="bt-arrow" aria-hidden="true" focusable="false" width="13" height="14" viewBox="0 0 13 14" fill="none"><g><path d="M3.536 3.536L3.536 10.607L10.607 3.536Z" fill="currentColor"/><path d="M10.607 10.607L10.607 3.536L3.536 10.607Z" fill="currentColor"/></g></svg>'
+	'<svg xmlns="http://www.w3.org/2000/svg" class="bt-arrow" aria-hidden="true" focusable="false" width="13" height="14" viewBox="0 0 13 14" fill="none"><g><path d="M3.536 3.536L3.536 10.607L10.607 3.536Z" fill="currentColor"/><path d="M10.607 10.607L10.607 3.536L3.536 10.607Z" fill="currentColor"/></g></svg>'
 
 export function mountProducts(
 	root,
@@ -51,14 +52,21 @@ export function mountProducts(
 	tablist.setAttribute('role', 'tablist')
 	tablist.setAttribute('aria-label', label)
 	tablist.setAttribute('aria-orientation', 'vertical')
-	tablist.innerHTML = products
-		.map(
-			(product) =>
-				`<button type="button" role="tab"><span>${product.name}</span><span class="mark">${ARROW_SVG}${
-					product.icon ? `<img src="${product.icon}" alt="">` : ''
-				}</span></button>`,
-		)
-		.join('')
+	tablist.replaceChildren(
+		...products.map((product) =>
+			h(
+				'button',
+				{ type: 'button', role: 'tab' },
+				h('span', {}, product.name),
+				h(
+					'span',
+					{ class: 'mark' },
+					svg(ARROW_SVG),
+					product.icon && h('img', { src: product.icon, alt: '' }),
+				),
+			),
+		),
+	)
 	const tabs = [...tablist.children]
 	cards.forEach((card) => card.setAttribute('role', 'tabpanel'))
 
