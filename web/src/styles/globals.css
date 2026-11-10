@@ -4,7 +4,6 @@
    parts (ev-*) from the system's pieces. Light only. */
 @import "tailwindcss";
 @import "./baseten.css" layer(components);
-@import "./motion-pending.css" layer(components);
 @import "./eval.css" layer(components);
 
 /* Geist and Geist Mono (OFL) ship inside the page (latin only), so a report opened from disk looks the same offline.

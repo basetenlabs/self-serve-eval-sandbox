@@ -149,17 +149,17 @@ textarea.bt-input.ev-pulls { min-block-size: 36px; max-block-size: 192px; resize
 /* Where the pull requests come from: three choices on Light Grey 1; the chosen one is Light Pink with a Black corner square. */
 .ev-sources { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--grid-gap); }
 @media (min-width: 640px) { .ev-sources { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.ev-source {
-  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-block-size: 132px; margin: 0; padding: 16px; border: 0;
-  background: var(--color-lightGrey1); color: var(--color-black); cursor: pointer; text-align: left; transition: background-color .3s;
+/* A source is a lifting cell (.bt-lift pink): it rises up-right on its Pink faces on hover and focus. */
+.ev-source > span {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-block-size: 132px; padding: 16px;
+  background: var(--color-lightGrey1); color: var(--color-black); text-align: left; transition: transform .4s var(--ease), background-color .3s;
 }
-.ev-source:hover { background: var(--color-lightGrey2); }
-.ev-source[data-state=checked] { background: var(--color-lightPink); }
-.ev-source[data-state=checked]:after { content: ""; position: absolute; top: 0; right: 0; inline-size: 12px; block-size: 12px; background: var(--color-black); }
-.ev-source > .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; inline-size: 100%; min-block-size: 20px; padding-inline-end: 12px; }
-.ev-source > .figure { margin-top: 12px; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
-.ev-source > .text { font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
-.ev-source[data-state=checked] > .text { color: var(--color-darkGrey1); }
+.ev-source[data-state=checked] > span { background: var(--color-lightPink); }
+.ev-source[data-state=checked] > span:after { content: ""; position: absolute; top: 0; right: 0; inline-size: 12px; block-size: 12px; background: var(--color-black); }
+.ev-source > span > .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; inline-size: 100%; min-block-size: 20px; padding-inline-end: 12px; }
+.ev-source > span > .figure { margin-top: 12px; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.ev-source > span > .text { font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
+.ev-source[data-state=checked] > span > .text { color: var(--color-darkGrey1); }
 
 /* The chosen source's own controls, under the cards: content on hairlines, no box. */
 .ev-panel { display: flex; flex-direction: column; gap: 24px; margin-top: 12px; }

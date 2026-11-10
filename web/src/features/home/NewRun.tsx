@@ -402,13 +402,15 @@ function Step({ n, children }: { n: string; children: React.ReactNode }) {
 
 function SourceTile({ value, title, figure, text, tag }: { value: Source; title: string; figure: string; text: string; tag?: string }) {
   return (
-    <RadioGroup.Item value={value} className="ev-source">
-      <span className="top">
-        <span className="label-mono">{title}</span>
-        {tag && <Badge variant="solid">{tag}</Badge>}
+    <RadioGroup.Item value={value} className="bt-lift pink ev-source">
+      <span>
+        <span className="top">
+          <span className="label-mono">{title}</span>
+          {tag && <Badge variant="solid">{tag}</Badge>}
+        </span>
+        <span className="figure">{figure}</span>
+        <span className="text">{text}</span>
       </span>
-      <span className="figure">{figure}</span>
-      <span className="text">{text}</span>
     </RadioGroup.Item>
   );
 }

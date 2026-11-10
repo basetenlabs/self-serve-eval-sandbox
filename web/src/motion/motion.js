@@ -403,16 +403,911 @@ export function animateNumber(element, options = {}) {
 	}
 }
 
+/* ---------- Tabs and steps ---------- */
+
+/**
+ * Tabs whose panels swap in place. Tabs are `[role="tab"]` inside `tablist`; `panels` are in the
+ * same order and hidden with the `hidden` attribute (give them `.bt-reveal` to fade in, 0.3s), or,
+ * for a `.bt-fade-stack`, stacked and cross-faded by the `active` class.
+ */
+export function tabs(tablist, panels, { onChange, initialIndex = 0 } = {}) {
+	const items = [...tablist.querySelectorAll('[role="tab"]')]
+	const list = [...panels]
+	let active = -1
+	function select(index) {
+		if (index === active) return
+		active = index
+		items.forEach((tab, at) => {
+			tab.setAttribute('aria-selected', String(at === index))
+			tab.classList.toggle('active', at === index)
+			tab.tabIndex = at === index ? 0 : -1
+		})
+		list.forEach((panel, at) => {
+			if (panel.parentElement?.classList.contains('bt-fade-stack')) {
+				panel.classList.toggle('active', at === index)
+				panel.inert = at !== index
+			} else panel.hidden = at !== index
+		})
+		onChange?.(index)
+	}
+	const onClick = (event) => {
+		const index = items.indexOf(event.target.closest('[role="tab"]'))
+		if (index >= 0) select(index)
+	}
+	tablist.addEventListener('click', onClick)
+	const removeKeyboard = tabListKeyboard(tablist, { onChange: select })
+	select(initialIndex)
+	return {
+		select,
+		dispose() {
+			tablist.removeEventListener('click', onClick)
+			removeKeyboard()
+		},
+	}
+}
+
+const PLAY_ICON =
+	'<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3 1.5L10.5 6L3 10.5V1.5Z" fill="currentColor"/></svg>'
+const PAUSE_ICON =
+	'<svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 1.5H5V10.5H2.5V1.5Z" fill="currentColor"/><path d="M7 1.5H9.5V10.5H7V1.5Z" fill="currentColor"/></svg>'
+
+/**
+ * Auto-advancing step list (`.bt-steps`), as in the site's feature sections. Desktop: every
+ * `seconds` (5) the next row opens; the 2px line under the active row shows the time left; the
+ * countdown holds while the pointer or keyboard focus is on the active row or on `frame` (the
+ * artwork beside the list), while the list is off screen, and after the pause button is pressed.
+ * Under reduced motion it starts paused and the button lets the reader opt in. Phones: no timer;
+ * the row nearest the middle of the screen is the active one.
+ *
+ * `stack`: a `.bt-fade-stack` whose children follow the steps (artwork, cards).
+ */
+export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
+	const rows = [...list.children]
+	const slides = stack ? [...stack.children] : []
+	const desktop = window.matchMedia('(min-width: 801px)')
+	const timer = createAutoplayTimer({
+		count: rows.length,
+		duration: seconds * 1000,
+		pauses: ['viewport'],
+	})
+	let mobileIndex = 0
+	let hovered = -1
+	let focused = -1
+	let frameHeld = false
+	let stopTimer
+
+	const control = Object.assign(document.createElement('button'), {
+		type: 'button',
+		className: 'bt-icon-button control',
+	})
+	control.addEventListener('click', () => timer.toggle('manual'))
+
+	const activeIndex = () => (desktop.matches ? timer.get().activeIndex : mobileIndex)
+	function render() {
+		const active = activeIndex()
+		rows.forEach((row, index) => {
+			row.classList.toggle('active', index === active)
+			row.querySelector('.title')?.setAttribute('aria-expanded', String(index === active))
+			const details = row.querySelector('.details')
+			if (details) details.inert = index !== active
+			const bar = row.querySelector('.timer')
+			if (bar)
+				bar.style.transform =
+					index === active && desktop.matches ? `scaleX(${timer.getProgress().toFixed(4)})` : ''
+		})
+		slides.forEach((slide, index) => slide.classList.toggle('active', index === active))
+		if (seconds > 0 && desktop.matches) rows[active]?.append(control)
+		else control.remove()
+		const paused = timer.isPausedBy('manual')
+		control.innerHTML = paused ? PLAY_ICON : PAUSE_ICON
+		control.setAttribute('aria-label', paused ? 'Resume autoplay' : 'Pause autoplay')
+		// Hold while attention is on what is showing
+		if (hovered === active || focused === active || frameHeld) timer.pause('hover')
+		else timer.resume('hover')
+		onChange?.(active)
+	}
+	const unsubscribe = timer.subscribe(render)
+	const offProgress = timer.onProgress((progress) => {
+		const bar = rows[timer.get().activeIndex]?.querySelector('.timer')
+		if (bar && desktop.matches) bar.style.transform = `scaleX(${progress.toFixed(4)})`
+	})
+
+	const rowOf = (target) =>
+		rows.indexOf(target instanceof Element ? target.closest('.bt-steps > li') : null)
+	const onClick = (event) => {
+		if (!event.target.closest('.title')) return
+		const index = rowOf(event.target)
+		if (index < 0) return
+		if (desktop.matches) timer.select(index)
+		else {
+			mobileIndex = index
+			render()
+			rows[index].scrollIntoView({ behavior: 'smooth', block: 'center' })
+		}
+	}
+	const onOver = (event) => {
+		if (event.pointerType === 'touch') return
+		hovered = rowOf(event.target)
+		render()
+	}
+	const onLeave = () => {
+		hovered = -1
+		render()
+	}
+	const onFocus = (event) => {
+		focused = event.target.matches?.(':focus-visible') ? rowOf(event.target) : -1
+		render()
+	}
+	const onBlur = () => {
+		focused = -1
+		render()
+	}
+	list.addEventListener('click', onClick)
+	list.addEventListener('pointerover', onOver)
+	list.addEventListener('pointerleave', onLeave)
+	list.addEventListener('focusin', onFocus)
+	list.addEventListener('focusout', onBlur)
+	const holdFrame = (held) => (event) => {
+		if (event.pointerType === 'touch') return
+		frameHeld = held
+		render()
+	}
+	const frameEnter = holdFrame(true)
+	const frameLeave = holdFrame(false)
+	frame?.addEventListener('pointerenter', frameEnter)
+	frame?.addEventListener('pointerleave', frameLeave)
+
+	const viewport = new IntersectionObserver(([entry]) => {
+		if (entry.isIntersecting) timer.resume('viewport')
+		else timer.pause('viewport')
+	})
+	viewport.observe(list)
+	// Phones: the row nearest the middle band of the screen is active
+	const inBand = new Set()
+	const band = new IntersectionObserver(
+		(entries) => {
+			if (desktop.matches) return
+			for (const entry of entries) {
+				if (entry.isIntersecting) inBand.add(entry.target)
+				else inBand.delete(entry.target)
+			}
+			const first = rows
+				.filter((row) => inBand.has(row))
+				.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0]
+			if (first) {
+				mobileIndex = rows.indexOf(first)
+				render()
+			}
+		},
+		{ rootMargin: '-40% 0px -40% 0px', threshold: 0 },
+	)
+	rows.forEach((row) => band.observe(row))
+
+	const sync = () => {
+		stopTimer?.()
+		stopTimer = desktop.matches && seconds > 0 ? startTimer(timer) : undefined
+		render()
+	}
+	desktop.addEventListener('change', sync)
+	if (reducedMotion()) timer.pause('manual')
+	sync()
+
+	return {
+		timer,
+		dispose() {
+			stopTimer?.()
+			unsubscribe()
+			offProgress()
+			viewport.disconnect()
+			band.disconnect()
+			desktop.removeEventListener('change', sync)
+			list.removeEventListener('click', onClick)
+			list.removeEventListener('pointerover', onOver)
+			list.removeEventListener('pointerleave', onLeave)
+			list.removeEventListener('focusin', onFocus)
+			list.removeEventListener('focusout', onBlur)
+			frame?.removeEventListener('pointerenter', frameEnter)
+			frame?.removeEventListener('pointerleave', frameLeave)
+			control.remove()
+		},
+	}
+}
+
+/* ---------- Accordion ---------- */
+
+const ACCORDION_CONTROLS = 'a, button, input, select, textarea, label, summary'
+
+/**
+ * `.bt-accordion`: the whole row toggles; the button stays the keyboard control. The answer opens
+ * from height 0 and opacity 0 to its own height in 0.4s power2.out, and closes the same way.
+ * `single` closes the open row when another opens.
+ */
+export function accordion(root, { single = false } = {}) {
+	const items = [...root.querySelectorAll(':scope > .item')]
+	function set(item, open) {
+		const button = item.querySelector('button[aria-expanded]')
+		const answer = item.querySelector('.answer')
+		if (item.classList.contains('open') === open) return
+		item.classList.toggle('open', open)
+		button.setAttribute('aria-expanded', String(open))
+		answer.inert = !open
+		const height = answer.firstElementChild.offsetHeight
+		if (reducedMotion()) {
+			gsap.set(answer, { height: open ? 'auto' : 0, opacity: open ? 1 : 0 })
+			return
+		}
+		if (open) {
+			gsap.fromTo(
+				answer,
+				{ height: 0, opacity: 0 },
+				{
+					height,
+					opacity: 1,
+					duration: 0.4,
+					ease: 'power2.out',
+					overwrite: 'auto',
+					onComplete: () => gsap.set(answer, { height: 'auto' }),
+				},
+			)
+		} else {
+			gsap.fromTo(
+				answer,
+				{ height, opacity: 1 },
+				{ height: 0, opacity: 0, duration: 0.4, ease: 'power2.out', overwrite: 'auto' },
+			)
+		}
+	}
+	function onClick(event) {
+		const item = event.target.closest('.bt-accordion > .item')
+		if (!item || item.parentElement !== root) return
+		const button = item.querySelector('button[aria-expanded]')
+		if (!button.contains(event.target)) {
+			// Links and controls in the answer keep their own click; selecting its text does not close it
+			const control = event.target.closest(ACCORDION_CONTROLS)
+			if (control && item.contains(control)) return
+			const selection = window.getSelection()
+			if (selection && !selection.isCollapsed) return
+		}
+		const open = !item.classList.contains('open')
+		if (open && single) items.forEach((other) => other !== item && set(other, false))
+		set(item, open)
+	}
+	items.forEach((item) => {
+		const open = item.classList.contains('open')
+		item.querySelector('button[aria-expanded]').setAttribute('aria-expanded', String(open))
+		item.querySelector('.answer').inert = !open
+	})
+	root.addEventListener('click', onClick)
+	return () => root.removeEventListener('click', onClick)
+}
+
+/* ---------- Header ---------- */
+
+/** Upward scroll distance before the bar slides back in, so jitter does not reveal it. */
+const REVEAL_TOLERANCE = 6
+
+/**
+ * The header on scroll. Until its place in the page leaves the screen it sits there; past it, on
+ * screens from 1025px, it is fixed and travels up with the page (`--nav-offset`), and an upward
+ * scroll of 6px slides it back in (`data-state="revealing"`, 0.5s). Narrower screens keep it fixed
+ * at the top. Also keeps `--nav-height` at the bar's measured height.
+ */
+export function stickyHeader(header) {
+	const large = window.matchMedia('(min-width: 1025px)')
+	let current = 'static'
+	let offset = 0
+	let lastY = window.scrollY
+	let upDistance = 0
+	let frame = 0
+	// Where the bar sits in the page: measured while it is still in its place
+	let flowTop = header.getBoundingClientRect().top + window.scrollY
+
+	const apply = (next, nextOffset = 0) => {
+		offset = nextOffset
+		header.style.setProperty('--nav-offset', `${offset}px`)
+		if (next === current) return
+		current = next
+		if (next === 'static') delete header.dataset.state
+		else header.dataset.state = next
+	}
+	const update = () => {
+		frame = 0
+		const top = flowTop - window.scrollY
+		const height = header.offsetHeight
+		const y = window.scrollY
+		const delta = y - lastY
+		lastY = y
+		if (top >= 0) return apply('static')
+		if (!large.matches) return apply('fixed')
+		if (current === 'static') {
+			// Still partly in its place: let it scroll away naturally
+			if (top > -height) return
+			apply('fixed', -height)
+		}
+		if (delta > 0) {
+			upDistance = 0
+			// Stop a reveal where it is and carry on scrolling the bar away from there
+			const from =
+				current === 'revealing'
+					? new DOMMatrixReadOnly(getComputedStyle(header).transform).m42
+					: offset
+			apply('fixed', Math.max(from - delta, -height))
+		} else if (delta < 0 && current !== 'revealing' && offset < 0) {
+			upDistance -= delta
+			if (upDistance >= REVEAL_TOLERANCE) apply('revealing')
+		}
+	}
+	const schedule = () => {
+		if (!frame) frame = requestAnimationFrame(update)
+	}
+	const syncHeight = () => {
+		document.documentElement.style.setProperty(
+			'--nav-height',
+			`${header.getBoundingClientRect().height}px`,
+		)
+	}
+	const sizes = new ResizeObserver(syncHeight)
+	sizes.observe(header)
+	syncHeight()
+	update()
+	window.addEventListener('scroll', schedule, { passive: true })
+	large.addEventListener('change', schedule)
+	return () => {
+		cancelAnimationFrame(frame)
+		sizes.disconnect()
+		window.removeEventListener('scroll', schedule)
+		large.removeEventListener('change', schedule)
+		delete header.dataset.state
+		header.style.removeProperty('--nav-offset')
+	}
+}
+
+// Hover intent: a pointer passing over a trigger does not open its menu
+const OPEN_DELAY = 120
+const SWITCH_DELAY = 200
+const CLOSE_DELAY = 200
+/** A click right after hover opened the menu should not close it again. */
+const CLICK_AFTER_HOVER = 400
+
+/**
+ * Header menus. A trigger is a `button[aria-controls]` in `.bt-nav .links` whose panel
+ * (`.bt-nav-panel`) sits in the same `<li data-menu>`; `.bt-nav-overlay` dims the page.
+ * Resting the mouse on a trigger opens its menu (120ms), or switches to it from another (200ms,
+ * swapped without a fade); leaving for anything else in the header closes it (200ms). Click and
+ * Enter toggle; Escape closes and returns focus; the page does not scroll while a menu is open.
+ * Also wires the menu button and `.bt-mobile-menu` (rows with `aria-controls` open their `.sub`).
+ */
+export function navMenus(header) {
+	const triggers = [...header.querySelectorAll('.bt-nav .links button[aria-controls]')]
+	const overlay = header.querySelector('.bt-nav-overlay')
+	const panelOf = (trigger) => document.getElementById(trigger.getAttribute('aria-controls'))
+	let openTrigger = null
+	let openedAt = 0
+	let openTimer = 0
+	let closeTimer = 0
+	const clearTimers = () => {
+		clearTimeout(openTimer)
+		clearTimeout(closeTimer)
+	}
+	function render(switched = false) {
+		header.classList.toggle('switched', switched)
+		for (const trigger of triggers) {
+			const open = trigger === openTrigger
+			trigger.setAttribute('aria-expanded', String(open))
+			const panel = panelOf(trigger)
+			panel?.classList.toggle('open', open)
+			if (panel) panel.inert = !open
+		}
+		overlay?.classList.toggle('open', !!openTrigger)
+		document.documentElement.style.overflow = openTrigger || mobileOpen ? 'hidden' : ''
+	}
+	function open(trigger, time) {
+		clearTimers()
+		if (trigger === openTrigger) return
+		const switched = !!openTrigger
+		openTrigger = trigger
+		openedAt = time
+		render(switched)
+	}
+	function close() {
+		clearTimers()
+		if (!openTrigger) return
+		openTrigger = null
+		render()
+	}
+	const isMouse = (event) => event.pointerType === 'mouse'
+	const cleanups = []
+	const on = (target, type, handler, options) => {
+		if (!target) return
+		target.addEventListener(type, handler, options)
+		cleanups.push(() => target.removeEventListener(type, handler, options))
+	}
+	for (const trigger of triggers) {
+		on(trigger, 'pointerenter', (event) => {
+			if (!isMouse(event)) return
+			clearTimers()
+			if (trigger === openTrigger) return
+			const delay = openTrigger ? SWITCH_DELAY : OPEN_DELAY
+			openTimer = setTimeout(() => open(trigger, event.timeStamp + delay), delay)
+		})
+		on(trigger, 'click', (event) => {
+			if (trigger !== openTrigger) return open(trigger, event.timeStamp)
+			if (event.timeStamp - openedAt > CLICK_AFTER_HOVER) close()
+		})
+		// Staying inside the open panel keeps it open
+		on(panelOf(trigger), 'pointerenter', (event) => isMouse(event) && clearTimers())
+	}
+	const scheduleClose = (event) => {
+		if (!isMouse(event)) return
+		clearTimers()
+		closeTimer = setTimeout(close, CLOSE_DELAY)
+	}
+	on(header, 'pointerover', (event) => {
+		if (!event.target.closest('[data-menu]')) scheduleClose(event)
+	})
+	on(header, 'pointerleave', scheduleClose)
+	on(overlay, 'click', close)
+	on(document, 'keydown', (event) => {
+		if (event.key !== 'Escape') return
+		if (openTrigger) {
+			const trigger = openTrigger
+			close()
+			trigger.focus()
+		} else if (mobileOpen) toggleMobile(false)
+	})
+
+	// Mobile sheet
+	const menuButton = header.querySelector('.bt-nav .menu')
+	const sheet = header.querySelector('.bt-mobile-menu')
+	let mobileOpen = false
+	function toggleMobile(next = !mobileOpen) {
+		mobileOpen = next
+		menuButton?.setAttribute('aria-expanded', String(next))
+		if (sheet) {
+			sheet.style.setProperty('--menu-top', `${header.getBoundingClientRect().bottom}px`)
+			sheet.classList.toggle('open', next)
+			sheet.inert = !next
+		}
+		render()
+	}
+	on(menuButton, 'click', () => toggleMobile())
+	if (sheet) {
+		sheet.inert = true
+		on(sheet, 'click', (event) => {
+			const row = event.target.closest('.row[aria-controls]')
+			if (!row) return
+			const expanded = row.getAttribute('aria-expanded') !== 'true'
+			row.setAttribute('aria-expanded', String(expanded))
+			const sub = document.getElementById(row.getAttribute('aria-controls'))
+			sub?.classList.toggle('expanded', expanded)
+			if (sub) sub.inert = !expanded
+		})
+	}
+	const large = window.matchMedia('(min-width: 1025px)')
+	const onLayout = () => (large.matches ? mobileOpen && toggleMobile(false) : close())
+	large.addEventListener('change', onLayout)
+	render()
+
+	return () => {
+		clearTimers()
+		large.removeEventListener('change', onLayout)
+		cleanups.forEach((cleanup) => cleanup())
+		document.documentElement.style.overflow = ''
+	}
+}
+
+/* ---------- Page ---------- */
+
+/**
+ * Smooth scrolling as on the site: Lenis with lerp 0.18 (off on screens up to 800px, where the
+ * native scroll is kept), driven from one frame loop. Off under reduced motion. Anchor links
+ * scroll in 0.5s. Returns the Lenis instance (null when not started) and a stop function.
+ *
+ *   import Lenis from 'lenis'
+ *   const { lenis } = smoothScroll(Lenis)
+ */
+export function smoothScroll(Lenis, options = {}) {
+	if (reducedMotion()) return { lenis: null, stop() {} }
+	const lenis = new Lenis({ lerp: window.innerWidth <= 800 ? 1 : 0.18, autoRaf: false, ...options })
+	let frame = requestAnimationFrame(function loop(time) {
+		lenis.raf(time)
+		frame = requestAnimationFrame(loop)
+	})
+	const onClick = (event) => {
+		const link = event.target.closest?.('a[href^="#"]')
+		const hash = link?.getAttribute('href')
+		if (!hash || hash.length < 2 || event.defaultPrevented) return
+		const target = document.getElementById(decodeURIComponent(hash.slice(1)))
+		if (!target) return
+		event.preventDefault()
+		history.replaceState(null, '', hash)
+		lenis.scrollTo(target, { duration: 0.5 })
+	}
+	document.addEventListener('click', onClick)
+	return {
+		lenis,
+		stop() {
+			cancelAnimationFrame(frame)
+			document.removeEventListener('click', onClick)
+			lenis.destroy()
+		},
+	}
+}
+
+/**
+ * Page changes on a multi-page site: a White sheet fades in over the page (0.4s power2.out) before
+ * the browser follows a same-site link, and fades out on arrival (0.4s, after 0.2s).
+ * Modified clicks, new-tab links, anchors and downloads are left to the browser.
+ */
+export function pageTransitions() {
+	if (reducedMotion()) return () => {}
+	const sheet = Object.assign(document.createElement('div'), { className: 'bt-page-transition' })
+	document.body.append(sheet)
+	const arrive = () =>
+		gsap.fromTo(
+			sheet,
+			{ opacity: 1 },
+			{ opacity: 0, duration: 0.4, ease: 'power2.out', delay: 0.2 },
+		)
+	if (sessionStorage.getItem('bt-page-transition')) {
+		sessionStorage.removeItem('bt-page-transition')
+		arrive()
+	}
+	const onClick = (event) => {
+		if (
+			event.defaultPrevented ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey ||
+			event.button !== 0
+		)
+			return
+		const link = event.target.closest?.('a[href]')
+		if (!link || link.target === '_blank' || link.hasAttribute('download')) return
+		const url = new URL(link.href, location.href)
+		if (
+			url.origin !== location.origin ||
+			(url.pathname === location.pathname && url.search === location.search)
+		)
+			return
+		event.preventDefault()
+		sessionStorage.setItem('bt-page-transition', '1')
+		gsap
+			.fromTo(sheet, { opacity: 0 }, { opacity: 1, duration: 0.4, ease: 'power2.out' })
+			.then(() => {
+				location.href = url.href
+			})
+	}
+	document.addEventListener('click', onClick)
+	// A page restored from the back-forward cache must not stay covered
+	const onShow = (event) => event.persisted && gsap.set(sheet, { opacity: 0 })
+	window.addEventListener('pageshow', onShow)
+	return () => {
+		document.removeEventListener('click', onClick)
+		window.removeEventListener('pageshow', onShow)
+		sheet.remove()
+	}
+}
+
+/* ---------- Text ---------- */
+
+/** Share of the reveal each letter takes to fade in. */
+const LETTER_FADE = 0.05
+/** Below this much scroll there is not enough to drive the reveal, so it plays on its own. */
+const MIN_SCROLL = 120
+/** The reveal never runs faster than this (ms, nothing to fully revealed). */
+const MIN_DURATION = 1200
+
+/**
+ * Headline that fills in letter by letter as it travels up the screen (`.bt-reveal-text`): it
+ * starts when the text's top reaches 85% of the viewport height and ends when its bottom reaches
+ * 35%. It only moves forward, never faster than 1.2s for the whole text, and plays by itself when
+ * the page has too little scroll left to drive it. Screen readers get the plain text.
+ */
+export function revealText(element, { from = 0.3, start = 0.85, end = 0.35 } = {}) {
+	const text = element.textContent.trim()
+	const words = text.split(/\s+/)
+	const letterCount = words.reduce((count, word) => count + word.length, 0)
+	let letterIndex = 0
+	const original = element.innerHTML
+	element.classList.add('bt-reveal-text')
+	element.style.setProperty('--from', from)
+	element.style.setProperty('--fade', LETTER_FADE)
+	const escape = (value) =>
+		value.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char])
+	element.innerHTML = `<span class="bt-sr-only">${escape(text)}</span><span aria-hidden="true">${words
+		.map(
+			(word) =>
+				`<span class="word">${[...word]
+					.map(
+						(letter) =>
+							`<span class="letter" style="--threshold:${(letterIndex++ / letterCount) * (1 - LETTER_FADE)}">${escape(letter)}</span>`,
+					)
+					.join('')}</span>`,
+		)
+		.join(' ')}</span>`
+
+	let frame = 0
+	let animationFrame = 0
+	let lastTime = 0
+	let target = 0
+	let percent = 0
+	const clamp = (value) => Math.min(Math.max(value, 0), 1)
+	const animate = (now) => {
+		const delta = lastTime ? now - lastTime : 16
+		lastTime = now
+		percent = Math.min(target, percent + delta / MIN_DURATION)
+		element.style.setProperty('--scroll-percent', String(percent))
+		if (percent < target) {
+			animationFrame = requestAnimationFrame(animate)
+			return
+		}
+		animationFrame = 0
+		lastTime = 0
+		if (percent === 1) stopListening()
+	}
+	const setTarget = (next) => {
+		if (next <= target) return
+		target = next
+		if (!animationFrame) animationFrame = requestAnimationFrame(animate)
+	}
+	const update = () => {
+		frame = 0
+		const { top, height } = element.getBoundingClientRect()
+		const revealStart = window.innerHeight * start
+		const revealEnd = window.innerHeight * end
+		// Near the bottom of the page the text may never reach the end line: squeeze the reveal so
+		// it finishes exactly as the page runs out
+		const scrollLeft = document.documentElement.scrollHeight - window.innerHeight - window.scrollY
+		const reachable = revealStart - (top - scrollLeft)
+		const distance = Math.min(height + revealStart - revealEnd, reachable)
+		if (distance < MIN_SCROLL) {
+			if (top < window.innerHeight) setTarget(1)
+			return
+		}
+		setTarget(clamp((revealStart - top) / distance))
+	}
+	const requestUpdate = () => {
+		if (!frame) frame = requestAnimationFrame(update)
+	}
+	const sizes = new ResizeObserver(requestUpdate)
+	function stopListening() {
+		window.removeEventListener('scroll', requestUpdate)
+		window.removeEventListener('resize', requestUpdate)
+		sizes.disconnect()
+		cancelAnimationFrame(frame)
+		cancelAnimationFrame(animationFrame)
+	}
+	window.addEventListener('scroll', requestUpdate, { passive: true })
+	window.addEventListener('resize', requestUpdate)
+	sizes.observe(element)
+	update()
+	return () => {
+		stopListening()
+		element.innerHTML = original
+	}
+}
+
+const GLYPHS = '0123456789#$%&*+/<>?'
+
+/**
+ * A value that scrambles in once on screen (`.bt-odometer`): characters appear left to right 0.04s
+ * apart, each flickering through random digits and symbols every 0.05s; from 0.6s they lock into
+ * the real characters, 0.1s apart. Reduced motion shows the value.
+ */
+export function odometer(element, value = element.textContent.trim()) {
+	const chars = [...value]
+	element.classList.add('bt-odometer', 'idle')
+	element.innerHTML = `<span class="bt-sr-only">${value}</span>${chars
+		.map(
+			(char) =>
+				`<span class="char" aria-hidden="true"><span class="sizer">${char}</span><span class="glyph">${char}</span></span>`,
+		)
+		.join('')}`
+	const glyphs = [...element.querySelectorAll('.glyph')]
+	const write = (index, text) => {
+		if (glyphs[index].textContent !== text) glyphs[index].textContent = text
+	}
+	const settle = () => chars.forEach((char, index) => write(index, char))
+	let tween
+	const observer = new IntersectionObserver(([entry]) => {
+		if (!entry.isIntersecting) return
+		observer.disconnect()
+		element.classList.remove('idle')
+		if (reducedMotion()) return settle()
+		chars.forEach((_, index) => write(index, ''))
+		const swaps = chars.map(() => -1)
+		const progress = { time: 0 }
+		const duration = 0.6 + (chars.length - 1) * 0.1
+		tween = gsap.to(progress, {
+			time: duration,
+			duration,
+			onUpdate() {
+				const swap = Math.floor(progress.time / 0.05)
+				chars.forEach((char, index) => {
+					if (progress.time < index * 0.04) write(index, '')
+					else if (/\s/.test(char) || progress.time >= 0.6 + index * 0.1) write(index, char)
+					else if (swaps[index] !== swap) {
+						swaps[index] = swap
+						write(index, GLYPHS[Math.floor(Math.random() * GLYPHS.length)])
+					}
+				})
+			},
+			onComplete: settle,
+		})
+	})
+	observer.observe(element)
+	return () => {
+		observer.disconnect()
+		tween?.kill()
+		settle()
+	}
+}
+
+// Two full cycles so every digit visibly rolls, even when the target is 0
+const STRIP = Array.from({ length: 20 }, (_, index) => index % 10)
+
+/**
+ * A value that changes while it is shown (a calculator total): `set(value)` rolls each digit's
+ * strip to its number in 0.55s power3.out.
+ */
+export function rollingNumber(element, initial = element.textContent.trim()) {
+	element.classList.add('bt-odometer')
+	let shown = ''
+	function set(value) {
+		value = String(value)
+		const first = !shown
+		if (value.length !== shown.length || first) {
+			element.innerHTML = `<span class="bt-sr-only"></span>${[...value]
+				.map((char) =>
+					/\d/.test(char)
+						? `<span class="digit" aria-hidden="true"><span class="sizer">${char}</span><span class="strip">${STRIP.map((digit) => `<span>${digit}</span>`).join('')}</span></span>`
+						: `<span aria-hidden="true">${char}</span>`,
+				)
+				.join('')}`
+		}
+		element.firstElementChild.textContent = value
+		const cells = [...element.children].slice(1)
+		;[...value].forEach((char, index) => {
+			const strip = cells[index]?.querySelector('.strip')
+			if (!strip) {
+				if (cells[index]) cells[index].textContent = char
+				return
+			}
+			const yPercent = (-(10 + Number(char)) / STRIP.length) * 100
+			if (first || value.length !== shown.length || reducedMotion()) gsap.set(strip, { yPercent })
+			else gsap.to(strip, { yPercent, duration: 0.55, ease: 'power3.out', overwrite: true })
+		})
+		shown = value
+	}
+	set(initial)
+	return { set }
+}
+
+/**
+ * `.bt-marquee`: its content repeated in a row that drifts left (`speed` px per ms, 0.02), faster
+ * while the page scrolls (pass the Lenis instance), and can be dragged and thrown. Runs only on
+ * screen; still under reduced motion.
+ */
+export function marquee(
+	container,
+	{ speed = 0.02, repeat = 3, reverse = false, lenis, draggable = true } = {},
+) {
+	const content = [...container.childNodes]
+	const track = Object.assign(document.createElement('div'), { className: 'track' })
+	const items = Array.from({ length: repeat }, (_, index) => {
+		const item = document.createElement('div')
+		item.append(...content.map((node) => (index ? node.cloneNode(true) : node)))
+		if (index) item.setAttribute('aria-hidden', 'true')
+		return item
+	})
+	track.append(...items)
+	container.append(track)
+
+	let position = 0
+	let velocity = 0
+	let dragging = false
+	let lastX = 0
+	let inView = false
+	let previous
+	let frame = 0
+	const observer = new IntersectionObserver(([entry]) => (inView = entry.isIntersecting))
+	observer.observe(container)
+	const loop = (time) => {
+		const delta = time - (previous ?? time)
+		previous = time
+		frame = requestAnimationFrame(loop)
+		if (!inView || reducedMotion()) return
+		if (Math.abs(velocity) > 0.001) {
+			position += velocity * delta * 10
+			velocity *= 0.93 // inertia
+		} else {
+			velocity = 0
+			let step = speed
+			if (window.innerWidth > 800) step *= 1 + Math.abs((lenis?.velocity || 0) * 0.1)
+			position += delta * step * (reverse ? -1 : 1)
+		}
+		const width = items[0].offsetWidth || 1
+		track.style.transform = `translate3d(${-(((position % width) + width) % width)}px, 0, 0)`
+	}
+	frame = requestAnimationFrame(loop)
+	const onDown = (event) => {
+		if (!draggable) return
+		dragging = true
+		lastX = event.clientX
+		velocity = 0
+	}
+	const onMove = (event) => {
+		if (!dragging) return
+		velocity = (event.clientX - lastX) * -0.01
+		lastX = event.clientX
+	}
+	const onUp = () => (dragging = false)
+	container.addEventListener('pointerdown', onDown)
+	document.addEventListener('pointermove', onMove)
+	document.addEventListener('pointerup', onUp)
+	return () => {
+		cancelAnimationFrame(frame)
+		observer.disconnect()
+		container.removeEventListener('pointerdown', onDown)
+		document.removeEventListener('pointermove', onMove)
+		document.removeEventListener('pointerup', onUp)
+	}
+}
+
 /* ---------- Wire everything from the markup ---------- */
 
 /**
  * Finds every motion hook under `root` and starts it. Returns one function that stops them all.
- * Hooks: `[data-rotate]` on a `.bt-logos` list; `.bt-number[data-count]`; `i.hole` texture holes.
+ *
+ * | Markup                                            | Starts                         |
+ * | ------------------------------------------------- | ------------------------------ |
+ * | `.bt-header`                                      | stickyHeader, navMenus         |
+ * | `.bt-logos[data-rotate]`                          | rotateLogos                    |
+ * | `.bt-logos > i.hole`, `[data-texture-hole]`       | alignTexture                   |
+ * | `.bt-number[data-count]`                          | animateNumber                  |
+ * | `[data-odometer]`                                 | odometer                       |
+ * | `[data-reveal-text]`                              | revealText                     |
+ * | `.bt-accordion` (`data-single` for one at a time) | accordion                      |
+ * | `.bt-steps` (`data-seconds`, `data-stack="#id"`, `data-frame="#id"`) | steps       |
+ * | `[role=tablist][data-panels="#id"]`               | tabs over that element's children |
+ * | `.bt-marquee`                                     | marquee                        |
+ *
+ * Page-wide pieces are opt-in: `smoothScroll(Lenis)` and `pageTransitions()`.
  */
 export function initMotion(root = document) {
 	const stops = []
-	for (const list of root.querySelectorAll('.bt-logos[data-rotate]')) stops.push(rotateLogos(list))
-	for (const number of root.querySelectorAll('.bt-number[data-count]')) stops.push(animateNumber(number))
+	const each = (selector, start) => {
+		for (const element of root.querySelectorAll(selector)) {
+			const stop = start(element)
+			stops.push(typeof stop === 'function' ? stop : () => stop?.dispose?.())
+		}
+	}
+	const find = (selector) => (selector ? document.querySelector(selector) : undefined)
+	each('.bt-header', (header) => {
+		const stopSticky = stickyHeader(header)
+		const stopMenus = navMenus(header)
+		return () => (stopSticky(), stopMenus())
+	})
+	each('.bt-logos[data-rotate]', (list) => rotateLogos(list))
+	each('.bt-number[data-count]', (number) => animateNumber(number))
+	each('[data-odometer]', (element) => odometer(element))
+	each('[data-reveal-text]', (element) => revealText(element))
+	each('.bt-accordion', (element) =>
+		accordion(element, { single: element.hasAttribute('data-single') }),
+	)
+	each('.bt-steps', (list) =>
+		steps(list, {
+			seconds: Number(list.dataset.seconds ?? 5),
+			stack: find(list.dataset.stack),
+			frame: find(list.dataset.frame),
+		}),
+	)
+	each('[role="tablist"][data-panels]', (tablist) =>
+		tabs(tablist, find(tablist.dataset.panels)?.children ?? []),
+	)
+	each('.bt-marquee', (element) => marquee(element))
 	const holes = root.querySelectorAll('.bt-logos > i.hole, [data-texture-hole]')
 	if (holes.length) stops.push(alignTexture(holes))
 	return () => stops.forEach((stop) => stop())
