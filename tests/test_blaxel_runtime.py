@@ -121,6 +121,20 @@ class RuntimeTests(unittest.TestCase):
                 runtime.download("sb", "/workspace/.git/pr-eval.patch", Path(d) / "p")
             self.assertEqual(sandbox.fs.read_binary.call_count, 3)
 
+    def test_a_file_is_uploaded_from_its_mapping_not_read_into_memory(self):
+        # An attempt per model uploads a ~200 MB source at once; read whole, 20 of them filled the host.
+        seen = []
+        sandbox = mock.Mock()
+        sandbox.fs.write_binary.side_effect = lambda remote, data: seen.append((type(data), bytes(data[:4]), len(data)))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(runtime, "get", return_value=sandbox):
+            (Path(d) / "src.tar.gz").write_bytes(b"head" + b"x" * 100)
+            (Path(d) / "empty").write_bytes(b"")
+            runtime.upload("sb", Path(d) / "src.tar.gz", "/tmp/source.tar.gz")
+            runtime.upload("sb", Path(d) / "empty", "/tmp/empty")
+        self.assertEqual(seen[0][1:], (b"head", 104))
+        self.assertFalse(issubclass(seen[0][0], (bytes, bytearray)))
+        self.assertEqual(seen[1], (bytes, b"", 0))
+
     def test_failed_patch_capture_is_not_a_model_failure(self):
         with mock.patch.object(runner, "sh", return_value=(1, "git failed", False)):
             with self.assertRaises(runtime.RuntimeError):

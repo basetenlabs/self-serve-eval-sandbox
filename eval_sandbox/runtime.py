@@ -10,6 +10,7 @@ import builtins
 import hashlib
 import io
 import json
+import mmap
 import os
 import re
 import secrets
@@ -226,8 +227,14 @@ def upload(name: str, local: Path, remote: str) -> None:
             result = execute(name, f"mkdir -p {shlex.quote(remote)} && tar -xf {target} -C {shlex.quote(remote)} && rm {target}", timeout=120)
             if result.code:
                 raise RuntimeError("Could not unpack uploaded files.")
+        elif local.stat().st_size:
+            # Mapped, not read: a task's source is about 200 MB, and an attempt per model starts at once.
+            # Read into memory, 20 copies filled an 8 GB host and the kernel killed the run. Mapped pages
+            # are the file's own cache, which the kernel can drop; the upload sends 5 MB parts from it.
+            with local.open("rb") as file, mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                sandbox.fs.write_binary(remote, data)
         else:
-            sandbox.fs.write_binary(remote, local.read_bytes())
+            sandbox.fs.write_binary(remote, b"")
 
     try:
         twice(transfer)
