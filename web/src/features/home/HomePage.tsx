@@ -136,15 +136,17 @@ function LiveBanner({ run }: { run: Run }) {
   const share = p.total ? p.done / p.total : 0;
   return (
     <Surface as="div" className="tight">
-      <a href={href({ page: "run", id: run.id })} className="ev-live">
-        <span className="label-mono inline-flex items-center gap-2"><LiveDot /> Run in progress</span>
-        <span className="title">{run.title}</span>
-        <span className="label-mono text-muted-foreground">
-          {run.board?.sandboxes ? `${run.board.sandboxes} sandboxes live · ` : ""}{p.total ? `${p.done} of ${p.total} attempts done` : run.detail}
-        </span>
-        <span className="watch">Watch it <Chevron /></span>
-        <span className="meter" aria-hidden><i style={{ transform: `scaleX(${share})` }} /></span>
-      </a>
+      <div className="bt-press">
+        <a href={href({ page: "run", id: run.id })} className="ev-live">
+          <span className="label-mono inline-flex items-center gap-2"><LiveDot /> Run in progress</span>
+          <span className="title">{run.title}</span>
+          <span className="label-mono text-muted-foreground">
+            {run.board?.sandboxes ? `${run.board.sandboxes} sandboxes live · ` : ""}{p.total ? `${p.done} of ${p.total} attempts done` : run.detail}
+          </span>
+          <span className="watch">Watch it <Chevron /></span>
+          <span className="meter" aria-hidden><i style={{ transform: `scaleX(${share})` }} /></span>
+        </a>
+      </div>
     </Surface>
   );
 }

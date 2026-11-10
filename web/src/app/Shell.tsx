@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
 import { href, type Route } from "@/lib/hooks";
+import { useMotion } from "@/lib/motion";
 import type { AppState } from "@/lib/types";
 
 /** The page frame: the app bar on the texture, the page's White surfaces, and a one-line footer. */
@@ -18,9 +19,11 @@ export function Shell({ state, route, go, offline, children }: {
   const sandboxes = live?.board?.sandboxes ?? 0;
   const run = route.page === "run" ? state?.runs.find((r) => r.id === route.id) : undefined;
   const home = (e: React.MouseEvent) => { e.preventDefault(); go({ page: "home" }); };
+  const page = React.useRef<HTMLDivElement>(null);
+  useMotion(page, [route.page, route.page === "run" && route.id]); // the skill's markup hooks on each page
 
   return (
-    <div className="bt-page ev-shell">
+    <div className="bt-page ev-shell" ref={page}>
       <header className="bt-appbar">
         <a href="#/" onClick={home} className="logo" aria-label="Self-Serve Model Eval Sandbox home"><BasetenLogo /></a>
         <nav aria-label="Pages">

@@ -3,6 +3,7 @@ import { BasetenLogo, Spacer, Surface } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ReportHeader, Results, Tasks } from "@/features/report/ReportView";
+import { useMotion } from "@/lib/motion";
 import type { Report } from "@/lib/types";
 
 /** A run's report as one shareable page: it works from disk, offline, with the data inside it. */
@@ -10,9 +11,11 @@ export function ReportApp({ report }: { report: Report }) {
   // A PR opened from the head-to-head and one opened in the tasks table share one sheet.
   const [taskId, setTaskId] = React.useState<string | null>(null);
   const served = location.protocol.startsWith("http"); // opened through pr-eval serve, not from disk
+  const page = React.useRef<HTMLDivElement>(null);
+  useMotion(page); // the skill's markup hooks
   return (
     <TooltipProvider>
-        <div className="bt-page ev-shell">
+        <div className="bt-page ev-shell" ref={page}>
           <header className="bt-appbar">
             <span className="logo"><BasetenLogo /></span>
             <nav aria-label="Pages">

@@ -45,7 +45,7 @@ export function RunsList({ runs, go }: { runs: Run[]; go: (r: Route) => void }) 
       </Table>
       <ul className="sm:hidden" aria-label="Runs">
         {runs.map((r) => (
-          <li key={r.id}>
+          <li key={r.id} className="bt-press">
             <a href={href({ page: "run", id: r.id })} className="ev-run-card">
               <span className="flex items-start justify-between gap-3">
                 <Title run={r} link={false} />

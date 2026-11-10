@@ -48,6 +48,7 @@
 @media (max-width: 1024.98px) { :root { --nav-height: 78px; } }   /* the bar gains 16px of texture above and below */
 
 *, :before, :after { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* the classes below set display, which would otherwise undo the attribute */
 html { -webkit-tap-highlight-color: transparent; }
 body {
   margin: 0; font-family: var(--beausite); font-size: 16px; line-height: 1.4;
@@ -178,9 +179,6 @@ img, svg { display: block; }
 /* With a chevron (assets/icons/chevron-right.svg in a 16px box): label left, chevron right, label at least 128px. */
 .bt-button.has-chevron > span { padding-inline-end: calc(10px - var(--button-border)); }
 .bt-button .chevron { flex-shrink: 0; inline-size: 16px; block-size: 16px; display: inline-flex; align-items: center; justify-content: center; overflow: clip; }
-/* On hover the chevron slides out to the right and back in from the left. */
-@keyframes bt-chevron { 0% { transform: translate(0); opacity: 1; } 49% { transform: translate(100%); opacity: 0; } 50% { transform: translate(-100%); opacity: 0; } 100% { transform: translate(0); opacity: 1; } }
-.bt-button:is(:hover, :focus-visible):not(:disabled, [aria-disabled=true]) .chevron > svg { animation: bt-chevron .4s var(--ease); }
 @media (min-width: 801px) { .bt-button.has-chevron .label { min-inline-size: 128px; text-align: start; } }
 .bt-button:focus-visible { --button-lift: 5px; }
 .bt-button.primary:focus-visible, .bt-button:not(.secondary):not(.tertiary):focus-visible { --button-hover-background: #242424; }
@@ -287,7 +285,8 @@ img, svg { display: block; }
 .bt-hero-composition { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; gap: var(--grid-gap); min-inline-size: 0; }
 .bt-hero-composition > .content { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1.5rem; background: var(--color-white); }
 .bt-hero-composition > .visual { grid-column: 1 / -1; position: relative; overflow: clip; block-size: 87.3156cqw; min-inline-size: 0; }
-.bt-hero-composition > .visual > :is(img, svg, canvas, video) { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+.bt-hero-composition > .visual > :is(img, svg, canvas, video, .bt-webgl) { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+.bt-hero-composition > .visual:has(> .bt-webgl) { background: var(--color-lightGrey2); }   /* behind the live scene until it has rendered */
 @media (min-width: 801px) {
   .bt-hero-composition > .content { grid-area: 1 / 1 / auto / span 4; z-index: 1; align-self: start; margin-inline-end: calc(-1 * var(--grid-gap)); padding: 0 1.5rem 1.5rem 0; }
   .bt-hero-composition > .visual { grid-row: 1; block-size: max(24rem, calc(100cqw * 492 / 1368)); }
@@ -306,12 +305,25 @@ img, svg { display: block; }
 @media (min-width: 801px) { .bt-logos > i.hole { display: none; } }
 @media (max-width: 800.98px) { .bt-logos > .bt-logo-tile.phone-plain { background: var(--color-lightGrey1); } }   /* drop a tint that would sit beside another on phones */
 .switcher .icons { position: relative; display: flex; gap: .25rem; padding: .5rem .625rem; background: var(--color-white); }
-.switcher .icons:after { content: ""; position: absolute; inset: 100% 0 auto; block-size: 2px; background: var(--slide-accent, var(--color-green)); transform-origin: 0; transform: scaleX(.35); }   /* progress line under the row */
-.switcher .icons > * { position: relative; display: block; padding: .25rem; border: 0; background: none; cursor: pointer; }
-.switcher .icons img { inline-size: 1.5rem; block-size: 1.5rem; opacity: .3; }
+/* Autoplay line under the row: 2px in the active product's Base colour, scaled from the left by the time elapsed
+   (motion/blocks/home-hero.js drives .timer; a static mock may set its scaleX by hand). */
+.switcher .icons > .timer { position: absolute; inset: 100% 0 auto; block-size: 2px; padding: 0; background: var(--slide-accent, var(--color-green)); transform-origin: left; transform: scaleX(.35); cursor: auto; }
+.switcher .icons > * { position: relative; display: block; padding: .25rem; border: 0; background: none; cursor: pointer; transition: background-color .3s; }
+.switcher .icons > :focus-visible { outline: 2px solid var(--color-black); outline-offset: 0; }
+.switcher .icons img { display: block; inline-size: 1.5rem; block-size: 1.5rem; opacity: .3; transition: opacity .2s; }
 .switcher .icons .active { background: var(--slide-background, var(--color-lightGreen)); }
-.switcher .icons .active img { opacity: 1; }
-.switcher .card { display: flex; flex-direction: column; gap: .125rem; padding: .875rem; background: var(--color-white); }
+.switcher .icons .active img, .switcher .icons :focus-visible img { opacity: 1; }
+/* Product name on hover, above the icon: mono tag on Light Grey 1, fades in 0.2s. The first one starts at its tab. */
+.switcher .icons .tooltip { position: absolute; inset-block-end: calc(100% + .375rem); inset-inline-start: 50%; padding: .125rem .25rem; font: 400 12px/1.25 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; color: var(--color-black); background: var(--color-lightGrey1); opacity: 0; pointer-events: none; translate: -50% 0; transition: opacity .2s; }
+.switcher .icons :focus-visible .tooltip { opacity: 1; }
+.switcher .icons > :first-child .tooltip { inset-inline-start: 0; translate: none; }
+@media (hover: hover) { .switcher .icons > :hover :is(img, .tooltip) { opacity: 1; } }
+/* The card fades out while the blocks sink, changes while they are hidden, and fades back in as they rise. */
+.switcher .card { padding: .875rem; background: var(--color-white); transition: opacity .3s, visibility .3s; }
+.switcher .card.hidden { visibility: hidden; opacity: 0; }
+.switcher .card, .switcher .card > .slide { display: flex; flex-direction: column; gap: .125rem; }
+.switcher .card > .slide { max-inline-size: 22.5rem; }
+.switcher .card > .slide[hidden] { display: none; }
 .switcher .card strong { font: 500 16px/1.4 var(--beausite); }
 .switcher .card span { font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey1); text-wrap: balance; }
 /* Product/page hero: visual on top, then an 80px two-line title on 92px ruled rows with copy + CTAs in a 448px right column. */
@@ -325,10 +337,48 @@ img, svg { display: block; }
   .bt-title-rows h1 { font-size: 56px; line-height: 1.1; letter-spacing: -.02em; inset-block-start: 0; }
 }
 
+/* Product page hero: a wide scene (342:115) with the product subnav cut into its top right and a White notch at its
+   bottom left, then the ruled title on the page's 12 columns: heading in 1 to 8, copy and CTAs in 9 to 12.
+   motion/blocks/product-hero.js mounts the live scene in .scene. */
+.bt-product-hero.bt-surface { container-type: inline-size; padding-block: 1.5rem; row-gap: 2.5rem; }
+.bt-product-hero > .visual { grid-column: 1 / -1; order: 2; position: relative; min-inline-size: 0; aspect-ratio: 339 / 424; overflow: clip; background: var(--color-lightGrey1); }
+.bt-product-hero > .visual > .scene { position: absolute; inset: 0; pointer-events: none; }   /* the scene reads the pointer from the window, so the page under it stays clickable */
+.bt-product-hero > .visual > .scene > :is(img, svg, video) { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.bt-product-hero > .visual > .subnav { display: none; }   /* phones: the header's Products menu does this job */
+.bt-product-hero > .visual > .metric { position: absolute; inset-block-end: 10px; inset-inline-end: 10px; margin: 0; padding: 6px 8px; font: 400 14px/1.2 var(--geist-mono); letter-spacing: .02em; text-transform: uppercase; color: var(--color-black); background: var(--product-base, var(--color-green)); white-space: nowrap; }
+.bt-product-hero > .bt-title-rows { grid-column: 1 / -1; min-inline-size: 0; }
+.bt-product-hero > .bt-title-rows > h1 { min-inline-size: 0; overflow-wrap: break-word; text-wrap: balance; }
+@media (max-width: 800.98px) {
+  .bt-product-hero > .bt-title-rows > h1 { white-space: normal; }
+  .bt-product-hero > .bt-title-rows > .bt-ctas { grid-template-columns: max-content; justify-items: stretch; }
+}
+@media (min-width: 801px) {
+  .bt-product-hero.bt-surface { padding-block: .75rem 4rem; row-gap: 1.5rem; }
+  .bt-product-hero > .visual { order: 0; aspect-ratio: 342 / 115; }
+  .bt-product-hero > .visual:after { content: ""; position: absolute; inset-inline-start: 0; inset-block-end: 0; inline-size: calc((100% - 11 * var(--grid-gap)) / 12 * 4 + 4 * var(--grid-gap)); block-size: 1.5rem; background: var(--color-white); }
+  .bt-product-hero > .visual > .subnav { display: block; position: absolute; inset-block-start: 0; inset-inline-end: 0; inline-size: calc((100% - 11 * var(--grid-gap)) / 12 * 3 + 3 * var(--grid-gap)); padding: 6px 12px 12px; background: var(--color-white); }
+  .bt-product-hero > .visual > .metric { inset-block-end: .75rem; inset-inline-end: .75rem; }
+  .bt-product-hero > .bt-title-rows { grid-template-columns: subgrid; }
+  .bt-product-hero > .bt-title-rows > h1 { grid-column: 1 / span 8; }
+  .bt-product-hero > .bt-title-rows > :is(.description, .bt-ctas) { grid-column: 9 / span 4; min-inline-size: 0; }
+  .bt-product-hero > .bt-title-rows > .description { padding-inline-end: 0; }
+  .bt-product-hero > .bt-title-rows > .bt-ctas { display: flex; flex-wrap: wrap; grid-row: 2 / -1; align-self: start; row-gap: calc(var(--title-row) - 36px); }
+  .bt-product-hero > .bt-title-rows > .bt-ctas > * { flex: 1 1 0; min-inline-size: max-content; }
+  .bt-product-hero > .bt-title-rows > .bt-ctas > :only-child { flex: none; }
+}
+
+/* A number that counts once in view (motion.js animateNumber): layers share one cell as wide as the longest text,
+   right-aligned, so the units digit never moves. Reduced motion shows the final number. */
+.bt-number { position: relative; display: inline-grid; justify-items: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bt-number > * { grid-area: 1 / 1; }
+.bt-number > .sizer { visibility: hidden; }
+@media (prefers-reduced-motion: no-preference) { .bt-number > .value { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); } }
+@media (prefers-reduced-motion: reduce) { .bt-number > .text { display: none; } }
+
 /* Scene with blocks cut into it (products section, product hero): a full-width picture with White blocks over its corners. */
 .bt-scene { grid-column: 1 / -1; position: relative; display: grid; grid-template-columns: subgrid; min-block-size: 480px; }
 .bt-scene > .visual { grid-column: 1 / -1; grid-row: 1; position: relative; overflow: clip; min-block-size: inherit; }
-.bt-scene > .visual > :is(img, svg, canvas, video) { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+.bt-scene > .visual > :is(img, svg, canvas, video, .bt-webgl) { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
 /* A tab list or copy block covering a top corner: White, flush with the scene's edges. */
 .bt-scene > .corner { grid-row: 1; grid-column: 1 / -1; z-index: 1; align-self: start; padding: 6px 12px 24px; background: var(--color-white); }
 /* A card floating in a bottom corner: a texture margin (16px) around White blocks 20px apart. */
@@ -343,6 +393,12 @@ img, svg { display: block; }
 .bt-float-card blockquote { margin: 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
 .bt-float-card .quote > :last-child:not(blockquote) { font: 400 12px/1.2 var(--geist-mono); letter-spacing: .02em; text-transform: uppercase; color: var(--color-darkGrey3); }
 .bt-scene > .bt-float-card { grid-row: 3; grid-column: 1 / -1; z-index: 1; padding: 0; background: none; }
+.bt-float-card[hidden] { display: none; }
+/* Several customers in a card: names in a row; the chosen one Black, the rest Dark Grey 3 (Dark Grey 2 on hover), 0.15s. */
+.bt-float-card .customers { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.bt-float-card .customers > button { margin: 0; padding: 0; border: 0; background: none; cursor: pointer; text-align: start; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; color: var(--color-darkGrey3); transition: color .15s ease-out; }
+.bt-float-card .customers > button:is(:hover, :focus-visible) { color: var(--color-darkGrey2); }
+.bt-float-card .customers > [aria-pressed=true] { color: var(--color-black); }
 /* Phones: tabs, then the picture, then the card's contents, all on the page margin; the card's name row is dropped. */
 @media (max-width: 800.98px) {
   .bt-scene { min-block-size: 0; }
@@ -397,8 +453,23 @@ img, svg { display: block; }
 }
 .bt-tabs > :is(a, button):hover { color: var(--color-darkGrey2); border-color: var(--color-darkGrey2); }
 .bt-tabs > .active, .bt-tabs > [aria-selected=true] { color: var(--color-black); border-color: var(--color-black); }
-.bt-tabs > * > svg, .bt-tabs > * > img { flex-shrink: 0; inline-size: 14px; block-size: 14px; color: var(--color-lightGrey2); }
-.bt-tabs > .active > svg { color: inherit; }
+.bt-tabs > :is(a, button):focus-visible { color: var(--color-darkGrey2); border-color: var(--color-darkGrey2); }
+.bt-tabs > * > svg, .bt-tabs > * > img, .bt-tabs .mark { flex-shrink: 0; inline-size: 14px; block-size: 14px; color: var(--color-lightGrey2); }
+.bt-tabs > .active > svg, .bt-tabs > :is(:hover, :focus-visible, .active) > .mark { color: inherit; }
+/* A tab's mark (motion/blocks/products.js): the square that unfolds into an arrow on hover; the product icon once selected. */
+.bt-tabs .mark { display: grid; place-items: center; }
+.bt-tabs .mark > * { grid-area: 1 / 1; }
+.bt-tabs .mark > img { inline-size: 100%; block-size: 100%; }
+.bt-tabs > :not(.active) > .mark > img, .bt-tabs > .active > .mark > .bt-arrow:has(+ img) { display: none; }
+/* The arrow mark: two triangles that sit as a square and, on hover or focus of the link around them, turn a quarter
+   and unfold into a right-pointing arrow. 0.4s on the lift curve. (Path morphing needs the CSS d property: Chromium;
+   elsewhere the square only turns.) */
+.bt-arrow { flex-shrink: 0; inline-size: 13px; block-size: 14px; overflow: visible; }
+.bt-arrow g { transform-origin: 6.5px 7px; transform: rotate(90deg); transition: transform .4s var(--ease); }
+.bt-arrow path { transition: d .4s var(--ease); }
+:is(a, button):is(:hover, :focus-visible) .bt-arrow g, .bt-arrow.open g { transform: none; }
+:is(a, button):is(:hover, :focus-visible) .bt-arrow path:first-child, .bt-arrow.open path:first-child { d: path("M10 7L5 2L5 7Z"); }
+:is(a, button):is(:hover, :focus-visible) .bt-arrow path:last-child, .bt-arrow.open path:last-child { d: path("M10 7L5 7L5 12Z"); }
 .bt-tabs.compact { gap: 6px; } .bt-tabs.compact > :is(a, button) { block-size: 26px; padding: 4px 0; }
 .bt-tabs.compact > :is(a, button):hover, .bt-tabs.compact > .active, .bt-tabs.compact > [aria-selected=true] { border-color: var(--color-lightGrey2); }   /* compact rows keep the pale rule */
 .bt-tabs.compact > :is(a, button):after { content: ""; flex-shrink: 0; inline-size: 7px; block-size: 7px; margin-inline-end: 2px; background: var(--color-black); opacity: 0; transition: opacity .2s; }
@@ -783,3 +854,265 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 @media (prefers-reduced-motion: reduce) {
   *, :before, :after { transition: none !important; animation: none !important; }
 }
+
+/* ---------- Motion: states and reveals (assets/motion/motion.js drives the scripted ones; timings in references/motion.md) ----------
+   Four clocks, as on the site:
+   lift    .4s var(--ease)          things that move or change shape: button faces, chevrons, arrow marks, lifting cells, card reveals
+   fade    .3s ease-out             things that swap in place: tab panels, slides, tints. Colour-only hovers run .2 to .4s on plain ease
+   expand  .5s ease-out             rows that open (grid 0fr to 1fr), with the row's own .4s ease-out fade
+   reveal  .4s var(--ease-reveal)   things that arrive from the header: menu panels, the mobile sheet, the bar sliding back (.5s) */
+
+/* Button chevron: the mark slides out to the right while a second copy slides in from the left, and back on leave. */
+.bt-button .chevron { position: relative; }
+.bt-button .chevron > svg { transition: transform .4s var(--ease), opacity .4s var(--ease); }
+.bt-button .chevron:after { content: ""; position: absolute; inset: 0; background: currentColor; -webkit-mask: var(--chevron-mark) center / 5px 10px no-repeat; mask: var(--chevron-mark) center / 5px 10px no-repeat; transform: translateX(-100%); opacity: 0; transition: transform .4s var(--ease), opacity .4s var(--ease); }
+.bt-button .chevron > svg + svg { position: absolute; inset: 0; margin: auto; transform: translateX(-100%); opacity: 0; }   /* a second copy of another icon, instead of the drawn chevron */
+.bt-button .chevron:has(> svg + svg):after { content: none; }
+:root { --chevron-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 5 10'%3E%3Cpath d='M5 5L0 0V10L5 5Z'/%3E%3C/svg%3E"); }
+.bt-button:focus-visible:not(:disabled, [aria-disabled=true]) .chevron > svg:first-child { transform: translateX(100%); opacity: 0; }
+.bt-button:focus-visible:not(:disabled, [aria-disabled=true]) .chevron:after, .bt-button:focus-visible:not(:disabled, [aria-disabled=true]) .chevron > svg + svg { transform: none; opacity: 1; }
+@media (hover: hover) {
+  .bt-button:hover:not(:disabled, [aria-disabled=true]) .chevron > svg:first-child { transform: translateX(100%); opacity: 0; }
+  .bt-button:hover:not(:disabled, [aria-disabled=true]) .chevron:after, .bt-button:hover:not(:disabled, [aria-disabled=true]) .chevron > svg + svg { transform: none; opacity: 1; }
+}
+
+/* Lifting cell: a tile that rises one grid gap up-right out of its cell on hover or focus, on two side faces in its
+   family's Base and Dark (logo tabs in a customer wall). <button class="bt-lift green"><span>…tile…</span></button> */
+.bt-lift { --offset: var(--grid-gap); position: relative; display: block; inline-size: 100%; block-size: 100%; padding: 0; border: 0; background: none; outline: 0; cursor: pointer;
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%); transition: clip-path .4s var(--ease); }
+.bt-lift > span { position: relative; z-index: 1; display: block; inline-size: 100%; block-size: 100%; transition: transform .4s var(--ease); }
+.bt-lift:before, .bt-lift:after { content: ""; position: absolute; visibility: hidden; transition: visibility 0s .4s; }   /* hidden at rest: behind the tile their edges would show as a thin line */
+.bt-lift:before { inset-block-end: 0; inset-inline-start: calc(var(--offset) / 2); inline-size: 100%; block-size: var(--offset); transform: skewX(-45deg); background: var(--lift-dark, var(--color-black)); }
+.bt-lift:after { inset-inline-start: 0; inset-block-end: calc(var(--offset) / 2); inline-size: var(--offset); block-size: 100%; transform: skewY(-45deg); background: var(--lift-base, var(--color-black)); }
+.bt-lift.green { --lift-base: var(--color-green); --lift-dark: var(--color-darkGreen); } .bt-lift.pink { --lift-base: var(--color-pink); --lift-dark: var(--color-darkPink); }
+.bt-lift.blue { --lift-base: var(--color-blue); --lift-dark: var(--color-darkBlue); } .bt-lift.gold { --lift-base: var(--color-gold); --lift-dark: var(--color-darkGold); }
+.bt-lift:focus-visible { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
+.bt-lift:focus-visible:before, .bt-lift:focus-visible:after { visibility: visible; transition-delay: 0s; }
+.bt-lift:focus-visible > span { transform: translate(var(--offset), calc(-1 * var(--offset))); }
+@media (hover: hover) {
+  .bt-lift:hover { clip-path: polygon(0% calc(-1 * var(--offset)), calc(100% + var(--offset)) calc(-1 * var(--offset)), calc(100% + var(--offset)) 100%, 0% 100%); }
+  .bt-lift:hover:before, .bt-lift:hover:after { visibility: visible; transition-delay: 0s; }
+  .bt-lift:hover > span { transform: translate(var(--offset), calc(-1 * var(--offset))); }
+}
+
+/* Linked card (customer story tiles): the whole card dims to 90%, shrinks to 99% and takes a 5% Black wash. .4s. */
+.bt-press { position: relative; transition: transform .4s, opacity .4s; }
+.bt-press:before { content: ""; position: absolute; inset: 0; z-index: 1; background: var(--color-black); opacity: 0; pointer-events: none; transition: opacity .4s; }
+.bt-press:has(a:focus-visible) { opacity: .9; transform: scale(.99); } .bt-press:has(a:focus-visible):before { opacity: .05; }
+@media (hover: hover) { .bt-press:hover { opacity: .9; transform: scale(.99); } .bt-press:hover:before { opacity: .05; } }
+
+/* Small states. Row link: rule and sub-line go Black (.3s). External link: a 6px arrow grows in (.4s). Icon button and
+   play/pause: ground to Light Grey 2 (.2s ease-out). Resource title underlines. Footer links drop to 60% (.2s). */
+.bt-row-link { transition: border-color .3s ease; } .bt-row-link small { transition: color .3s ease; }
+.bt-row-link:is(:hover, :focus-visible) small { color: var(--color-black); }
+.bt-external .arrow { display: inline-block; inline-size: 0; margin-inline-start: 0; overflow: hidden; opacity: 0; transition: width .4s, margin-left .4s, opacity .4s; }
+.bt-external:is(:hover, :focus-visible) .arrow { inline-size: 6px; margin-inline-start: 4px; opacity: 1; }
+.bt-icon-button { transition: background-color .2s ease-out; }
+.bt-chip:not(.active):hover { color: var(--color-darkGrey3); } .bt-chip.active:hover { opacity: .75; }
+@media (hover: hover) { a.bt-resource:hover .title { text-decoration: underline; text-underline-offset: .15em; } }
+.bt-footer a:focus-visible { opacity: .6; }
+/* Customer picker (logo tabs over a quote): logos at 35%, 60% on hover, 100% and a Light Grey 1 ground when chosen. .15s ease-out. */
+.bt-logo-tabs > button { border: 0; background: none; cursor: pointer; color: var(--color-darkGrey3); transition: background-color .15s ease-out, color .15s ease-out; }
+.bt-logo-tabs > button img { opacity: .35; transition: filter .15s ease-out, opacity .15s ease-out; }
+.bt-logo-tabs > button:is(:hover, :focus-visible) { color: var(--color-darkGrey2); } .bt-logo-tabs > button:is(:hover, :focus-visible) img { opacity: .6; }
+.bt-logo-tabs > [aria-selected=true] { background: var(--color-lightGrey1); color: var(--color-black); } .bt-logo-tabs > [aria-selected=true] img { opacity: 1; }
+
+/* Tab panel shown by removing [hidden]: fades in, .3s ease-out, every time it is shown. */
+.bt-reveal { animation: bt-reveal .3s ease-out; }
+@keyframes bt-reveal { from { opacity: 0; } to { opacity: 1; } }
+/* Slides stacked in one cell (quotes, featured cards in a menu): the .active one is visible; they cross-fade in .3s ease-out. */
+.bt-fade-stack { display: grid; }
+.bt-fade-stack > * { grid-area: 1 / 1; min-inline-size: 0; opacity: 0; visibility: hidden; transition: opacity .3s ease-out, visibility 0s linear .3s; }
+.bt-fade-stack > .active { opacity: 1; visibility: inherit; transition: opacity .3s ease-out, visibility 0s; }
+/* Artwork swapped by a step list: the old one fades and sinks 30px in .3s, then the new one rises in over the next .3s. */
+.bt-fade-stack.shift > * { translate: 0 30px; transition: opacity .3s ease-out, translate .3s ease-out, visibility 0s linear .3s; }
+.bt-fade-stack.shift > .active { translate: 0 0; transition: opacity .3s ease-out .3s, translate .3s ease-out .3s, visibility 0s; }
+
+/* Step list (auto-advancing features): rows on hairlines; the active one is full strength and open, the others 50%
+   (75% on hover or focus; 20% on phones). A 2px line under the active row fills with the time left; a play/pause
+   button sits at its right. motion.js steps() runs the timer. Open and close: .5s ease-out; fade: .4s ease-out.
+   <ol class="bt-steps"><li class="active"><button class="title">…</button><div class="details"><div>…</div></div><i class="timer"></i></li> */
+.bt-steps { margin: 0; padding: 0; list-style: none; }
+.bt-steps > li { position: relative; border-bottom: 1px solid var(--color-lightGrey2); transition: opacity .4s ease-out; }
+.bt-steps > li:not(.active) { opacity: .5; }
+.bt-steps > li:not(.active):is(:hover, :focus-within) { opacity: .75; }
+.bt-steps .title { display: flex; align-items: center; justify-content: space-between; gap: 12px; inline-size: 100%; padding: 16px 0; border: 0; background: none; cursor: pointer; text-align: start; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; color: var(--color-black); }
+.bt-steps .title:focus-visible { outline: 1px solid var(--color-black); outline-offset: 2px; }
+.bt-steps .details { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .5s ease-out, visibility 0s linear .5s; }
+.bt-steps .details > * { min-block-size: 0; overflow: hidden; }
+.bt-steps .details > * > :last-child { margin-bottom: 0; padding-bottom: 16px; }
+.bt-steps > .active .details { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .5s ease-out, visibility 0s; }
+.bt-steps .timer { position: absolute; inset: auto 0 -1px; block-size: 2px; background: var(--color-black); transform-origin: left center; transform: scaleX(0); }
+.bt-steps > .active .timer { will-change: transform; }
+.bt-steps .control { position: absolute; inset-block-start: 14px; inset-inline-end: 0; }
+@media (max-width: 800.98px) { .bt-steps > li:not(.active) { opacity: .2; } }
+/* A group dimmed while another one is in play (platform features): 30%, .4s ease-out. */
+.bt-dim { transition: opacity .4s ease-out; } .bt-dim.inactive { opacity: .3; }
+
+/* Accordion (FAQ): rows on a 10% rule, 20px 12px padding; hover lays a 10% Black wash over the row; an open row sits
+   on Light Grey 2. The plus turns into a minus (its upright bar rotates flat, .4s ease-out); the answer opens in .4s
+   power2.out (motion.js accordion()). <div class="bt-accordion"><div class="item"><h3><button aria-expanded="false">Question <svg class="icon">…</svg></button></h3><div class="answer"><div>…</div></div></div> */
+.bt-accordion > .item { padding: 20px 12px; border-bottom: 1px solid var(--color-black-10); cursor: pointer; box-shadow: inset 0 0 0 100vmax transparent; transition: background-color .4s ease-out, box-shadow .4s ease-out; }
+@media (hover: hover) { .bt-accordion > .item:hover { box-shadow: inset 0 0 0 100vmax var(--color-black-10); } }
+.bt-accordion > .item:has(button:focus-visible) { box-shadow: inset 0 0 0 100vmax var(--color-black-10); outline: 1px solid var(--color-black); outline-offset: -1px; }
+.bt-accordion > .item.open { background: var(--color-lightGrey2); }
+.bt-accordion :is(h2, h3, h4) { margin: 0; }
+.bt-accordion button { display: flex; align-items: flex-start; gap: 24px; inline-size: 100%; padding: 0; border: 0; background: none; cursor: inherit; text-align: start; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-black); }
+.bt-accordion button:focus-visible { outline: 0; }
+.bt-accordion button > span { flex: 1 1 0; min-inline-size: 0; }
+.bt-accordion .icon { flex-shrink: 0; inline-size: 20px; block-size: 20px; margin-top: calc((1lh - 20px) / 2); }
+.bt-accordion .icon .upright { transform-box: view-box; transform-origin: center; transition: transform .4s ease-out, opacity 0s; }
+.bt-accordion [aria-expanded=true] .icon .upright { transform: rotate(90deg); opacity: 0; transition: transform .4s ease-out, opacity 0s .4s; }
+.bt-accordion .answer { overflow: clip; block-size: 0; opacity: 0; }
+.bt-accordion .open > .answer { block-size: auto; opacity: 1; }
+.bt-accordion .answer > * { padding: 16px 44px 0 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
+.bt-accordion .answer p { margin: 0; } .bt-accordion .answer p + p { margin-block-start: 1lh; }
+
+/* Model card (library tiles): Light Grey 2 with the title at the bottom. On hover or focus of a linked card the card
+   turns Black, the title rises, the stats fade in under it, the badges fade out, the logo plate inverts and a button
+   opens at the bottom. Everything is in the markup from the start; nothing changes height. .4s on the lift curve.
+   <a class="bt-model-card"><div class="body"><div class="badges">…</div><div class="logo">…</div>
+     <div class="copy"><h3>Name</h3><p>Maker</p></div><div class="stats">…</div></div><div class="cta"><div>…button…</div></div></a> */
+.bt-model-card { display: flex; flex-direction: column; inline-size: 100%; min-inline-size: 0; color: inherit; text-decoration: none; }
+.bt-model-card:focus-visible { outline: 2px solid var(--color-darkPink); outline-offset: 2px; }
+.bt-model-card > .body { position: relative; flex: 1; display: flex; flex-direction: column; min-inline-size: 0; min-block-size: 220px; padding: 16px; background: var(--color-lightGrey2); color: var(--color-black); transition: background-color .4s var(--ease), color .4s var(--ease); }
+.bt-model-card > .body:before { content: ""; flex: 1 1 0; transition: flex-grow .4s var(--ease); }   /* the free space above the title; the stats take it over */
+.bt-model-card .badges { position: absolute; inset-block-start: 16px; inset-inline-start: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; transition: opacity .4s var(--ease); }
+@property --model-logo-dark { syntax: "<number>"; inherits: false; initial-value: 0; }
+.bt-model-card .logo { position: absolute; inset-block-start: 16px; inset-inline-end: 16px; display: grid; place-items: center; inline-size: 48px; block-size: 48px;
+  background: color-mix(in srgb, var(--color-black) calc(var(--model-logo-dark) * 100%), var(--color-lightGrey1)); color: color-mix(in srgb, var(--color-lightGrey1) calc(round(var(--model-logo-dark)) * 100%), var(--color-black));
+  transition: --model-logo-dark .4s var(--ease); }   /* plate and logo swap colours on one value, so they never match halfway */
+.bt-model-card .copy { display: flex; flex-direction: column; padding-inline-end: 64px; }
+.bt-model-card .copy > * { margin: 0; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; overflow-wrap: anywhere; }
+.bt-model-card .copy > p { opacity: .5; }
+.bt-model-card .stats { flex: 0 1 0; min-block-size: 0; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; overflow: hidden; opacity: 0; transition: flex-grow .4s var(--ease), opacity .4s var(--ease); }
+.bt-model-card .stats > * { flex: 1 1 auto; min-inline-size: max-content; max-inline-size: 100%; margin: 0; padding-top: 16px; }
+.bt-model-card > .cta { display: grid; grid-template-rows: 0fr; pointer-events: none; transition: grid-template-rows .4s var(--ease); }
+.bt-model-card > .cta > * { display: flex; min-block-size: 0; overflow: hidden; }
+.bt-model-card.active > .body, a.bt-model-card:focus-visible > .body { background: var(--color-black); color: var(--color-white); }
+.bt-model-card.active > .body:before, a.bt-model-card:focus-visible > .body:before { flex-grow: 0; }
+.bt-model-card.active .badges, a.bt-model-card:focus-visible .badges { opacity: 0; }
+.bt-model-card.active .logo, a.bt-model-card:focus-visible .logo { --model-logo-dark: 1; }
+.bt-model-card.active .stats, a.bt-model-card:focus-visible .stats { flex-grow: 1; opacity: 1; }
+.bt-model-card.active > .cta, a.bt-model-card:focus-visible > .cta { grid-template-rows: 1fr; }
+@media (hover: hover) {
+  a.bt-model-card:hover > .body { background: var(--color-black); color: var(--color-white); }
+  a.bt-model-card:hover > .body:before { flex-grow: 0; }
+  a.bt-model-card:hover .badges { opacity: 0; }
+  a.bt-model-card:hover .logo { --model-logo-dark: 1; }
+  a.bt-model-card:hover .stats { flex-grow: 1; opacity: 1; }
+  a.bt-model-card:hover > .cta { grid-template-rows: 1fr; }
+}
+
+/* Announcement bar above the header: a family Base ground with Black-of-family text; the whole bar is one link and
+   dims to 90% on hover (.4s); its chevron slides like a button's. */
+.bt-banner { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 10px; inline-size: 100%; padding: 9px var(--grid-gutter); background: var(--color-green); color: var(--color-blackGreen); transition: opacity .4s; }
+.bt-banner.pink { background: var(--color-pink); color: var(--color-blackPink); } .bt-banner.gold { background: var(--color-gold); color: var(--color-blackGold); }
+.bt-banner.blue { background: var(--color-blue); color: var(--color-blackBlue); } .bt-banner.grey { background: var(--color-lightGrey2); color: var(--color-darkGrey1); }
+.bt-banner > a { display: flex; align-items: center; gap: 2px; min-inline-size: 0; color: inherit; text-decoration: none; font: 350 12px/1.4 var(--beausite); letter-spacing: .01em; }
+.bt-banner > a:before { content: ""; position: absolute; inset: 0; }
+.bt-banner:has(> a:focus-visible) { opacity: .9; }
+@media (hover: hover) { .bt-banner:has(> a:hover) { opacity: .9; } }
+.bt-banner .chevron { position: relative; flex-shrink: 0; inline-size: 16px; block-size: 16px; overflow: clip; color: var(--color-black); display: inline-flex; align-items: center; justify-content: center; }
+.bt-banner .chevron > svg { transition: transform .4s var(--ease), opacity .4s var(--ease); }
+.bt-banner .chevron:after { content: ""; position: absolute; inset: 0; background: currentColor; -webkit-mask: var(--chevron-mark) center / 5px 10px no-repeat; mask: var(--chevron-mark) center / 5px 10px no-repeat; transform: translateX(-100%); opacity: 0; transition: transform .4s var(--ease), opacity .4s var(--ease); }
+.bt-banner > a:is(:hover, :focus-visible) .chevron > svg { transform: translateX(100%); opacity: 0; }
+.bt-banner > a:is(:hover, :focus-visible) .chevron:after { transform: none; opacity: 1; }
+.bt-banner > button { position: relative; z-index: 1; display: flex; flex-shrink: 0; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+.bt-banner > button:before { content: ""; position: absolute; inset: -9px -10px; }
+.bt-banner :is(a, button):focus-visible { outline: 1px solid var(--color-black); outline-offset: 3px; }
+
+/* Header on scroll (motion.js stickyHeader): past its own height the bar is fixed and scrolls away with the page;
+   scrolling up 6px slides it back in, .5s on the reveal curve. Under 1025px it stays fixed at the top. */
+.bt-header[data-state=fixed], .bt-header[data-state=revealing] { position: fixed; transform: translateY(var(--nav-offset, 0px)); }
+.bt-header[data-state=fixed]:has(:focus-visible), .bt-header[data-state=revealing]:has(:focus-visible) { transform: none; }
+.bt-header[data-state=revealing] { transition: transform .5s var(--ease-reveal); }
+/* Menus (motion.js navMenus): a panel sits under the bar on the page grid, from column --start across --span columns.
+   It fades in .3s and drops 8px in .4s on the reveal curve; the page behind takes a 33% Black wash with a 10px blur.
+   Going from one menu to another swaps at once. Hover intent: 120ms to open, 200ms to switch or close. */
+.bt-nav .links > li > :is(a, button) { transition: color .3s ease; }
+.bt-nav .links:has(> li > [aria-expanded=true]) > li:not(:hover, :has(> [aria-expanded=true])) > :is(a, button) { color: var(--color-darkGrey3); }
+.bt-nav-panel { --column: calc((100% - 2 * (var(--grid-gap) + var(--grid-gutter)) - 11 * var(--grid-gap)) / 12);
+  inset-inline-start: calc(var(--grid-gutter) + (var(--start, 3) - 1) * (var(--column) + var(--grid-gap))); inline-size: calc(var(--span, 8) * var(--column) + (var(--span, 8) + 1) * var(--grid-gap));
+  opacity: 0; visibility: hidden; transform: translateY(-.5rem); transition: opacity .3s ease, transform .4s var(--ease-reveal), visibility 0s .4s; }
+.bt-nav-panel.open { opacity: 1; visibility: visible; transform: none; transition: opacity .3s ease, transform .4s var(--ease-reveal); }
+.bt-nav-panel.wide { --start: 2; --span: 10; }
+@media (max-width: 1199.98px) { .bt-nav-panel.wide { inset-inline: 0; inline-size: auto; padding-inline: calc(var(--grid-gap) + var(--grid-gutter)); } }
+@media (min-width: 1600px) { .bt-nav-panel.wide { --start: 3; --span: 8; } }
+.bt-nav-overlay { block-size: max(0px, calc(100dvh - var(--nav-height, 0px))); opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility 0s .3s; }
+.bt-nav-overlay.open { opacity: 1; visibility: visible; transition: opacity .3s ease; }
+.bt-header.switched .bt-nav-panel { transition: none; }
+/* Menu button: three bars fold into a small cross (.3s ease; the middle bar fades in .2s). */
+.bt-nav .menu span { align-self: center; transition: inline-size .3s ease, transform .3s ease, opacity .2s ease; }
+.bt-nav .menu[aria-expanded=true] span { inline-size: 1.125rem; }
+.bt-nav .menu[aria-expanded=true] span:nth-child(1) { transform: translateY(.375rem) rotate(45deg); }
+.bt-nav .menu[aria-expanded=true] span:nth-child(2) { opacity: 0; }
+.bt-nav .menu[aria-expanded=true] span:nth-child(3) { transform: translateY(-.375rem) rotate(-45deg); }
+/* Mobile sheet: from the bar to the bottom of the screen; arrives like a menu panel. Rows open their links by growing
+   a grid row (.4s, reveal curve) while the chevron turns over (.4s). */
+.bt-mobile-menu { position: absolute; inset: 100% 0 auto; block-size: max(0px, calc(100dvh - var(--menu-top, var(--nav-height, 0px)))); padding: .5rem calc(var(--grid-gutter) * 1.8) 1.5rem; overflow-y: auto; overscroll-behavior: contain; background: var(--color-white);
+  opacity: 0; visibility: hidden; transform: translateY(-.5rem); transition: opacity .3s ease, transform .4s var(--ease-reveal), visibility 0s .4s; }
+.bt-mobile-menu.open { opacity: 1; visibility: visible; transform: none; transition: opacity .3s ease, transform .4s var(--ease-reveal); }
+.bt-mobile-menu ul { margin: 0; padding: 0; list-style: none; }
+.bt-mobile-menu .row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; inline-size: 100%; padding: 1rem 0; border: 0; border-bottom: 1px solid var(--color-lightGrey2); background: none; cursor: pointer; text-align: start; text-decoration: none; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; color: var(--color-black); }
+.bt-mobile-menu .row:focus-visible { outline: .125rem solid var(--color-darkGrey3); outline-offset: .25rem; }
+.bt-mobile-menu .row > svg { flex-shrink: 0; margin-inline-end: 4px; transition: transform .4s; }
+.bt-mobile-menu .row[aria-expanded=true] > svg { transform: rotate(-180deg); }
+.bt-mobile-menu .sub { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .4s var(--ease-reveal); }
+.bt-mobile-menu .sub.expanded { grid-template-rows: 1fr; }
+.bt-mobile-menu .sub > * { min-block-size: 0; overflow: hidden; }
+.bt-mobile-menu .sub > * > * { padding: 1rem 0 1.5rem; }
+.bt-mobile-menu .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--grid-gap); margin-top: 1.5rem; }
+.bt-mobile-menu .actions > li:last-child:nth-child(odd) { grid-column: 1 / -1; }
+@media (min-width: 1025px) { .bt-mobile-menu { display: none; } }
+
+/* Page change (motion.js pageTransitions): a White sheet over the page fades in (.4s power2.out) before the browser
+   leaves, and out (.4s, after .2s) on the next page. */
+.bt-page-transition { position: fixed; inset: 0; z-index: 100; background: var(--color-white); opacity: 0; pointer-events: none; }
+
+/* Text caret in terminal mocks: a Green block .4167em wide that blinks once a second in two hard steps. */
+.bt-caret { display: inline-block; vertical-align: -.1em; inline-size: .4167em; block-size: 1em; background: var(--color-green); }
+.bt-caret.blinking { animation: bt-blink 1s steps(2, jump-none) infinite; }
+@keyframes bt-blink { from { opacity: 1; } to { opacity: 0; } }
+
+/* Headline that fills in letter by letter as it scrolls up the screen, once (motion.js revealText splits it):
+   each letter goes from 30% to full over 5% of the reveal. */
+.bt-reveal-text { --scroll-percent: 0; --from: .3; --fade: .05; }
+.bt-reveal-text .word { white-space: nowrap; }
+.bt-reveal-text .letter { --progress: clamp(0, (var(--scroll-percent) - var(--threshold)) / var(--fade), 1); opacity: calc(var(--from) + (1 - var(--from)) * var(--progress)); }
+@media (prefers-reduced-motion: reduce) { .bt-reveal-text .letter { opacity: 1; } }
+.bt-sr-only { position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* Stat that scrambles in (motion.js odometer): each character flickers through digits and symbols, then they lock
+   left to right. Tabular figures; every character keeps the width of its final glyph. */
+.bt-odometer { position: relative; display: inline-flex; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bt-odometer > .char { position: relative; display: inline-block; white-space: pre; }
+.bt-odometer .sizer { display: block; visibility: hidden; }
+.bt-odometer .glyph { position: absolute; inset-block-start: 0; inset-inline-start: 50%; transform: translateX(-50%); }
+.bt-odometer.idle .glyph { visibility: hidden; }
+@media (prefers-reduced-motion: reduce) { .bt-odometer.idle .glyph { visibility: visible; } }
+/* A value that changes while shown (calculators): each digit is a strip that rolls to its number, .55s power3.out. */
+.bt-odometer > .digit { position: relative; display: inline-block; overflow: hidden; }
+.bt-odometer > .digit > .strip { position: absolute; inset: 0 auto auto 0; inline-size: 100%; display: flex; flex-direction: column; text-align: center; }
+
+/* Marquee (motion.js marquee): one row repeated, drifting left; it speeds up with the scroll and can be thrown by dragging. */
+.bt-marquee { display: flex; max-inline-size: 100vw; overflow-x: clip; cursor: grab; }
+.bt-marquee > .track { display: flex; white-space: nowrap; user-select: none; }
+.bt-marquee > .track > * { flex-shrink: 0; }
+
+/* Smooth scroll (motion.js smoothScroll, Lenis): the classes Lenis sets on <html>. */
+html.lenis, html.lenis body { block-size: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+.lenis.lenis-stopped { overflow: clip; }
+
+/* ---------- Motion: WebGL scenes (assets/motion/mount.js mounts one in a .bt-webgl box) ---------- */
+/* The canvas fills its box and fades in over what is behind it once it has rendered. */
+.bt-webgl { position: relative; inline-size: 100%; block-size: 100%; }
+.bt-webgl > canvas { display: block; inline-size: 100%; block-size: 100%; transition: opacity .3s; }
+@starting-style { .bt-webgl > canvas { opacity: 0; } }
+/* Closing call to action: the bricks scene runs behind the stats (.bt-stats.offset), fading out toward the left edge. */
+.bt-cta-visual { position: relative; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
+.bt-cta-visual > .scene { position: absolute; inset: 0; pointer-events: none; }
+@media (min-width: 801px) { .bt-cta-visual > .scene canvas { -webkit-mask-image: linear-gradient(to right, transparent 5%, #000 20%); mask-image: linear-gradient(to right, transparent 5%, #000 20%); } }
+@media (max-width: 800.98px) { .bt-cta-visual > .scene { inset-block: -16.5% 16.5%; inset-inline: calc(-1 * (var(--grid-gutter) + var(--section-inset))); } }
