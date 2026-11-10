@@ -35,8 +35,8 @@ export function ReportHeader({ report }: { report: Report }) {
   return (
     <header>
       <Eyebrow parts={reportFacts(report)} />
-      <h1 className="mt-5 max-w-[24ch] text-[34px] leading-[1.1] font-normal tracking-[-0.03em] text-balance sm:text-[46px]">{t.verdict?.head ?? t.sentence}</h1>
-      {t.verdict?.cost && <p className="mt-4 max-w-[46ch] text-[22px] leading-snug tracking-[-0.01em] text-balance text-muted-foreground">{t.verdict.cost}</p>}
+      <h1 className="ev-title mt-6 max-w-[24ch] text-balance">{t.verdict?.head ?? t.sentence}</h1>
+      {t.verdict?.cost && <p className="mt-4 max-w-[46ch] text-[24px] leading-[1.3] tracking-[-0.01em] text-balance text-body">{t.verdict.cost}</p>}
     </header>
   );
 }
@@ -62,11 +62,11 @@ export function Banners({ report, sample = true }: { report: Report; sample?: bo
   if (small) items.push(["Small sample", small]);
   if (!items.length) return null;
   return (
-    <div className="grid gap-px bg-frame">
+    <div className="border-t border-lightGrey2">
       {items.map(([label, text]) => (
-        <div key={label} className="flex flex-col gap-1 bg-background py-3 sm:flex-row sm:gap-4">
-          <span className="label-mono w-32 shrink-0 pt-0.5 text-foreground">{label}</span>
-          <span className="text-[14px] text-muted-foreground">{text}</span>
+        <div key={label} className="flex flex-col gap-1 border-b border-lightGrey2 py-3 sm:flex-row sm:gap-4">
+          <span className="label-xs w-32 shrink-0 pt-1 text-black">{label}</span>
+          <span className="text-[14px] text-body">{text}</span>
         </div>
       ))}
     </div>

@@ -45,7 +45,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   if (!pts.length) {
     return (
       <Column heading="Quality against cost">
-        <div className="placeholder-cell grid h-48 place-items-center label-mono text-muted-foreground">No solved attempts yet</div>
+        <div className="bt-empty grid h-48 place-items-center">No solved attempts yet</div>
       </Column>
     );
   }
@@ -105,28 +105,28 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
     <Column heading="Quality against cost" aside={<span className="label-mono text-muted-foreground">Up and to the left is better</span>}>
       <div ref={box} className="relative w-full">
         <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block max-w-full" role="img" aria-label="Tasks solved against cost per solved task, one point per model">
-          <rect x={L} y={T} width={W - L - R} height={H - T - B} className="fill-white dark:fill-white/[0.03]" />
+          <rect x={L} y={T} width={W - L - R} height={H - T - B} fill="var(--color-white)" />
           {[0, 1, 2, 3, 4].map((i) => i * yStep).map((v) => (
             <g key={v}>
-              <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="var(--rule)" strokeDasharray="4 4" />
+              <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="var(--color-lightGrey3)" strokeDasharray="4 4" />
               <text x={L - 10} y={y(v) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[11px]">{v}</text>
             </g>
           ))}
           {xTicks.map((v) => (
             <g key={v}>
-              {v > 0 && <line x1={x(v)} x2={x(v)} y1={T} y2={H - B} stroke="var(--rule)" strokeDasharray="4 4" />}
+              {v > 0 && <line x1={x(v)} x2={x(v)} y1={T} y2={H - B} stroke="var(--color-lightGrey3)" strokeDasharray="4 4" />}
               <text x={x(v)} y={H - B + 20} textAnchor="middle" className="fill-muted-foreground font-mono text-[11px]">{fmtX(v)}</text>
             </g>
           ))}
-          <line x1={L} x2={L} y1={T} y2={H - B} stroke="var(--line)" />
-          <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="var(--line)" />
+          <line x1={L} x2={L} y1={T} y2={H - B} stroke="var(--color-darkGrey3)" />
+          <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="var(--color-darkGrey3)" />
           <text x={0} y={T - 18} className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Solved</text>
           <text x={W - R} y={H - 6} textAnchor="end" className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Cost per solved task</text>
           {gap && (
             <g aria-hidden>
-              <path d={gap.d} fill="none" stroke="var(--line)" />
-              <path d={gap.head} fill="none" stroke="var(--line)" />
-              <rect x={gap.chip.x0} y={gap.chip.y0} width={gap.chip.x1 - gap.chip.x0} height={gap.chip.y1 - gap.chip.y0} rx={2} fill="var(--delta)" />
+              <path d={gap.d} fill="none" stroke="var(--color-darkGrey2)" />
+              <path d={gap.head} fill="none" stroke="var(--color-darkGrey2)" />
+              <rect x={gap.chip.x0} y={gap.chip.y0} width={gap.chip.x1 - gap.chip.x0} height={gap.chip.y1 - gap.chip.y0} fill="var(--color-pink)" />
               <text x={(gap.chip.x0 + gap.chip.x1) / 2} y={gap.chip.y0 + 16} textAnchor="middle" className="fill-black font-sans text-[14px]">{gap.text}</text>
             </g>
           )}
@@ -146,10 +146,10 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
                 className="cursor-default outline-none"
               >
                 <circle cx={cx} cy={cy} r={16} fill="transparent" />
-                <circle cx={cx} cy={cy} r={hover === p.m.key ? 9 : 7} fill={sw?.fill} stroke="var(--background)" strokeWidth={2} className="transition-[r]" />
+                <circle cx={cx} cy={cy} r={hover === p.m.key ? 6 : 4} fill={sw?.fill} className="transition-[r]" />
                 {chip && (
                   <g>
-                    <rect x={chip.x0} y={chip.y0} width={chip.w} height={chip.h} rx={2} fill={sw?.fill} />
+                    <rect x={chip.x0} y={chip.y0} width={chip.w} height={chip.h} fill={sw?.fill} />
                     <text x={chip.x0 + 8} y={chip.y0 + 15} fill={sw?.ink} className="font-mono text-[11px] uppercase tracking-[0.06em]">{p.m.label}</text>
                   </g>
                 )}
@@ -159,7 +159,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
         </svg>
         {active && (
           <div
-            className="pointer-events-none absolute z-10 min-w-48 -translate-x-1/2 -translate-y-full bg-primary px-3 py-2 text-[12px] text-primary-foreground shadow-pop"
+            className="pointer-events-none absolute z-10 min-w-48 -translate-x-1/2 -translate-y-full bg-black px-3 py-2 text-[12px] text-white"
             style={{ left: at(active).cx, top: at(active).cy - 14 }}
           >
             <div className="label-mono mb-1">{active.m.label}</div>

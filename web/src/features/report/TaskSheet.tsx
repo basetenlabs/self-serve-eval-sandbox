@@ -1,4 +1,4 @@
-import { ArrowUpRightIcon, ChevronRightIcon } from "lucide-react";
+import { Chevron, External } from "@/components/brand/icons";
 import * as React from "react";
 import { Eyebrow, Swatch } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
@@ -29,27 +29,27 @@ function Body({ task: t, report, ranked, colors, trialsFor }: { task: Task; repo
   const unsolved = taskState(t, ranked, trialsFor).unsolved;
   return (
     <>
-      <div className="border-b border-rule px-6 pt-6 pb-5 pr-16">
+      <div className="border-b border-lightGrey2 px-6 pt-6 pb-5 pr-16">
         <Eyebrow parts={[`${t.repo} #${t.pr ?? ""}`, t.language, t.size && `${t.size}${t.lines_changed ? `, ${t.lines_changed} lines in ${t.files_changed} files` : ""}`, t.merged_at && `Merged ${day(t.merged_at)}`]} />
-        <SheetTitle className="mt-3 text-[22px] leading-snug font-normal tracking-[-0.01em]">{t.title}</SheetTitle>
-        <SheetDescription className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
+        <SheetTitle className="mt-3 text-[24px] leading-[1.3] font-normal tracking-[-0.01em]">{t.title}</SheetTitle>
+        <SheetDescription className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[14px] text-muted-foreground">
           <span>Graded with {scope}{!report.run.judge ? "" : (report.run.judge.panel?.length ?? 1) > 1 ? ", then a panel of judges" : ", then the judge"}.</span>
           {t.url && (
-            <a href={t.url} target="_blank" rel="noopener" className="label-mono inline-flex items-center gap-1 text-foreground hover:underline">
-              Merged PR <ArrowUpRightIcon className="size-3.5" />
+            <a href={t.url} target="_blank" rel="noopener" className="bt-link text-black">
+              Merged PR <External />
             </a>
           )}
         </SheetDescription>
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        <details className="group mb-6 bg-node">
-          <summary className="label-mono flex cursor-pointer list-none items-center gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
-            <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" /> What the agent was asked to do
+        <details className="ev-details mb-6 bg-lightGrey1 px-4 py-3">
+          <summary>
+            <Chevron /> What the agent was asked to do
           </summary>
-          <pre className="max-h-80 overflow-auto px-4 pb-4 font-sans text-[13.5px] leading-relaxed whitespace-pre-wrap">{t.instruction || ""}</pre>
+          <pre className="mt-3 max-h-80 overflow-auto font-sans text-[14px] leading-relaxed whitespace-pre-wrap">{t.instruction || ""}</pre>
         </details>
         {unsolved && (
-          <div className="mb-6 bg-warn-surface px-4 py-3 text-[13.5px]">
+          <div className="bt-notice warning mb-6 block">
             <span className="label-mono mr-2">No model solved this</span>
             Check the task before blaming the models: PR tests sometimes assert details, such as an exact error message, that the request never states.
           </div>
@@ -73,7 +73,7 @@ const OUTCOME = {
 function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swatch?: SwatchT; runId: string }) {
   const a = r.agent ?? {};
   const [view, setView] = React.useState("diff");
-  const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") : "";
+  const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") :"";
   const setAside = (r.tests?.set_aside ?? []).filter((f) => !CACHE.test(f));
   const patch = React.useMemo(() => withoutCaches(r.patch), [r.patch]);
   const views = [
@@ -94,7 +94,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   return (
     <article className="column-rule">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3 pb-3">
-        <span className="inline-flex items-center gap-2 text-[15px] font-medium"><Swatch swatch={swatch} size={12} />{m.label}</span>
+        <span className="inline-flex items-center gap-2 text-[16px] font-medium"><Swatch swatch={swatch} size={12} />{m.label}</span>
         <span className="label-mono text-muted-foreground">Attempt {r.attempt}</span>
         <Badge variant={o.variant} style={r.outcome === "solved" && swatch ? { background: swatch.fill, color: swatch.ink } : undefined}>{o.label}</Badge>
         <span className="ml-auto flex flex-wrap gap-x-4 font-mono text-[12px] text-muted-foreground">
@@ -109,10 +109,10 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
         </span>
       </header>
       {rows.length > 0 && (
-        <dl className="mb-3 grid gap-px bg-frame">
+        <dl className="mb-3 grid gap-px bg-lightGrey2">
           {rows.map(([k, v]) => (
             <div key={k} className="grid gap-1 bg-background py-2 sm:grid-cols-[9rem_1fr] sm:gap-4">
-              <dt className="label-mono pt-0.5 text-[10.5px] text-muted-foreground">{k}</dt>
+              <dt className="label-xs pt-0.5 text-muted-foreground">{k}</dt>
               <dd className="text-[13.5px] leading-snug [overflow-wrap:anywhere]">{v}</dd>
             </div>
           ))}
@@ -120,7 +120,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
       )}
       <Tabs value={view} onValueChange={setView}>
         <TabsList className="gap-5">
-          {views.map((v) => <TabsTrigger key={v.key} value={v.key} className="h-9 text-[11px]">{v.label}</TabsTrigger>)}
+          {views.map((v) => <TabsTrigger key={v.key} value={v.key} className="h-9 text-[12px]">{v.label}</TabsTrigger>)}
         </TabsList>
         {views.map((v) => (
           <TabsContent key={v.key} value={v.key} className="mt-2">
@@ -142,10 +142,10 @@ function Verdicts({ judge: j }: { judge: NonNullable<Trial["judge"]> }) {
       <Lead word={j.verdict === "pass" ? "Pass" : "Fail"} rest={j.reason ? ` · ${j.reason}` : ""} />
       {j.chair?.label && <span className="text-muted-foreground"> ({j.chair.label}, chair)</span>}
       {votes.length > 0 && (
-        <ul className="mt-2 grid gap-1.5 border-l border-rule pl-3 text-[12.5px] leading-snug" aria-label="Each judge's vote">
+        <ul className="mt-2 grid gap-1.5 border-l border-lightGrey2 pl-3 text-[14px] leading-snug" aria-label="Each judge's vote">
           {votes.map((v, i) => (
             <li key={i} className="grid grid-cols-[3.75rem_minmax(0,1fr)] gap-2">
-              <span className={cn("label-mono pt-px text-[10.5px]", v.verdict === "pass" ? "text-foreground" : "text-muted-foreground")}>
+              <span className={cn("label-xs pt-px", v.verdict === "pass" ? "text-foreground" : "text-muted-foreground")}>
                 {v.error ? "No vote" : v.verdict === "pass" ? "Pass" : "Fail"}
               </span>
               <span className="text-muted-foreground"><span className="text-foreground">{v.label}</span> · {v.error ? `didn't answer: ${v.error}` : v.reason}</span>
@@ -176,7 +176,7 @@ function withoutCaches(patch?: string | null) {
 
 function Code({ text, diff, empty }: { text?: string | null; diff: boolean; empty?: string }) {
   if (!text?.trim()) {
-    return empty ? <div className="placeholder-cell px-4 py-6 text-center text-[13px] text-muted-foreground">{empty}</div>
+    return empty ? <div className="placeholder-cell px-4 py-6 text-center text-[14px] text-muted-foreground">{empty}</div>
       : <div className="placeholder-cell px-4 py-6 text-center label-mono text-muted-foreground">Empty</div>;
   }
   const lines = text.split("\n");

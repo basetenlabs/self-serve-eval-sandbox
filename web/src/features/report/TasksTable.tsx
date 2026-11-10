@@ -1,4 +1,3 @@
-import { SearchIcon } from "lucide-react";
 import * as React from "react";
 import { Column, Swatch } from "@/components/brand";
 import { Input } from "@/components/ui/input";
@@ -70,8 +69,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
     <Column heading="Tasks" aside={<span className="label-mono text-muted-foreground">{rows.length} of {tasks.length}</span>}>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search title, repo or PR" className="h-9 pl-9" aria-label="Search tasks" type="search" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search title, repo or PR" aria-label="Search tasks" type="search" />
         </div>
         {languages.length > 1 && <Select label="Language" value={lang} onValueChange={setLang} allLabel="All languages" options={languages.map((l) => ({ value: l, label: l }))} />}
         {repos.length > 1 && <Select label="Repository" value={repo} onValueChange={setRepo} allLabel="All repositories" options={repos.map((r) => ({ value: r, label: r }))} className="max-w-64" />}
@@ -83,13 +81,13 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
         <span className="inline-flex items-center gap-1.5"><Pip outcome="invalid" small />Not scored: setup, sandbox or provider trouble</span>
         <span className="inline-flex items-center gap-1.5"><Pip small />Not run yet</span>
       </div>
-      <ul className="grid gap-px bg-frame shadow-[0_0_0_1px_var(--frame)] md:hidden" aria-label="Tasks">
+      <ul className="grid gap-px bg-lightGrey2 md:hidden" aria-label="Tasks">
         {rows.map((t) => (
           <li key={t.id}>
             <button type="button" onClick={() => setOpenId(t.id)} className="grid w-full gap-2 bg-surface p-3 text-left active:bg-muted">
               <span className="min-w-0">
                 <span className="line-clamp-2 text-[14px] font-medium">{t.title}</span>
-                <span className="mt-0.5 block truncate font-mono text-[11.5px] text-muted-foreground">
+                <span className="mt-0.5 block truncate font-mono text-[12px] text-muted-foreground">
                   {t.repo} #{t.pr ?? ""}{t.language ? ` · ${t.language}` : ""}{t.size ? ` · ${t.lines_changed} lines` : ""}
                 </span>
               </span>
@@ -112,7 +110,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
         ))}
         {!rows.length && <li className="bg-surface py-10 text-center text-[14px] text-muted-foreground">No tasks match these filters.</li>}
       </ul>
-      <div className="bg-surface shadow-[inset_0_0_0_1px_var(--frame)] max-md:hidden">
+      <div className="bg-surface hairline max-md:hidden">
         <Table>
           <THead>
             <TR>
@@ -141,10 +139,10 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
               >
                 <TD className="max-w-[360px] pl-4">
                   <div className="truncate font-medium" title={t.title}>{t.title}</div>
-                  <div className="mt-0.5 font-mono text-[11.5px] text-muted-foreground">{t.repo} #{t.pr ?? ""}</div>
+                  <div className="mt-0.5 font-mono text-[12px] text-muted-foreground">{t.repo} #{t.pr ?? ""}</div>
                 </TD>
-                <TD><span className="label-mono text-[10.5px] text-muted-foreground">{t.language || "–"}</span></TD>
-                <TD className="whitespace-nowrap text-[13px] text-muted-foreground">{t.size ? `${t.size} · ${t.lines_changed} lines` : "–"}</TD>
+                <TD><span className="label-xs text-muted-foreground">{t.language || "–"}</span></TD>
+                <TD className="whitespace-nowrap text-[14px] text-muted-foreground">{t.size ? `${t.size} · ${t.lines_changed} lines` : "–"}</TD>
                 {ranked.map((m) => {
                   const ts = trialsFor(t.id, m.key);
                   return (
@@ -184,9 +182,9 @@ export function Pip({ outcome, fill, ink, small }: { outcome?: keyof typeof GLYP
         small ? "size-4 text-[10px]" : "size-6 text-[12px]",
         !outcome && "placeholder-cell",
         outcome === "failed" && "bg-node text-muted-foreground",
-        outcome === "invalid" && "bg-[#FFEDC4] text-[#D5700B] dark:bg-[#2E261E] dark:text-[#FFBE4D]",
+        outcome === "invalid" && "bg-lightGold text-black",
       )}
-      style={outcome === "solved" ? { background: fill ?? "var(--baseten)", color: ink ?? "#000" } : undefined}
+      style={outcome === "solved" ? { background: fill ?? "var(--color-green)", color: ink ?? "var(--color-black)" } : undefined}
     >
       {outcome ? GLYPH[outcome] : ""}
     </span>
