@@ -258,13 +258,13 @@ function PullItem({ row, control, trailing, hits, chosen }: { row: PullRow; cont
             <span className="no">#{row.number}</span>
             <span className="title">{hits?.length ? <Marked text={row.title} hits={hits} /> : row.title || "Untitled"}</span>
           </span>
-          <span className="meta flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          <span className="meta flex flex-wrap items-center gap-x-1.5 gap-y-1 max-md:gap-x-3">
             {row.why ? (
               <span>Can't be a task: {row.why}</span>
             ) : (
               <>
                 {[row.author, row.merged_at && `merged ${ago(row.merged_at)}`, plural(row.files, "file"), `${row.lines.toLocaleString()} lines`, plural(row.tests, "test file")]
-                  .filter(Boolean).map((part, i) => <span key={i} className="whitespace-nowrap">{i > 0 && <span aria-hidden className="mr-1.5 text-darkGrey3">·</span>}{part}</span>)}
+                  .filter(Boolean).map((part, i) => <span key={i} className="whitespace-nowrap">{i > 0 && <span aria-hidden className="mr-1.5 text-darkGrey3 max-md:hidden">·</span>}{part}</span>)}
                 {row.maintenance && <Badge variant="outline" className="ml-1">Upkeep</Badge>}
               </>
             )}
