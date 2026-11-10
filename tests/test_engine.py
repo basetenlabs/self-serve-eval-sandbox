@@ -146,6 +146,13 @@ class CauseTests(unittest.TestCase):
         self.assertFalse(causes.transient(runtime.RuntimeError("Could not unpack uploaded files.")))
 
 
+    def test_a_provider_error_says_what_the_provider_said(self):
+        cause = causes.provider("API Error: Request rejected (429) · Rate limit exceeded\n")
+        self.assertIn("Rate limit exceeded", cause)
+        self.assertTrue(cause.startswith("The model's provider"))
+        self.assertEqual(causes.provider(""), causes.REASONS["provider-error"][1])
+
+
 class NameTests(unittest.TestCase):
     def test_a_sandbox_name_fits_blaxels_49_characters_whatever_the_run_is_called(self):
         for run_id in ("quick-20261110-220116", "a-very-long-repository-name-for-sure-20261110-220116-2", "x" * 80, "---"):

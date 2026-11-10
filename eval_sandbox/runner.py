@@ -710,8 +710,9 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         if "subtype" not in agent and not agent["timed_out"]:
             return finish("invalid", "agent-crashed")
         if agent.get("is_error") and PROVIDER_ERROR.search(agent.get("final_message", "")):
-            (trial_dir / "error.log").write_text(redact_known(agent.get("final_message", "")) + "\n")
-            return finish("invalid", "provider-error")
+            message = redact_known(agent.get("final_message", ""))
+            (trial_dir / "error.log").write_text(message + "\n")
+            return finish("invalid", "provider-error", cause=causes.provider(message))
         step = "save"
         patch, numstat = capture_patch(container, result["setup"]["baseline"], trial_dir / "agent.patch")
         result["diff"] = diff_stats(numstat)

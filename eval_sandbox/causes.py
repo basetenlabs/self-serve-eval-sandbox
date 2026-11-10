@@ -157,6 +157,15 @@ def sentence(result: dict) -> str | None:
     return f"In the verifier sandbox: {text[0].lower()}{text[1:]}" if verifier else text
 
 
+def provider(message: str) -> str:
+    """A provider error in one sentence, with the provider's own words: "rate limit exceeded" says more than
+    "an error"."""
+    said = re.sub(r"^\s*API Error:\s*", "", (message or "").strip().splitlines()[0] if message.strip() else "")
+    said = said.replace(" · ", ": ").strip().rstrip(".")[:160]
+    base = REASONS["provider-error"][1]
+    return f"{base[:-1]} ({said})." if said else base
+
+
 def signature(result: dict) -> tuple[str, str] | None:
     """How a lost attempt failed, the same for attempts that failed the same way: its step and cause,
     without the names of its sandboxes."""
