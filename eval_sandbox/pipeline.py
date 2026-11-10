@@ -369,8 +369,8 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
             f"run them again with: pr-eval run --resume {job.path}" if lost else ""))
         return 0
     except runner.Halted as exc:
-        rebuild_quietly(job)
         job.status("failed", str(exc))
+        rebuild_quietly(job)  # after the status, so the report says why the run stopped
         return 1
     except KeyboardInterrupt:
         runner.cleanup(job.id, workspace=settings.workspace)

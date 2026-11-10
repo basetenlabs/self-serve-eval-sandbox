@@ -314,6 +314,7 @@ export interface Report {
     harness_version?: string;
     judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;
     note?: string | null;
+    status?: { phase?: string; detail?: string } | null;
     request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;
   };
   models: Model[];
