@@ -1,5 +1,6 @@
 import { RadioGroup } from "radix-ui";
 import * as React from "react";
+import { Rolling } from "@/lib/motion";
 import { Column } from "@/components/brand";
 import { Chevron, External } from "@/components/brand/icons";
 import { Badge } from "@/components/ui/badge";
@@ -329,10 +330,10 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
           <Column heading={<Step n="03">Start</Step>} aside={attempts > 0 && <span className="label-mono text-muted-foreground">{plural(attempts, "attempt")}</span>}>
             <div className="ev-plan">
               <div className="ev-plan-stats">
-                <PlanStat label="Estimated cost" value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`}
+                <PlanStat label="Estimated cost" value={<Rolling value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`} />}
                   tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
                     : "No earlier run to estimate from yet."} />
-                <PlanStat label="Estimated time" value={models.length && prs ? `≈ ${minutes} min` : "–"}
+                <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `≈ ${minutes} min` : "–"} />}
                   tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
               </div>
               <dl className="bt-kv ev-plan-rows">
