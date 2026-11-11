@@ -144,9 +144,7 @@ class App:
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
-                "quick": {"tasks": sum(map(len, tasks.sample(True).values())), "repos": len(tasks.sample(True)),
-                          "names": list(tasks.sample(True)),
-                          "ready": quick_collected()},
+                "quick": quick_sample(),
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
@@ -790,6 +788,28 @@ class App:
             tmp.write_text(json.dumps(everyone, indent=1))
             tmp.replace(self.favorites_file)
         return {"favorites": everyone[user or "local"]}
+
+
+def quick_sample() -> dict:
+    """The quick sample as the page counts it: only the PRs a run keeps, so its card and estimate match the run."""
+    sample = tasks.sample(True)
+    left_out = quick_left_out()
+    return {"tasks": sum(len(prs) for prs in sample.values()) - len(left_out), "repos": len(sample),
+            "names": list(sample), "ready": quick_collected()}
+
+
+def quick_left_out() -> set[str]:
+    """The quick sample's tasks whose last check left them out for the task's own fault (its tests need what its
+    request never says, or they don't fail before the change and pass after it). A check that failed for a passing
+    reason runs again, so those still count."""
+    out = set()
+    for repo, prs in tasks.sample(True).items():
+        for n in prs:
+            task_id = f"{repo.replace('/', '__')}-{n}"
+            status = read_json(tasks.DEFAULT_TASKS / task_id / "validation" / "result.json").get("status")
+            if status and status != "valid" and not status.startswith(runner.PASSING_CHECK_FAILURES):
+                out.add(task_id)
+    return out
 
 
 def quick_collected() -> bool:
