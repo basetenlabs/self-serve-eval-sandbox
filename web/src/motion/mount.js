@@ -67,7 +67,11 @@ export function mountScene(container, scene, options = {}) {
 		previous?.dispose()
 		container.dataset.webglState = 'fallback'
 		if (poster) {
-			container.style.background = `url("${poster}") center / cover no-repeat`
+			// JSON.stringify quotes and escapes the URL, so it cannot end the url() and add declarations.
+			container.style.backgroundImage = `url(${JSON.stringify(String(poster))})`
+			container.style.backgroundPosition = 'center'
+			container.style.backgroundSize = 'cover'
+			container.style.backgroundRepeat = 'no-repeat'
 		}
 		onFallback?.(reason, error)
 	}

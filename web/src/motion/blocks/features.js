@@ -113,6 +113,9 @@ export function mountFeatures(
 		measure()
 	}
 	desktop.addEventListener('change', onLayout)
+	// The preference can change while the page is open: the scene leaves with motion and returns with it
+	const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
+	motionPreference.addEventListener('change', syncScene)
 	onLayout()
 
 	return {
@@ -122,6 +125,7 @@ export function mountFeatures(
 		},
 		dispose() {
 			desktop.removeEventListener('change', onLayout)
+			motionPreference.removeEventListener('change', syncScene)
 			sizes.disconnect()
 			stepList.dispose()
 			handle?.dispose()
