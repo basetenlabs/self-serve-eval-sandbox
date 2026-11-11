@@ -77,6 +77,9 @@ def check_connection() -> None:
         client().manage("GET", "/v1/sandboxes/configuration")
     except baseten.SandboxError as exc:
         if exc.status in (401, 403):
+            if client().team:  # Baseten refuses a team the key can't reach the same way
+                raise RuntimeError(f"This Baseten key can't create sandboxes in the team in BASETEN_TEAM_ID "
+                                   f"({client().team}): check the team's id, or use a key of that team.") from exc
             raise RuntimeError("This Baseten key can't create sandboxes. " + NO_KEY) from exc
         raise RuntimeError("Cannot reach Baseten Sandboxes; check the key and the network.") from exc
 

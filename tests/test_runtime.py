@@ -47,8 +47,11 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual((runtime.client().key, runtime.client().team), ("personal", None))
 
     def test_a_key_that_cannot_make_sandboxes_says_so(self):
-        refused = api(manage=mock.Mock(side_effect=baseten.SandboxError("POST /v1/token failed (403): forbidden", 403)))
+        refused = api(manage=mock.Mock(side_effect=baseten.SandboxError("POST /v1/token failed (403): forbidden", 403)), team=None)
         with using(refused), self.assertRaisesRegex(runtime.RuntimeError, "can't create sandboxes.*service account key"):
+            runtime.check_connection()
+        refused.team = "team-one"  # a team the key can't reach is refused the same way: say which setting
+        with using(refused), self.assertRaisesRegex(runtime.RuntimeError, r"BASETEN_TEAM_ID \(team-one\)"):
             runtime.check_connection()
         down = api(manage=mock.Mock(side_effect=baseten.SandboxError("GET /v1/sandboxes/configuration failed: timed out")))
         with using(down), self.assertRaisesRegex(runtime.RuntimeError, "Cannot reach Baseten Sandboxes"):

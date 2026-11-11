@@ -20,7 +20,7 @@ Setting it up with a coding agent? Give it this repository's link and [SETUP.md]
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Claude models, and the Claude Opus 5.5 judge (install `claude` too) |
 | `OPENAI_API_KEY` | the GPT-6.1 Sol judge |
 
-The Baseten key has to be one that can create sandboxes: a personal key, or a team creator service account key. To keep a model-only key in `BASETEN_API_KEY`, put the other in `BASETEN_SANDBOX_API_KEY`. If the key reaches more than one team, `BASETEN_TEAM_ID` says which one the sandboxes go in. There is no other account to make, no CLI to install and no local Docker.
+The Baseten key has to be one that can create sandboxes: a personal key, or a team creator service account key. To keep a model-only key in `BASETEN_API_KEY`, put the other in `BASETEN_SANDBOX_API_KEY`. `BASETEN_TEAM_ID` pins the team the sandboxes go in: with it set, a key that can't reach that team is refused instead of running somewhere else. There is no other account to make, no CLI to install and no local Docker.
 
 An attempt uses two sandboxes at once, one for the agent and one for grading, and the quick sample runs 20 attempts together. Baseten runs [10 sandboxes at once](https://docs.baseten.co/sandboxes/manage) for an organization until you ask for more. When the count is full, a new sandbox waits for one to finish, so set `--concurrency` to a quarter of your limit until it is raised.
 

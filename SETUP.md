@@ -52,7 +52,7 @@ Ask the person for these. Keep them in the environment of the shell that starts 
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | Claude models, and the Claude Opus 5.5 judge | Anthropic Console, or `claude setup-token` (the person runs it) |
 | `OPENAI_API_KEY` | the GPT-6.1 Sol judge | OpenAI platform: API keys |
 
-A model-only Baseten key can call models but can't create sandboxes. To keep one in `BASETEN_API_KEY`, put a key that can in `BASETEN_SANDBOX_API_KEY`. If the key reaches more than one team, set `BASETEN_TEAM_ID` to the team the sandboxes should go in. There is no workspace to make and no CLI to install.
+A model-only Baseten key can call models but can't create sandboxes. To keep one in `BASETEN_API_KEY`, put a key that can in `BASETEN_SANDBOX_API_KEY`. Set `BASETEN_TEAM_ID` to pin the team the sandboxes go in: a key that can't reach that team is then refused instead of running somewhere else. There is no workspace to make and no CLI to install.
 
 Check that the key can create sandboxes (it prints `200`; `403` means a model-only key):
 

@@ -1,5 +1,6 @@
-"""The jail every step of a trial runs in (docker/jail.py). Its namespaces need Linux, so off Linux only
-its command line is tested here; hosted/README.md says how the rest is proven in a real sandbox."""
+"""The jail every step of a trial runs in (docker/jail.py). Its namespaces need Linux with unprivileged
+user namespaces, as a trial sandbox has: there, every test here runs. Elsewhere (macOS) only its command
+line is tested, and each new trial sandbox checks for itself that it can jail a command (runtime.create)."""
 import os
 import socket
 import subprocess
