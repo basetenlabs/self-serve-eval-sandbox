@@ -34,7 +34,7 @@ class FakeRuntime:
     def name(self, run_id):
         return f"sandbox-{next(self.names)}"
 
-    def create(self, name, run_id, settings, memory=None):
+    def create(self, name, run_id, settings, memory=None, **_):
         self.live.add(name)
         self.log("create", name)
 
@@ -42,7 +42,7 @@ class FakeRuntime:
         self.live.discard(name)
         self.log("delete", name)
 
-    def cleanup(self, run_id=None, workspace=None):
+    def cleanup(self, run_id=None):
         self.log("cleanup", run_id)
         removed = sorted(self.live)
         for name in removed:
@@ -83,7 +83,7 @@ class OverlapTests(unittest.TestCase):
         """
         checked, results = [], []
 
-        def run_agent(name, model, secrets, path, timeout, *_):
+        def run_agent(name, model, placeholder_env, relay_headers, path, timeout, *_):
             path.write_text("")
             fake.log("agent", name)
             if agent:
@@ -102,7 +102,6 @@ class OverlapTests(unittest.TestCase):
                 mock.patch.object(runtime, "upload", side_effect=fake.upload), \
                 mock.patch.object(runtime, "download"), \
                 mock.patch.object(runner, "prepare_workspace", side_effect=fake.prepare), \
-                mock.patch.object(runner, "block_lookups"), \
                 mock.patch.object(runner, "run_agent", side_effect=run_agent), \
                 mock.patch.object(runner, "price_agent", side_effect=lambda agent, *_: agent), \
                 mock.patch.object(runner, "capture_patch", return_value=("patch", "1\t0\tfile.py")), \
@@ -112,7 +111,7 @@ class OverlapTests(unittest.TestCase):
                 mock.patch.object(runner, "validation_status", return_value="valid"), \
                 mock.patch.object(runner, "validate_task", side_effect=validate):
             runner.check_and_run(tasks or [public_task(d)], MODELS, 1, d / "job",
-                                 runner.Settings(workspace="eval-only", concurrency=8), "run-one",
+                                 runner.Settings(concurrency=8), "run-one",
                                  on_checked=lambda task, status, left: checked.append((task.id, status)),
                                  on_result=lambda result, done, total: results.append(result))
         return checked, results

@@ -119,28 +119,51 @@ class CostTest(unittest.TestCase):
 
 
 class AgentScriptTest(unittest.TestCase):
-    def test_baseten_goes_through_the_proxy_with_web_tools_off(self):
-        script, env = runner.agent_script(baseten_model())
-        self.assertIn("proxy.py", script)
+    def test_an_open_model_goes_through_the_relay_with_web_tools_off(self):
+        relay, script, env = runner.agent_script(baseten_model())
+        self.assertIn("proxy.py --upstream https://inference.baseten.co/v1 --effort high ", relay)
+        self.assertIn(f"--socket {runner.RELAY_SOCKET}", relay)
         self.assertIn("--disallowedTools WebFetch,WebSearch", script)
         self.assertEqual(env["ANTHROPIC_BASE_URL"], f"http://127.0.0.1:{runner.PROXY_PORT}")
         self.assertEqual(env["ANTHROPIC_SMALL_FAST_MODEL"], "zai-org/GLM-5.3")
-        self.assertNotIn("BASETEN_API_KEY=", script)  # the key arrives through the process environment
+        self.assertNotIn("BASETEN_API_KEY=", relay + script)  # keys arrive through the process environment
 
-    def test_anthropic_talks_to_anthropic(self):
-        script, env = runner.agent_script(anthropic_model())
-        self.assertNotIn("proxy.py", script)
-        self.assertNotIn("ANTHROPIC_BASE_URL", env)
+    def test_a_claude_models_requests_go_through_the_relay_as_they_are(self):
+        relay, script, env = runner.agent_script(anthropic_model())
+        self.assertIn("proxy.py --upstream https://api.anthropic.com --socket", relay)
+        self.assertNotIn("--effort", relay)  # nothing to translate or force: Claude Code speaks to its own API
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], f"http://127.0.0.1:{runner.PROXY_PORT}")
         self.assertIn("--model claude-opus-5-5", script)
 
-    def test_stream_keeps_final_usage(self):
-        self.assertIn("--include-partial-messages", runner.agent_script(anthropic_model())[0])
+    def test_the_agent_runs_in_a_jail_whose_one_way_out_is_the_relay(self):
+        for model in (baseten_model(), anthropic_model()):
+            relay, script, _ = runner.agent_script(model)
+            self.assertIn(f"exec {runner.JAIL} --net none --bridge {runner.PROXY_PORT}={runner.RELAY_SOCKET} -- claude -p", script)
+            self.assertNotIn("jail.py", relay)  # the relay stays outside, where the provider can be reached
+            self.assertEqual(script.count("claude -p"), 1)
 
-    def test_lookups_of_the_answer_are_blocked(self):
+    def test_through_the_meter_the_relay_calls_the_meter_not_the_provider(self):
+        relay, _, env = runner.agent_script(baseten_model(), "https://meter.example")
+        self.assertIn("--upstream https://meter.example/baseten/v1 ", relay)
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], f"http://127.0.0.1:{runner.PROXY_PORT}")
+
+    def test_stream_keeps_final_usage(self):
+        self.assertIn("--include-partial-messages", runner.agent_script(anthropic_model())[1])
+
+    def test_every_step_is_jailed_and_only_installing_dependencies_gets_the_network(self):
         from unittest import mock
-        with mock.patch.object(runner.runtime, "restrict_network") as restrict:
-            runner.block_lookups("trial", ["api.anthropic.com"])
-        restrict.assert_called_once_with("trial", ["api.anthropic.com"], [])
+        done = runner.runtime.Execution(0, "", "")
+        with mock.patch.object(runner.runtime, "execute", return_value=done) as run:
+            runner.sh("trial", "pytest -q", timeout=9)
+            runner.sh("trial", "pip install .", timeout=9, network=True)
+        offline, online = (call.args[1] for call in run.call_args_list)
+        self.assertEqual(offline, f"{runner.JAIL} --net none -- bash -c 'pytest -q'")
+        self.assertEqual(online, f"{runner.JAIL} --net host -- bash -c 'pip install .'")
+        # A sandbox that can't make the jail loses the attempt to infrastructure; the step never ran unjailed.
+        refused = runner.runtime.Execution(1, "", "pr-eval jail: no namespaces of its own for the command: Operation not permitted")
+        with mock.patch.object(runner.runtime, "execute", return_value=refused), \
+                self.assertRaisesRegex(runner.runtime.RuntimeError, "can't keep a step off the network"):
+            runner.sh("trial", "pytest -q", timeout=9)
 
 
 class ParsingTest(unittest.TestCase):
@@ -579,7 +602,7 @@ class PatchCaptureTest(unittest.TestCase):
             task = tasks.Task(id="t", path=Path(d), instruction="", meta={"environment": {
                 "setup": "mkdir -p __pycache__ && echo setup > __pycache__/lib.cpython-314.pyc"}})
             with mock.patch.object(runner, "sh", local_sh), mock.patch.object(runner, "snapshot", return_value=source), \
-                    mock.patch.object(runner.runtime, "upload"), mock.patch.object(runner, "block_lookups"):
+                    mock.patch.object(runner.runtime, "upload"):
                 reason, setup = runner.prepare_workspace("unused", task, Path(d))
                 self.assertIsNone(reason)
                 local_sh(None, "echo new > lib.py && echo run > __pycache__/lib.cpython-314.pyc && "
@@ -599,13 +622,14 @@ class PatchCaptureTest(unittest.TestCase):
                                  ([(1, "no such module", False)], "setup-error"),  # not a download: not again
                                  ([(1, "", True)], "setup-timeout")):  # nor after a timeout
             answers = list(setups)
-            def fake_sh(container, script, *, timeout):
+            def fake_sh(container, script, *, timeout, network=False):
                 if script == "SETUP":
+                    self.assertTrue(network)  # only installing dependencies has it
                     return answers.pop(0)
                 return 0, "a" * 40 if "rev-parse" in script else "", False
             with tempfile.TemporaryDirectory() as d, mock.patch.object(runner, "sh", fake_sh), \
                     mock.patch.object(runner, "snapshot"), mock.patch.object(runner.runtime, "upload"), \
-                    mock.patch.object(runner, "block_lookups"), mock.patch.object(runner.time, "sleep"):
+                    mock.patch.object(runner.time, "sleep"):
                 reason, _ = runner.prepare_workspace("unused", task, Path(d))
                 log = (Path(d) / "setup.log").read_text()
             self.assertEqual((reason, answers), (expected, []))
@@ -632,24 +656,24 @@ class PatchCaptureTest(unittest.TestCase):
         self.assertEqual(sorted(set_aside), ["fix_test.go", "lib_test.go"])
         self.assertEqual(files, {"lib.go": "fixed", "lib_test.go": "old", "fix_test.go": None})
 
-    def test_the_hidden_tests_run_in_a_network_of_their_own(self):
+    def test_the_hidden_tests_run_jailed_without_the_network(self):
         task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"verifier": {}})
-        compile(runner.OWN_NETWORK, "own-network", "exec")
+        passed = runner.runtime.Execution(0, "1 passed", "")
         with tempfile.TemporaryDirectory() as d, mock.patch.object(runner.runtime, "upload"):
-            with mock.patch.object(runner, "sh", return_value=(0, "1 passed", False)) as sh:
+            with mock.patch.object(runner.runtime, "execute", return_value=passed) as run:
                 self.assertTrue(runner.run_tests("unused", task, Path(d) / "tests.log")["passed"])
-            script = sh.call_args.args[1]
-            self.assertTrue(script.startswith("python3 -c ") and script.endswith(" bash /tests/test.sh"))
-            # without one, the attempt is lost to infrastructure, not failed
-            refused = (1, "pr-eval: no network of their own for the tests: Operation not permitted", False)
-            with mock.patch.object(runner, "sh", return_value=refused), self.assertRaises(runner.runtime.RuntimeError):
+            self.assertEqual(run.call_args.args[1], f"{runner.JAIL} --net none -- bash -c 'bash /tests/test.sh'")
+            # without a jail, the attempt is lost to infrastructure, not failed
+            refused = runner.runtime.Execution(1, "", "pr-eval jail: no namespaces of its own for the command: Operation not permitted")
+            with mock.patch.object(runner.runtime, "execute", return_value=refused), \
+                    self.assertRaises(runner.runtime.RuntimeError):
                 runner.run_tests("unused", task, Path(d) / "tests.log")
-            # a check from before is made again
+            # a check made anywhere else, or before the jail, is made again
             (Path(d) / "validation").mkdir()
             (Path(d) / "validation" / "result.json").write_text(json.dumps(
                 {"backend": "blaxel", "workspace": "w", "image": "i", "region": "r", "status": "reference-fails"}))
             checked = tasks.Task(id="t", path=Path(d), instruction="", meta={})
-            settings = runner.Settings(image="i", region="r", workspace="w")
+            settings = runner.Settings(image="i", region="r")
             self.assertIsNone(runner.validation_status(checked, settings))
             self.assertEqual(runner.validation_status(checked), "reference-fails")
 
@@ -702,10 +726,8 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, "default"), "a")
 
     def job(self, d, request):
-        from unittest import mock
-        with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
-            return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
-                                    tasks_dir=Path(d) / "tasks")
+        return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
+                                tasks_dir=Path(d) / "tasks")
 
     def test_a_run_says_why_it_failed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -739,7 +761,7 @@ class PipelineTest(unittest.TestCase):
                     mock.patch.object(runner, "cleanup") as cleanup, contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(pipeline.execute(job, [baseten_model()], runner.Settings()), 130)
             meta = pipeline.Job(job.path).meta
-        cleanup.assert_called_once_with("r1", workspace="test-eval")  # only this run's sandbox workspace
+        cleanup.assert_called_once_with("r1")  # only this run's sandboxes
         self.assertEqual(meta["status"]["phase"], "stopped")
         self.assertEqual(meta["request"]["repos"], ["o/r"])  # what resume needs to start over
         self.assertEqual(meta["tasks"], [])
@@ -1001,7 +1023,7 @@ class AppTest(unittest.TestCase):
             dead = jobs / "dead"  # says it is running, but its process is gone
             dead.mkdir()
             (dead / "run.json").write_text(json.dumps({"run_id": "dead", "request": {"repos": ["o/r"]}, "tasks": [],
-                                                       "backend": "blaxel", "workspace": "test-eval",
+                                                       "backend": "baseten",
                                                        "models": [], "status": {"phase": "running", "pid": 999999}}))
             (dead / "log.txt").write_text("cloning o/r\nTraceback: boom\n")
             page = app.App(jobs)
@@ -1114,7 +1136,7 @@ class AppTest(unittest.TestCase):
     def test_the_hosted_page_reads_github_only_with_the_visitors_own_sign_in(self):
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
-                mock.patch.object(page, "state", return_value={"checks": {"blaxel": True, "bl_cli": True, "gh": False}}):
+                mock.patch.object(page, "state", return_value={"checks": {"sandboxes": True, "gh": False}}):
             self.assertIn("Sign in with GitHub", page.repo_info("o/public", "a@x.co")["error"])  # public ones too
             with mock.patch.object(app, "quick_collected", return_value=False):  # the quick sample isn't collected yet
                 self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
@@ -1134,7 +1156,7 @@ class AppTest(unittest.TestCase):
                 mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
                 mock.patch.object(page, "spawn") as spawn, mock.patch.object(app.pipeline, "preflight"), \
                 mock.patch.object(page, "state", return_value={"blocked": None, "quick": {"tasks": 10}, "checks": {
-                    "blaxel": True, "bl_cli": True, "gh": False, "judge": {"problem": None}}}):
+                    "sandboxes": True, "gh": False, "judge": {"problem": None}}}):
             self.assertEqual(page.repo_info("o/public", "a@x.co")["language"], "Go")
             self.assertEqual(asked.call_args.args, ("repos/o/public", "page-tok"))
             self.assertIn("if it's private, sign in with GitHub", page.repo_info("o/private", "a@x.co")["error"])
@@ -1149,7 +1171,7 @@ class AppTest(unittest.TestCase):
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
                 mock.patch.object(app, "quick_collected", return_value=True), \
-                mock.patch.object(page, "state", return_value={"checks": {"blaxel": True, "bl_cli": True, "gh": False}}):
+                mock.patch.object(page, "state", return_value={"checks": {"sandboxes": True, "gh": False}}):
             self.assertNotEqual(page._start({"quick": True, "models": []}, "a@x.co")["error"], app.SIGN_IN_FIRST)
             self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
         gh.assert_not_called()  # its tasks are only read: nothing asks GitHub
@@ -1207,7 +1229,7 @@ class AppTest(unittest.TestCase):
             (jobs / "mine" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
             (jobs / "mine" / "report.json").write_text("{}")
             page = app.App(jobs)
-            with mock.patch.object(page, "checks", return_value={"blaxel": True}), \
+            with mock.patch.object(page, "checks", return_value={"sandboxes": True}), \
                     mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
                 seen = {u: sorted(r["id"] for r in page.state(user=u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
             # Signed in: only their own runs; "open" has no owner recorded, so it is no one's. Locally: all but theirs.
@@ -1327,7 +1349,7 @@ class AppTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
             page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
@@ -1339,7 +1361,7 @@ class AppTest(unittest.TestCase):
     def test_starting_a_run_takes_the_judges_check_from_the_page(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            checks = {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": "the judge needs KEY"}}
+            checks = {"sandboxes": True, "gh": True, "judge": {"problem": "the judge needs KEY"}}
             with mock.patch.object(page, "state", return_value={"busy": False, "runs": [], "checks": checks}), \
                     mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight") as preflight, \
@@ -1375,7 +1397,7 @@ class AppTest(unittest.TestCase):
             (jobs / run_id / app.ACCESS).write_text(json.dumps({"owner": owner, "private": False}))
 
     def hosted_state(self, page: app.App, user: str | None) -> dict:
-        with mock.patch.object(page, "checks", return_value={"blaxel": True}), mock.patch.object(app, "alive", return_value=True), \
+        with mock.patch.object(page, "checks", return_value={"sandboxes": True}), mock.patch.object(app, "alive", return_value=True), \
                 mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
             return page.state(user=user)
 
@@ -1484,7 +1506,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_started_while_signed_in_records_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
@@ -1498,7 +1520,7 @@ class AppTest(unittest.TestCase):
     def test_runs_started_in_the_same_second_get_their_own_folders(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}, "quick": {"tasks": 10}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}, "quick": {"tasks": 10}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(app, "datetime", SimpleNamespace(now=lambda: datetime(2026, 10, 29, 9, 0, 0))):
@@ -1546,7 +1568,7 @@ class AppTest(unittest.TestCase):
             self.assertIsInstance(app.App.chosen_pulls(bad), str, bad)
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "checks": {"blaxel": True, "bl_cli": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
@@ -1670,7 +1692,9 @@ class ReportTest(unittest.TestCase):
         page = app.PAGE.read_text()
         self.assertNotIn("Docker", page)
         self.assertNotIn("Docker", report.TEMPLATE.read_text())
-        self.assertIn("Dedicated Blaxel workspace", page)
+        self.assertIn("Baseten Sandboxes, where attempts run", page)
+        self.assertNotIn("Blaxel workspace", page)
+        self.assertNotIn("Blaxel CLI", page)
         self.assertNotIn("run.image", web_source("src/features/report"))  # the trial image stays out of reports
 
     def test_report_header_omits_judge_metadata(self):
@@ -1817,25 +1841,25 @@ class TaskScreenTest(unittest.TestCase):
             verdict = {"verdict": "fail", "reason": "tests want a message the request never gives"}
             with mock.patch.object(judge, "ask", return_value=verdict) as asked, \
                     mock.patch.object(runner, "start_container") as started:
-                record = runner.validate_task(task, runner.Settings(workspace="eval-only", judge=panel))
+                record = runner.validate_task(task, runner.Settings(judge=panel))
                 self.assertEqual(record["status"], runner.UNSTATED)
                 self.assertIn("never gives", record["screen"]["reason"])
                 started.assert_not_called()
-                self.assertFalse(runner.needs_check(task, runner.Settings(workspace="eval-only", judge=panel)))
-                runner.validate_task(task, runner.Settings(workspace="eval-only", judge=panel))
+                self.assertFalse(runner.needs_check(task, runner.Settings(judge=panel)))
+                runner.validate_task(task, runner.Settings(judge=panel))
                 self.assertEqual(asked.call_count, 1)  # kept in the task folder, asked once
             self.assertIn(runner.UNSTATED, pipeline.LEFT_OUT)  # the page says why it was left out
 
     def test_a_task_checked_before_the_screen_is_screened_without_a_new_sandbox(self):
         panel = Panel([Judge(model="j")])
-        settings = runner.Settings(workspace="eval-only", judge=panel)
+        settings = runner.Settings(judge=panel)
         with tempfile.TemporaryDirectory() as d:
             task = self.task(d)
             (Path(d) / "validation").mkdir()
             runner.write_json(Path(d) / "validation" / "result.json",
                               {"status": "valid", **runner.environment_identity(settings)})
             self.assertTrue(runner.needs_check(task, settings))
-            self.assertFalse(runner.needs_check(task, runner.Settings(workspace="eval-only")))  # tests only
+            self.assertFalse(runner.needs_check(task, runner.Settings()))  # tests only
             with mock.patch.object(judge, "ask", return_value={"verdict": "pass", "reason": "ok"}), \
                     mock.patch.object(runner, "start_container") as started:
                 self.assertEqual(runner.validate_task(task, settings)["status"], "valid")

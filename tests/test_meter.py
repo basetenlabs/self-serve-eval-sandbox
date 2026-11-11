@@ -84,13 +84,13 @@ class MeterTest(unittest.TestCase):
         base.AppTest.add_run(self.jobs, run_id, owner)
         trial_dir = self.jobs / run_id / "trials" / "t__m__1"
         trial_dir.mkdir(parents=True)
-        env, routing, path = meter.admit(model or anthropic_model(), trial_dir, "ANTHROPIC_API_KEY", self.url)
+        env, headers, path = meter.admit(model or anthropic_model(), trial_dir, "ANTHROPIC_API_KEY")
         self.assertTrue(env["ANTHROPIC_API_KEY"].startswith("pr-eval-placeholder-"))
-        self.assertEqual(routing[0]["destinations"], ["127.0.0.1"])
-        return routing[0]["secrets"]["meter-ticket"], path
+        self.assertEqual(list(headers), [meter.HEADER])  # what the attempt's relay puts on each call
+        return headers[meter.HEADER], path
 
     def call(self, ticket: str | None, path: str, body: dict) -> tuple[int, bytes]:
-        """What code in the sandbox does: post to the meter with a placeholder key; Blaxel adds the ticket."""
+        """What reaches the meter from a sandbox: a call with a placeholder key, and the ticket its relay added."""
         headers = {"content-type": "application/json", "x-api-key": "pr-eval-placeholder-x"}
         if ticket:
             headers[meter.HEADER] = ticket
@@ -189,15 +189,16 @@ class MeterTest(unittest.TestCase):
 
 class MeteredAttemptTest(unittest.TestCase):
     def test_a_metered_agent_talks_to_the_meter_only(self):
-        url = "https://eval-meter-ws.preview.bl.run"
-        script, env = runner.agent_script(anthropic_model(), url)
-        self.assertEqual(env["ANTHROPIC_BASE_URL"], url + "/anthropic")
-        script, env = runner.agent_script(baseten_model(), url)
-        self.assertIn(f"--upstream {url}/baseten/v1", script)
+        url = "https://eval-meter.example"
+        for model, path in ((anthropic_model(), "/anthropic"), (baseten_model(), "/baseten/v1")):
+            relay, script, env = runner.agent_script(model, url)
+            self.assertIn(f"--upstream {url}{path} ", relay)
+            self.assertEqual(env["ANTHROPIC_BASE_URL"], f"http://127.0.0.1:{runner.PROXY_PORT}")  # the relay, never the meter
+            self.assertNotIn(url, script + json.dumps(env))
 
     def test_an_attempt_outside_a_run_has_nothing_to_meter(self):
         with tempfile.TemporaryDirectory() as d, self.assertRaises(runner.runtime.RuntimeError):
-            meter.admit(anthropic_model(), Path(d) / "check", "ANTHROPIC_API_KEY", "https://m.example")
+            meter.admit(anthropic_model(), Path(d) / "check", "ANTHROPIC_API_KEY")
 
 
 if __name__ == "__main__":

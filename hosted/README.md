@@ -21,12 +21,15 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   request, checks each entry with the sign-in's own rules, never removes the last admin, writes the
   file atomically and logs who changed what. The sign-in re-reads the file on every change, so
   someone removed is signed out on their next request.
-- **Keys:** the page's process gets the judges', models' and Blaxel keys in its environment
-  when it starts. They are never written to the volume, the image or this repository.
-- **Key meter:** trial sandboxes never get a model key, and hosted they can't reach a provider
-  either: their one destination is the meter, a second public preview ("meter") served by
-  the page's process (`eval_sandbox/meter.py`). Blaxel's egress proxy puts the attempt's ticket on
-  each request; the meter checks it, adds the real key, forwards the call and writes what its usage
+- **Keys:** the page's process gets the judges' and models' keys, and the Baseten key its runs
+  create their sandboxes with, in its environment when it starts. They are never written to the
+  volume, the image or this repository.
+- **Key meter:** trial sandboxes never get a model key, and hosted the agent can't reach a provider
+  either: its one destination is the meter, a second public preview ("meter") served by
+  the page's process (`eval_sandbox/meter.py`). The agent runs in a jail with no network
+  (`docker/jail.py`); the attempt's model relay, beside it in the sandbox and out of its sight
+  (`docker/proxy.py`), puts the attempt's ticket on each request and sends it to the meter. The
+  meter checks the ticket, adds the real key, forwards the call and writes what its usage
   cost to the run's `spend.jsonl`. So a call made by the repository's code during an attempt counts
   like the agent's own. It refuses a call with no live ticket, from a run with no owner or one
   stopped for spending, for another provider, for a model with no price, or to an endpoint whose
@@ -50,19 +53,23 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   `access.json` in the run's folder, and hides a run with no owner recorded from everyone else. The
   runs, their logs and the log lines naming who started or stopped one all stay on the volume.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
-- **Runs:** the page's sandbox is on Baseten Sandboxes; its trials still run on Blaxel, in the same
-  dedicated workspace as local runs: `deploy.py` reads it from `PR_EVAL_BLAXEL_WORKSPACE`, else
-  `~/.config/pr-eval/blaxel.json`, and stops if neither is set. Trials stay on Blaxel for now:
-  a trial installs dependencies with the network open, then the agent runs with model-provider-only
-  egress, and that per-phase network policy is what Blaxel sandboxes provide today. While a run is going, the sign-in server
-  keeps the sandbox awake.
+- **Runs:** everything is on Baseten Sandboxes, in one team: the page's sandbox, and the trial
+  sandboxes its runs create with the deploy's own key (`BASETEN_SANDBOX_API_KEY`, and
+  `BASETEN_TEAM_ID` when set). Nobody who uses the page connects an account or a workspace, and
+  nobody's run depends on anyone's quota but the team's. That key can manage every sandbox in its
+  team, so the page's process holds it and no trial sandbox ever does; where other tools share the
+  team, the runs delete only sandboxes they labelled themselves. Baseten Sandboxes can't limit a
+  sandbox's network yet, so a trial does it from inside: it installs dependencies with the network
+  open, then the agent, and the hidden tests after it, run in a jail with none. The team's sandbox
+  count is shared by every run: when it is full, a new sandbox waits for one to finish. While a
+  run is going, the sign-in server keeps the page's sandbox awake.
 - **Limits:** two runs go at once, one per person, and two runs never share a repository (both
   would clone it and check its pull requests at once), except two quick samples. Runs in
   the last 24 hours may spend $1,000 in all and $500 per person on models. Each run keeps a
   ledger (`spend.jsonl`) of every model call it pays for, written as each finishes: every call
   through the key meter, including from attempts that ended invalid, were stopped or run again on
   resume, and every judge's answer. The limits add up the entries from the last 24 hours, by when each was spent,
-  so a run resumed days later counts too. Blaxel compute isn't included. A charge with no price
+  so a run resumed days later counts too. Sandbox compute isn't included. A charge with no price
   never counts as free: an agent attempt counts its model's latest cost per attempt (else $5,
   or the dearest attempt seen if more), a judge's answer $0.25. A run (or a resume) whose estimate
   would go over waits; a run going stops (resumable) within 30 seconds once its owner or the page
@@ -136,5 +143,4 @@ image, `deploy.py --delete` and deploy again (runs and sign-in state stay on the
 .venv/bin/python hosted/deploy.py --delete --volume   # everything
 ```
 
-Then delete the Blaxel service account the page's trials used, in the workspace's settings, and the
-Keychain items `deploy.py` reads its keys from (`SECRETS` in that file).
+Then delete the Keychain items `deploy.py` reads its keys from (`SECRETS` in that file).

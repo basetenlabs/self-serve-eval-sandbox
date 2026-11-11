@@ -128,5 +128,21 @@ class SmokeRunsPruned(unittest.TestCase):
             self.assertEqual(sorted(Path(p).name for p in listed), ["smoke-1-after", "smoke-1-before"])
 
 
+class PageSandboxes(unittest.TestCase):
+    def test_the_pages_runs_make_their_sandboxes_with_the_deploys_key_in_its_team(self):
+        """Nobody connects a workspace of their own: every run's sandboxes are in the page's Baseten team."""
+        from types import SimpleNamespace
+        deployer = SimpleNamespace(key="can-make-sandboxes", team="team-one")
+        with mock.patch.object(deploy, "client", return_value=deployer), mock.patch.object(deploy, "keychain", return_value=None):
+            env = deploy.page_env({"BASETEN_API_KEY": "model-only"}, "https://page.example", "https://meter.example", 8766)
+            deployer.team = None
+            default_team = deploy.page_env({}, "https://page.example", "https://meter.example", None)
+        self.assertEqual((env["BASETEN_SANDBOX_API_KEY"], env["BASETEN_TEAM_ID"], env["BASETEN_API_KEY"]),
+                         ("can-make-sandboxes", "team-one", "model-only"))
+        self.assertNotIn("BASETEN_TEAM_ID", default_team)  # the key's own team
+        for settings in (env, deploy.SECRETS):
+            self.assertFalse([name for name in settings if name.startswith("BL_") or "BLAXEL" in name])
+
+
 if __name__ == "__main__":
     unittest.main()

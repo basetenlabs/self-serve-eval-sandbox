@@ -43,7 +43,7 @@ export function LivePanel({ run, models, colors, onOpen }: { run: Run; models: M
   );
 }
 
-/** One square per Blaxel sandbox, in board order so a square changes colour in place. */
+/** One square per sandbox, in board order so a square changes colour in place. */
 function Fleet({ run, colors }: { run: Run; colors: Record<string, SwatchT> }) {
   const b = run.board!;
   const active = isActive(run.phase);

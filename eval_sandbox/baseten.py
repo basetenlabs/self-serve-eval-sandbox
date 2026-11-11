@@ -11,14 +11,21 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 API = "https://api.baseten.co"
+# A file larger than this goes up in parts of this size, a few at a time, each read from disk when it is sent.
+UPLOAD_PART = 5 * 1024 * 1024
+UPLOAD_PARTS_AT_ONCE = 3
 
 
 class SandboxError(RuntimeError):
@@ -32,7 +39,7 @@ class Client:
         if not api_key:
             raise SandboxError("A Baseten API key that can mint sandbox tokens is required.")
         self.key, self.team, self.api = api_key, team_id, api.rstrip("/")
-        self._token, self._expires = "", 0.0
+        self._token, self._expires, self._minting = "", 0.0, threading.Lock()
 
     # --- HTTP -----------------------------------------------------------------------------------------
     def _send(self, url: str, method: str = "GET", *, body=None, data: bytes | None = None,
@@ -65,16 +72,17 @@ class Client:
                 time.sleep(2)
 
     def token(self) -> str:
-        if self._token and time.time() < self._expires - 600:
+        with self._minting:  # many attempts ask at once: one mints, the rest take its token
+            if self._token and time.time() < self._expires - 600:
+                return self._token
+            minted = self._send(f"{self.api}/v1/token", "POST", body={"scopes": ["sandboxes"]}, auth=self.key)
+            self._token = minted["token"]
+            try:
+                from datetime import datetime
+                self._expires = datetime.fromisoformat(minted["expires_at"].replace("Z", "+00:00")).timestamp()
+            except (KeyError, ValueError):
+                self._expires = time.time() + 3600
             return self._token
-        minted = self._send(f"{self.api}/v1/token", "POST", body={"scopes": ["sandboxes"]}, auth=self.key)
-        self._token = minted["token"]
-        try:
-            from datetime import datetime
-            self._expires = datetime.fromisoformat(minted["expires_at"].replace("Z", "+00:00")).timestamp()
-        except (KeyError, ValueError):
-            self._expires = time.time() + 3600
-        return self._token
 
     def manage(self, method: str, path: str, body=None, allow: tuple = ()):
         return self._send(self.api + path, method, body=body, auth=self.token(), allow=allow)
@@ -151,7 +159,9 @@ class Client:
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
             for path, content in files.items():
-                zipped.writestr(path, content)
+                entry = zipfile.ZipInfo(path)  # writestr's own default is 0600: unreadable to an image's other users
+                entry.external_attr, entry.compress_type = 0o644 << 16, zipfile.ZIP_DEFLATED
+                zipped.writestr(entry, content)
         pushed = self.manage("POST", "/v1/sandboxes/images", {"name": name, "memory": memory})
         if not pushed.get("upload_url"):
             raise SandboxError(f"The image push returned no upload URL: {json.dumps(pushed)[:300]}")
@@ -217,6 +227,60 @@ class Client:
             f"Content-Type: application/octet-stream\r\n\r\n".encode(), content, f"\r\n--{boundary}--\r\n".encode()])
         self.runtime(box, "PUT", "/filesystem/" + urllib.parse.quote(path, safe=""), data=data,
                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=600)
+
+    def upload(self, box: dict, local: Path, path: str, mode: str = "0644") -> None:
+        """Copies a local file to an absolute path, whatever its size: a large one goes up in parts, each read
+        from disk when it is sent, so the whole file is never in memory."""
+        size = local.stat().st_size
+        if size <= UPLOAD_PART:
+            return self.write(box, path, local.read_bytes(), mode)
+        started = self.runtime(box, "POST", "/filesystem-multipart/initiate/" + urllib.parse.quote(path, safe=""),
+                               body={"permissions": mode})
+        upload = started["uploadId"]
+
+        def send(number: int) -> dict:
+            with local.open("rb") as file:
+                file.seek((number - 1) * UPLOAD_PART)
+                data = file.read(UPLOAD_PART)
+            boundary = uuid.uuid4().hex
+            body = b"".join([f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="part"\r\n'
+                             f"Content-Type: application/octet-stream\r\n\r\n".encode(), data, f"\r\n--{boundary}--\r\n".encode()])
+            done = self.runtime(box, "PUT", f"/filesystem-multipart/{upload}/part?partNumber={number}", data=body,
+                                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=600)
+            return {"partNumber": number, "etag": done["etag"]}
+
+        try:
+            with ThreadPoolExecutor(max_workers=UPLOAD_PARTS_AT_ONCE) as pool:
+                parts = list(pool.map(send, range(1, -(-size // UPLOAD_PART) + 1)))
+            self.runtime(box, "POST", f"/filesystem-multipart/{upload}/complete", body={"parts": parts}, timeout=600)
+        except BaseException:
+            try:
+                self.runtime(box, "DELETE", f"/filesystem-multipart/{upload}/abort", allow=(404,))
+            except SandboxError:
+                pass
+            raise
+
+    def download(self, box: dict, path: str, local: Path) -> bool:
+        """Copies a file to `local` a megabyte at a time, never whole in memory; False if it doesn't exist."""
+        head = {"Authorization": f"Bearer {self.token()}", "Accept": "application/octet-stream"}
+        if self.team:
+            head["X-Team-Id"] = self.team
+        url = box["url"].rstrip("/") + "/filesystem/" + urllib.parse.quote(path, safe="") + "?download=true"
+        part = local.with_name(local.name + ".part")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=head), timeout=600) as response, \
+                    part.open("wb") as out:
+                shutil.copyfileobj(response, out, 1 << 20)
+        except urllib.error.HTTPError as exc:
+            part.unlink(missing_ok=True)
+            if exc.code == 404:
+                return False
+            raise SandboxError(f"GET {path} failed ({exc.code}): {exc.read().decode(errors='replace')[:300]}", exc.code) from None
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+            part.unlink(missing_ok=True)
+            raise SandboxError(f"GET {path} failed: {exc}") from None
+        part.replace(local)
+        return True
 
     def read(self, box: dict, path: str) -> bytes | None:
         """A file's bytes by absolute path, or None if it doesn't exist."""

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import secrets
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from . import app, config, pipeline, report, runner, runtime, tasks
@@ -41,7 +42,7 @@ def cmd_run(args) -> int:
         # A resumed run keeps its own tasks. --attempts may grow it and --models may add
         # models, so a new model is compared on the same tasks without rerunning the others.
         job = pipeline.Job(args.resume)
-        pipeline.restore_execution(job.meta, runner.Settings(workspace=args.workspace))
+        pipeline.restore_execution(job.meta, runner.Settings())
         keys, added = pipeline.resumed_models(job.meta, args.models)
         try:
             models, judge = pipeline.preflight(keys, pipeline.resumed_judge(job.meta, args.judge), args.models_config)
@@ -61,11 +62,10 @@ def cmd_run(args) -> int:
                                    test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task,
                                    quick=args.quick)
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
-                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks,
-                               workspace=args.workspace, region=args.region)
+                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region)
     print(f"run {job.id} -> {job.path}")
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
-                               region=args.region, workspace=args.workspace, agent_timeout=args.agent_timeout,
+                               region=args.region, agent_timeout=args.agent_timeout,
                                judge=judge, keep_sandboxes=args.keep_sandboxes)
     job.status("collecting", "Starting")  # going before the sweep, so no sweep takes the clones and tasks it needs
     pipeline.sweep_private(job.path.parent)
@@ -92,14 +92,16 @@ def cmd_validate(args) -> int:
     selected = tasks.discover(args.tasks, args.task)
     # The panel's chair also checks that each request says enough to pass its tests.
     settings = runner.Settings(image=runtime.resolve_image(args.image), concurrency=args.concurrency,
-                               workspace=runtime.workspace(), judge=config.load()[1])
+                               judge=config.load()[1])
     counts: dict[str, int] = {}
 
     def checked(record, done, total):
         counts[record["status"]] = counts.get(record["status"], 0) + 1
         print(f"[{done}/{total}] {record['task_id']}: {record['status']}", flush=True)
 
-    runner.in_parallel(selected, lambda t: runner.validate_task(t, settings), args.concurrency, "validate", checked)
+    # A name of its own, so stopping this check removes its sandboxes and no other check's.
+    run_id = f"validate-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
+    runner.in_parallel(selected, lambda t: runner.validate_task(t, settings, run_id), args.concurrency, run_id, checked)
     print(", ".join(f"{n} {status}" for status, n in sorted(counts.items())))
     return 0
 
@@ -130,14 +132,23 @@ def cmd_report(args) -> int:
 def cmd_build_image(args) -> int:
     try:
         runtime.check_connection()
-        return runtime.build_image(args.image, args.claude_code_version)
+        print(f"Building the trial image {args.image} on Baseten (a few minutes when it is new)", flush=True)
+        code = runtime.build_image(args.image, args.claude_code_version)
+        print(f"Built {runtime.resolve_image(args.image)}")
+        return code
     except runtime.RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
 
 
 def cmd_cleanup(args) -> int:
-    removed = runner.cleanup(args.run_id, workspace=runtime.workspace())
+    if args.run_id:
+        removed, kept = runner.cleanup(args.run_id), {}
+    else:
+        removed, kept = pipeline.leftover_sandboxes(args.jobs)
     print(f"removed {len(removed)} sandbox(es)")
+    for run_id, count in kept.items():
+        print(f"left {count} of {run_id}: it is going, or isn't a run in {args.jobs}. "
+              f"`pr-eval cleanup --run-id {run_id}` removes them.")
     return 0
 
 
@@ -180,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY,
                    help=f"attempts and checks at once (default {runner.DEFAULT_CONCURRENCY})")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
-    r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
+    r.add_argument("--region", default="us-pdx-1", help="Baseten Sandboxes region (default us-pdx-1)")
     r.add_argument("--agent-timeout", type=int, help="seconds per attempt (default 1800)")
     r.add_argument("--keep-sandboxes", action="store_true", help="keep verifier sandboxes for debugging (agent sandboxes are always deleted)")
     r.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
@@ -214,21 +225,17 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     j.set_defaults(func=cmd_rejudge)
 
-    k = sub.add_parser("cleanup", help="remove trial sandboxes a killed run left behind")
-    k.add_argument("--run-id")
+    k = sub.add_parser("cleanup", help="remove trial sandboxes a killed run on this machine left behind")
+    k.add_argument("--run-id", help="this run's only, going or not (default: every run in --jobs that isn't going)")
+    k.add_argument("--jobs", type=Path, default=pipeline.DEFAULT_JOBS)
     k.set_defaults(func=cmd_cleanup)
 
-    b = sub.add_parser("build-image", help="rebuild the Blaxel trial image remotely")
+    b = sub.add_parser("build-image", help="rebuild the trial image on Baseten")
     b.add_argument("--image", default=runner.DEFAULT_IMAGE)
     b.add_argument("--claude-code-version", help="default: the version pinned in docker/Dockerfile")
     b.set_defaults(func=cmd_build_image)
 
-    for command in (s, r, v, k, b):
-        command.add_argument("--workspace", help="dedicated Blaxel workspace (or PR_EVAL_BLAXEL_WORKSPACE / saved config)")
-
     args = p.parse_args(argv)
-    if getattr(args, "workspace", None):
-        os.environ["PR_EVAL_BLAXEL_WORKSPACE"] = args.workspace
     try:
         return args.func(args)
     except RuntimeError as exc:

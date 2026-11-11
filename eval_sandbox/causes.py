@@ -49,10 +49,10 @@ SHORT = {"setup-timeout": "Dependency install timed out", "agent-crashed": "Agen
 
 # What each step did, for a sentence about an exception raised in it.
 DOING = {
-    "boot": "Blaxel could not start {whose} sandbox",
+    "boot": "Baseten could not start {whose} sandbox",
     "upload": "Could not upload the task's files to {whose} sandbox",
     "setup": "Installing dependencies in {whose} sandbox broke off",
-    "network": "Could not limit {whose} sandbox's network to the model provider",
+    "network": "Could not start {whose} jail and its model relay, its one way to the model provider",
     "agent": "The agent's run in its sandbox broke off",
     "save": "Could not save the agent's change from its sandbox",
     "tests": "Running the hidden tests broke off",
@@ -70,8 +70,14 @@ TRANSPORT = {"ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "P
 PASSING = re.compile(r"timed? ?out|timeout|connection (?:reset|refused|aborted|closed)|broken pipe|"
                      r"temporarily unavailable|\b(?:429|50[0-4])\b", re.I)
 # Our own messages for steps that fail the same way every time they're tried.
-LASTING = re.compile(r"must run non-root|did not apply the requested network|GitHub is still reachable|"
-                     r"network of their own|Run is stopping", re.I)
+LASTING = re.compile(r"must run non-root|can't keep a step off the network|jail or its model relay|"
+                     r"Run is stopping", re.I)
+
+
+def http_status(exc: BaseException) -> int | None:
+    """The HTTP status an exception carries, if it came from an API's answer."""
+    return (getattr(exc, "status", None) or getattr(exc, "status_code", None)
+            or getattr(getattr(exc, "response", None), "status_code", None))
 
 
 def chain(exc: BaseException) -> list[BaseException]:
@@ -85,13 +91,13 @@ def chain(exc: BaseException) -> list[BaseException]:
 
 def transient(exc: BaseException) -> bool:
     """Whether trying again could go differently: a timeout, a dropped connection, a server error, or
-    Blaxel failing to create a sandbox. A local file that can't be read, our own guard refusing, or
+    Baseten failing to create a sandbox. A local file that can't be read, our own guard refusing, or
     anything else unknown fails the same way again."""
     links = chain(exc)
     if any(LASTING.search(str(e)) for e in links):
         return False
     for e in links:
-        status = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+        status = http_status(e)
         if isinstance(status, int) and (status >= 500 or status == 429):
             return True
         if isinstance(status, int) and status >= 400:  # the request itself was refused: it would be again
@@ -100,18 +106,18 @@ def transient(exc: BaseException) -> bool:
             return True
         if isinstance(e, OSError) and e.errno is not None:
             return e.errno in TRANSIENT_ERRNOS
-    return any(PASSING.search(str(e)) or str(e).startswith(("Blaxel creation failed", "Blaxel process transport"))
+    return any(PASSING.search(str(e)) or str(e).startswith(("Baseten creation failed", "Baseten process transport"))
                for e in links)
 
 
 def plain(exc: BaseException) -> str | None:
     """What went wrong in a few plain words, where the exception says it in a way worth repeating."""
     for e in chain(exc):
-        status = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+        status = http_status(e)
         if isinstance(status, int) and status >= 500:
-            return "Blaxel had a server error"
+            return "Baseten had a server error"
         if status == 429:
-            return "Blaxel asked us to slow down"
+            return "Baseten asked us to slow down"
         if isinstance(e, TimeoutError) or "Timeout" in type(e).__name__:
             return "it timed out"
         if isinstance(e, ConnectionError) or type(e).__name__ in TRANSPORT:

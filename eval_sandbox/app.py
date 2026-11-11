@@ -60,7 +60,7 @@ USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
 MAX_FAVORITES = 200
-# Hosted, everyone shares one Blaxel workspace and one set of model keys: how many runs may go at once,
+# Hosted, everyone shares one Baseten team's sandboxes and one set of model keys: how many runs may go at once,
 # in all and for one person, and how much may be spent on models in the last day (every agent attempt,
 # invalid and stopped ones too, and every judge, from each run's ledger), in all and for one person.
 # Locally: one run at a time and no spending limit.
@@ -75,7 +75,7 @@ UNKNOWN_ATTEMPT_COST = 5.0
 # What one judge's answer with no price counts: well over any measured so far (about $0.05 to $0.15).
 UNKNOWN_JUDGE_COST = 0.25
 SPEND_CHECK_SECONDS = 30  # how often the hosted page stops runs going once their owner or the page is over
-# Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
+# Sandboxes an attempt holds at each stage: its own and the verifier being readied
 # beside it, then the verifier alone once the agent's sandbox is deleted. One set up while
 # its task is still checked holds only its own: the verifier comes once the check passes.
 SANDBOXES = {"sandboxes": 2, "setup": 2, "agent": 2, "tests": 1}
@@ -225,7 +225,7 @@ class App:
         return (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
 
     def checks(self, judge: config.Panel) -> dict:
-        """Dedicated Blaxel workspace, build CLI and GitHub. The remote checks take seconds, so only the
+        """Baseten Sandboxes, the trial image and GitHub. The remote checks take seconds, so only the
         first waits for them: after that the page gets the last answer, and one older than 15 seconds
         is checked again in the background."""
         when, cached = self.checked
@@ -245,10 +245,9 @@ class App:
     def check(self, judge: config.Panel) -> dict:
         problem = None
         image = False
-        bl_cli = bool(shutil.which("bl"))
         try:
             runtime.check_connection()
-            image = bl_cli and runtime.image_exists(runner.DEFAULT_IMAGE)
+            image = runtime.image_exists(runner.DEFAULT_IMAGE)
         except RuntimeError as exc:
             problem = str(exc)
         gh = not GITHUB_CLIENT_ID and bool(shutil.which("gh")) \
@@ -257,8 +256,8 @@ class App:
             gh_login = tasks.gh("user").get("login") if gh else None
         except (RuntimeError, SystemExit, subprocess.SubprocessError):
             gh_login = None
-        checked = {"blaxel": problem is None, "blaxel_problem": problem,
-                   "bl_cli": bl_cli, "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
+        checked = {"sandboxes": problem is None, "sandboxes_problem": problem,
+                   "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
         self.checked = (time.monotonic(), checked)
         return checked
 
@@ -329,8 +328,8 @@ class App:
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
             "cost": sum(s.get("cost_usd") or 0 for s in (data.get("summary") or {}).values()),  # so far, while it goes
             "log": report.tail(log, 15) if phase in ("failed", "stopped") else None, "lost": lost,
-            "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "blaxel"
-                         and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
+            "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "baseten"
+                         and bool(meta.get("request") or run_tasks),
             "again": again(meta),
         }
 
@@ -486,10 +485,8 @@ class App:
         if state.get("blocked"):
             return {"error": state["blocked"]}
         checks = state["checks"]
-        if not checks["blaxel"]:
-            return {"error": checks["blaxel_problem"]}
-        if not checks["bl_cli"]:
-            return {"error": "Install the Blaxel CLI (bl): runs use it to build and find the trial image."}
+        if not checks["sandboxes"]:
+            return {"error": checks["sandboxes_problem"]}
         quick = bool(form.get("quick"))
         pulls = {} if quick else self.chosen_pulls(form.get("pulls"))
         if isinstance(pulls, str):
@@ -1018,7 +1015,7 @@ def watch_spending(page: App) -> None:
 def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
     page = App(jobs_dir)
-    # Check the workspace, the CLIs and the judge while the server starts, so the first visit doesn't wait.
+    # Check the sandboxes, GitHub and the judge while the server starts, so the first visit doesn't wait.
     threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
     # Delete the private clones and task folders left by runs whose process died, such as when the page last
     # restarted, and private runs' transcripts once they're past keeping; again every hour while the page runs.
