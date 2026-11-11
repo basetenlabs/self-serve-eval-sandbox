@@ -43,8 +43,12 @@ test('signed-out and failed sign-ins add at most one short line', () => {
 test('the public pages take the site stylesheet and texture the app builds with, and never Beausite', async () => {
   const { readFile } = await import('node:fs/promises')
   const here = new URL('.', import.meta.url)
-  for (const [copy, source] of [['public/baseten.css', '../web/src/styles/baseten.css'], ['public/texture.png', '../web/src/styles/texture.png']]) {
-    assert.deepEqual(await readFile(new URL(copy, here)), await readFile(new URL(source, here)), `${copy} differs from ${source}`)
+  const { publicAssets } = await import('./public.mjs')
+  const assets = await publicAssets()
+  const release = await readFile(new URL('deploy.py', here), 'utf8')
+  for (const [path, source] of [['/auth/baseten.css', 'web/src/styles/baseten.css'], ['/auth/texture.png', 'web/src/styles/texture.png']]) {
+    assert.deepEqual(assets.get(path).body, await readFile(new URL(`../${source}`, here)), `${path} is not ${source}`)
+    assert.match(release, new RegExp(`^RELEASE = [^\\]]*"${source}"`, 'm'), `hosted/deploy.py doesn't ship ${source}`)
   }
   const css = await readFile(new URL('login-page.css', here), 'utf8')
   assert.doesNotMatch(css + renderLogin({ brand }), /url\([^)]*beausite/i)
