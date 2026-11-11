@@ -245,6 +245,7 @@ class Client:
             boundary = uuid.uuid4().hex
             body = b"".join([f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="part"\r\n'
                              f"Content-Type: application/octet-stream\r\n\r\n".encode(), data, f"\r\n--{boundary}--\r\n".encode()])
+            del data  # one copy of the part while it is sent, not two: many attempts upload at once
             done = self.runtime(box, "PUT", f"/filesystem-multipart/{upload}/part?partNumber={number}", data=body,
                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=600)
             return {"partNumber": number, "etag": done["etag"]}
