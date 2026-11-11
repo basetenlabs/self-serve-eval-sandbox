@@ -153,9 +153,9 @@ class App:
                 "github": self.github_state(user), "favorites": self.favorites(user), "admin": admin}
 
     def everyone(self) -> list[tuple[Path, dict]]:
-        """Every run, whoever may see it."""
-        return [(d, r) for d in self.jobs_dir.iterdir() if d.is_dir() and (r := self.describe(d))] \
-            if self.jobs_dir.is_dir() else []
+        """Every run, whoever may see it, but the deploy's smoke tests (hosted/deploy.py): no one's to see or limit."""
+        return [(d, r) for d in self.jobs_dir.iterdir() if d.is_dir() and not read_json(d / ACCESS).get("smoke")
+                and (r := self.describe(d))] if self.jobs_dir.is_dir() else []
 
     def limits(self, everyone: list[tuple[Path, dict]], runs: list[dict], user: str | None) -> dict:
         """`blocked`: why this person can't start a run now, if they can't. `spend`: what their runs

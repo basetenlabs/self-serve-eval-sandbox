@@ -99,9 +99,31 @@ To try a release before the live page gets it, deploy a copy beside it:
 preview; `--name pr-eval-staging --delete --volume` removes it.
 
 `deploy.py` reads the keys from the macOS Keychain or the environment (the list is at the top of
-the file), creates the image, volume, sandbox and public previews when they don't exist yet, uploads the
-app, restarts both processes and checks the signed-out answers (sign-in page 200, page 303, API
-401). `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
+the file), creates the image, volume, sandbox and public previews when they don't exist yet, and uploads the
+app as a new release, in a folder of its own (`/data/app/releases/<time>-<commit>`; runs, tasks and data
+stay shared in `/data/app`). Then it ships the release only if it works end to end:
+
+1. **Smoke test before release.** The release's own page and key meter start beside the live ones (a
+   second meter preview, "meter-next"), and one real attempt runs from it: the quick sample's largest
+   task (a PostHog pull request, a ~207 MB source) with the cheapest default model (DeepSeek V4.1 Flash
+   1017 Fast), graded by the default judges. Its sandboxes start, the source uploads, the dependencies
+   install, the agent changes code (it stops at 6 minutes, as at any time limit), the hidden tests run on
+   that change and the judges answer; whether the model solved it doesn't matter. On a fail, the page stays on its release and the deploy exits 1
+   with the attempt's cause.
+2. **Switch.** `/data/app/current` points at the release, both processes restart on it, and the deploy
+   checks the signed-out answers (sign-in page 200, page 303, API 401, meter 401).
+3. **Smoke test after release,** the same attempt through the live meter. On a fail, or a failed check
+   in step 2, the deploy rolls back to the previous release, restarts on it and exits 1.
+
+Each smoke test takes about 9 minutes and about $0.75 of model calls (the deploy prints both), so a deploy
+takes about 17 minutes more than it used to. The smoke runs are in `jobs/smoke-*` on the volume with
+their logs; the page lists them nowhere and leaves them out of its limits.
+
+A deploy never stops a run going. Each run is a process of its own (`pr-eval run`) that outlives the
+page's restart, and it keeps running the release it started from: the deploy removes an old release only
+once no process runs from it, and keeps the newest three. The restarted page finds a run going by the
+process id in its `run.json` and shows it going; its attempts' model calls reach the restarted meter, which
+reads the same tickets from the volume. `--seed` copies finished runs' summaries (run.json, report.json, report.html, and each
 trial's result.json and condensed, redacted trace, all scanned for credentials first); full
 transcripts stay on your machine. A sandbox keeps the image it was created from: after a new
 image, `deploy.py --delete` and deploy again (runs and sign-in state stay on the volume).
