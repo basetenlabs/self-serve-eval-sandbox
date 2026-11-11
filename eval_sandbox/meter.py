@@ -28,8 +28,9 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import runner
+from . import runtime
 from .config import BASETEN_URL, KEY_HEADERS, Model, claude_credential
+from .rundir import ACCESS, OVER_LIMIT, charge, read_json, write_json
 
 HEADER = "X-Pr-Eval-Meter"
 TICKETS = "meter"  # in a run's folder: one file per live ticket
@@ -40,8 +41,6 @@ PRICED = {"anthropic": {"/v1/messages": "anthropic"},
           "baseten": {"/v1/messages": "anthropic", "/v1/chat/completions": "chat", "/v1/completions": "chat"}}
 FREE = {"anthropic": {"/v1/messages/count_tokens"}, "baseten": set()}
 FREE_GET = re.compile(r"/v1/models(/[^/]+)*")
-OVER_LIMIT = "over_limit.txt"  # the page writes it when it stops a run for spending (app.OVER_LIMIT)
-ACCESS = "access.json"         # the run's owner (app.ACCESS)
 UPSTREAM_TIMEOUT = 900
 # Request headers never forwarded: the sandbox's placeholder credential, the ticket, and hop-by-hop ones.
 DROP = {"authorization", "x-api-key", HEADER.lower(), "host", "content-length", "connection", "keep-alive",
@@ -62,12 +61,12 @@ def admit(model: Model, trial_dir: Path, credential: str, meter_url: str) -> tup
     ticket on each request to the meter, and the file that makes it valid (delete it to revoke)."""
     run_dir = trial_dir.parent.parent
     if trial_dir.parent.name != "trials":
-        raise runner.runtime.RuntimeError("An attempt outside a run's folder has no run to meter.")
+        raise runtime.RuntimeError("An attempt outside a run's folder has no run to meter.")
     secret = secrets.token_hex(24)
     tickets = run_dir / TICKETS
     tickets.mkdir(exist_ok=True)
     path = tickets / f"{hashlib.sha256(secret.encode()).hexdigest()}.json"
-    runner.write_json(path, {"trial": trial_dir.name, "provider": model.provider, "model": model.key,
+    write_json(path, {"trial": trial_dir.name, "provider": model.provider, "model": model.key,
                              "prices": model.prices})
     rule = {"destinations": [urlsplit(meter_url).hostname], "headers": {HEADER: "{{SECRET:meter-ticket}}"},
             "secrets": {"meter-ticket": f"{run_dir.name}.{secret}"}}
@@ -105,14 +104,6 @@ def ticket(jobs_dir: Path, value: str | None) -> tuple[Path, dict]:
 
 def valid_run_id(run_id: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id)) and ".." not in run_id
-
-
-def read_json(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def real_key(provider: str) -> tuple[str, str]:
@@ -260,7 +251,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 counts = usage_counts(shape, usage.found)
                 if not usage.final:
                     counts = worst_case(counts if usage.found else {}, body, raw or b"")
-                runner.charge(trial_dir, "call", model_id, rates.price({model_id: counts}))
+                charge(trial_dir, "call", model_id, rates.price({model_id: counts}))
 
     def relay(self, upstream, usage: Usage) -> None:
         """Send the provider's answer on as it arrives, reading its usage on the way."""

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -106,6 +108,24 @@ class SmokeRunsHidden(unittest.TestCase):
                 (jobs / name / "run.json").write_text(json.dumps({"status": {"phase": "done"}, "tasks": [], "models": []}))
             with mock.patch.object(app.App, "checks", return_value={}):
                 self.assertEqual([d.name for d, _ in app.App(jobs).everyone()], ["quick-1"])
+
+
+class SmokeRunsPruned(unittest.TestCase):
+    def test_only_marked_smoke_runs_older_than_the_newest_few_are_listed_for_removal(self):
+        with tempfile.TemporaryDirectory() as root:
+            jobs = Path(root)
+            runs = [("smoke-1-before", {"smoke": True}), ("smoke-1-after", {"smoke": True}),
+                    ("smoke-2-before", {"smoke": True}), ("smoke-2-after", {"smoke": True}),
+                    ("smoke-20261111-101500", {"owner": "a@example.com"}),  # a person's run on a repository named "smoke"
+                    ("smoke-9-unmarked", None), ("quick-1", {"owner": "a@example.com", "smoke": True})]
+            for age, (name, access) in enumerate(runs):
+                (jobs / name).mkdir()
+                if access is not None:
+                    (jobs / name / "access.json").write_text(json.dumps(access))
+                os.utime(jobs / name, (1_700_000_000 + age, 1_700_000_000 + age))  # listed oldest first
+            listed = subprocess.run([sys.executable, "-c", deploy.OLD_SMOKE, str(jobs), "2"], capture_output=True,
+                                    text=True, check=True).stdout.split()
+            self.assertEqual(sorted(Path(p).name for p in listed), ["smoke-1-after", "smoke-1-before"])
 
 
 if __name__ == "__main__":

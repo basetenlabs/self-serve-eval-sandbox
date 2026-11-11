@@ -25,6 +25,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from . import causes, config, meter, pipeline, report, runner, runtime, tasks, trace
+from .pipeline import alive, repo_of
+from .rundir import ACCESS, OVER_LIMIT, SPEND_LEDGER, read_json
 
 PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -57,7 +59,6 @@ SIGN_IN_FIRST = "Sign in with GitHub to start a run: the eval reads repositories
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
-ACCESS = "access.json"  # in a run's folder started by someone signed in: its owner, the only one who sees it hosted
 MAX_FAVORITES = 200
 # Hosted, everyone shares one Blaxel workspace and one set of model keys: how many runs may go at once,
 # in all and for one person, and how much may be spent on models in the last day (every agent attempt,
@@ -74,7 +75,6 @@ UNKNOWN_ATTEMPT_COST = 5.0
 # What one judge's answer with no price counts: well over any measured so far (about $0.05 to $0.15).
 UNKNOWN_JUDGE_COST = 0.25
 SPEND_CHECK_SECONDS = 30  # how often the hosted page stops runs going once their owner or the page is over
-OVER_LIMIT = "over_limit.txt"  # in a run's folder the page stopped for spending: why, shown until it resumes
 # Blaxel sandboxes an attempt holds at each stage: its own and the verifier being readied
 # beside it, then the verifier alone once the agent's sandbox is deleted. One set up while
 # its task is still checked holds only its own: the verifier comes once the check passes.
@@ -89,12 +89,6 @@ def parse_repo(text: str) -> str | None:
         text = match[1]
     text = text.removesuffix(".git").strip("/")
     return text if REPO.fullmatch(text) else None
-
-
-alive = pipeline.alive
-
-
-repo_of = pipeline.repo_of
 
 
 def quick_scope() -> str:
@@ -280,7 +274,7 @@ class App:
                     "detail": "Starting" if starting else "The run stopped before it began; see its log.",
                     "note": None, "progress": {"done": 0, "total": 0}, "checking": {"done": 0, "total": 0},
                     "left_out": [], "summary": {}, "report": None, "lost": 0, "resumable": False, "cost": 0.0,
-                    "log": None if starting else tail(log)}
+                    "log": None if starting else report.tail(log, 15)}
         meta = read_json(job_dir / "run.json")
         if not meta:
             return None
@@ -334,7 +328,7 @@ class App:
                          for t, s in (meta.get("left_out") or {}).items()],
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
             "cost": sum(s.get("cost_usd") or 0 for s in (data.get("summary") or {}).values()),  # so far, while it goes
-            "log": tail(log) if phase in ("failed", "stopped") else None, "lost": lost,
+            "log": report.tail(log, 15) if phase in ("failed", "stopped") else None, "lost": lost,
             "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "blaxel"
                          and bool(meta.get("workspace") and (meta.get("request") or run_tasks)),
             "again": again(meta),
@@ -800,21 +794,15 @@ def quick_collected() -> bool:
 
 def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | None = None) -> tuple[float, dict[str, float]]:
     """What was spent on models in the last day, in all and by owner: each run's ledger entries from then, by
-    when they were spent, so a run resumed days later counts too. A run from before the ledger counts its
-    report's cost if it started in the last day. A run with no owner counts toward the page's total only."""
+    when they were spent, so a run resumed days later counts too. A run with no owner counts toward the
+    page's total only."""
     since = (datetime.now(timezone.utc) - SPEND_WINDOW).isoformat(timespec="seconds")
     unpriced = unpriced or {"": UNKNOWN_ATTEMPT_COST}
     total, by_owner = 0.0, {}
-    for d, run in everyone:
-        ledger = d / runner.SPEND_LEDGER
-        if ledger.is_file():
-            cost = ledger_cost(ledger, since, unpriced)
-        elif (run["started"] or since) >= since:  # ISO times in UTC sort as text
-            cost = run["cost"]
-        else:
-            continue
+    for d, _ in everyone:
+        cost = ledger_cost(d / SPEND_LEDGER, since, unpriced)  # nothing without a ledger: it has paid for no call yet
         total += cost
-        if owner := read_json(d / ACCESS).get("owner"):
+        if cost and (owner := read_json(d / ACCESS).get("owner")):
             by_owner[owner] = by_owner.get(owner, 0.0) + cost
     return total, by_owner
 
@@ -907,20 +895,8 @@ def cell(model: str, attempt: int, result: dict) -> dict:
             "judge": (result.get("judge") or {}).get("verdict")}
 
 
-def read_json(path: Path) -> dict:
-    """A run's JSON file, or {} if it isn't there or can't be read right now."""
-    try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
 def usd(x: float) -> str:
     return f"${x:,.0f}" if x >= 100 else f"${x:.2f}"
-
-
-def tail(path: Path, lines: int = 15) -> str | None:
-    return report.tail(path, lines)
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

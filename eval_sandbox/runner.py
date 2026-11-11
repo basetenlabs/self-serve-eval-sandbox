@@ -21,7 +21,6 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -29,12 +28,12 @@ from . import causes, meter, runtime
 from . import judge as judge_mod
 from .config import (BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, redact_known,
                      sandbox_credential)
+from .rundir import charge, now, write_json
 from .tasks import TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
 PROXY_PORT = 18787
-LABEL = "pr-eval"
 # Set when a run is interrupted: attempts cut short then are dropped, not saved as invalid,
 # so `--resume` runs them again.
 STOPPING = threading.Event()
@@ -88,10 +87,6 @@ PROVIDER_ERROR = re.compile(r"API Error|authentication|unauthori[sz]ed|invalid a
                             r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed", re.I)
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def stage(path: Path, name: str, **extra) -> None:
     """What an attempt or a check is doing right now, for the page's live view; result.json
     replaces it when the attempt is done. Never fails the work it describes."""
@@ -101,37 +96,13 @@ def stage(path: Path, name: str, **extra) -> None:
         pass
 
 
-def write_json(path: Path, data: dict) -> None:
-    """Write through a temporary file, so a run killed mid-write never leaves half a file."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
-
-
-# Every model call an attempt pays for, one JSON line each, in the run's folder: the hosted page's spending
-# limits add these up by when they were spent. Unlike the report, it keeps attempts that ended invalid or were
-# stopped, every judge, and attempts a resume runs again, each time they ran.
-SPEND_LEDGER = "spend.jsonl"
-_ledger_lock = threading.Lock()
-
-
-def charge(trial_dir: Path, kind: str, model: str, usd: float | None) -> None:
-    """Add one charge (`kind` "agent" or "judge") to the run's ledger; `usd` None means it ran but has no price."""
-    if trial_dir.parent.name != "trials":  # not in a run's folder (a check, or a test): no run to charge
-        return
-    line = json.dumps({"at": now(), "kind": kind, "trial": trial_dir.name, "model": model,
-                       "usd": None if usd is None else round(usd, 6)})
-    try:
-        with _ledger_lock, open(trial_dir.parent.parent / SPEND_LEDGER, "a") as ledger:
-            ledger.write(line + "\n")
-    except OSError as exc:  # the attempt's own records still hold it
-        print(f"(spend not recorded for {trial_dir.name}: {exc})", flush=True)
+DEFAULT_CONCURRENCY = 8  # attempts, checks or grades at once, unless a run asks for another number
 
 
 @dataclass
 class Settings:
     image: str = DEFAULT_IMAGE
-    concurrency: int = 8
+    concurrency: int = DEFAULT_CONCURRENCY
     memory: int = 4096                 # MB; a task that needs more says so (memory_mb)
     region: str = "us-pdx-1"
     workspace: str | None = None
@@ -1259,7 +1230,8 @@ def cleanup(run_id: str | None = None, workspace: str | None = None) -> list[str
     return runtime.cleanup(run_id, workspace)
 
 
-def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = 8, force: bool = False) -> list[dict]:
+def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = DEFAULT_CONCURRENCY,
+            force: bool = False) -> list[dict]:
     """Grade finished attempts again with these judges, without re-running any agent.
 
     Skips attempts already graded by the same judges and prompt version unless

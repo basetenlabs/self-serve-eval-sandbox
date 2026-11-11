@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from eval_sandbox import runner, runtime
+from eval_sandbox import rundir, runner, runtime
 
 
 class RuntimeTests(unittest.TestCase):
@@ -398,7 +398,7 @@ class TrialBoundaryTests(unittest.TestCase):
             (Path(d) / "trials" / "t1").mkdir(parents=True)
             result = self.trial(Path(d), [], lambda *_: (None, {"baseline": "a" * 40}), agent=lost,
                                 trial_dir=Path(d) / "trials" / "t1")
-            charges = [json.loads(line) for line in (Path(d) / runner.SPEND_LEDGER).read_text().splitlines()]
+            charges = [json.loads(line) for line in (Path(d) / rundir.SPEND_LEDGER).read_text().splitlines()]
         self.assertEqual(result["invalid_reason"], "sandbox-error")
         self.assertEqual([(c["kind"], c["model"], c["usd"]) for c in charges], [("agent", "model", None)])
 
@@ -416,7 +416,7 @@ class TrialBoundaryTests(unittest.TestCase):
             trial_dir.mkdir(parents=True)
             result = self.trial(Path(d), events, lambda *_: (None, {"baseline": "a" * 40}), agent=agent, trial_dir=trial_dir)
             left = list((Path(d) / "meter").iterdir())
-            ledger = (Path(d) / runner.SPEND_LEDGER).is_file()
+            ledger = (Path(d) / rundir.SPEND_LEDGER).is_file()
         [(_, container, domains, routing)] = [e for e in events if e[0] == "network"]
         self.assertEqual((container, domains, routing[0]["destinations"]), ("agent", ["m.example"], ["m.example"]))
         self.assertTrue(routing[0]["secrets"]["meter-ticket"].startswith(Path(d).name + "."))

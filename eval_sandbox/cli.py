@@ -177,7 +177,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--judge", default="default", help="'none' to score on tests only, or one judge's model id to grade with it alone")
     # The page passes it: it checked the judges just before, and asking again held up each start by 1.6-3.5 s.
     r.add_argument("--judges-checked", action="store_true", help=argparse.SUPPRESS)
-    r.add_argument("--concurrency", type=int, default=8, help="attempts and checks at once (default 8)")
+    r.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY,
+                   help=f"attempts and checks at once (default {runner.DEFAULT_CONCURRENCY})")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
     r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
     r.add_argument("--agent-timeout", type=int, help="seconds per attempt (default 1800)")
@@ -201,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("validate", help="check task folders in the trial image without running a model")
     v.add_argument("--tasks", type=Path, default=tasks.DEFAULT_TASKS)
     v.add_argument("--task", action="append")
-    v.add_argument("--concurrency", type=int, default=8)
+    v.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY)
     v.add_argument("--image", default=runner.DEFAULT_IMAGE)
     v.set_defaults(func=cmd_validate)
 
@@ -209,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("job", type=Path)
     j.add_argument("--judge", help="grade with this one judge from the panel (default: the whole panel)")
     j.add_argument("--force", action="store_true", help="also regrade attempts this judge already graded")
-    j.add_argument("--concurrency", type=int, default=8)
+    j.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY)
     j.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     j.set_defaults(func=cmd_rejudge)
 

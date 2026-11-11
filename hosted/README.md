@@ -117,7 +117,8 @@ stay shared in `/data/app`). Then it ships the release only if it works end to e
 
 Each smoke test takes about 9 minutes and about $0.75 of model calls (the deploy prints both), so a deploy
 takes about 17 minutes more than it used to. The smoke runs are in `jobs/smoke-*` on the volume with
-their logs; the page lists them nowhere and leaves them out of its limits.
+their logs; the page lists them nowhere and leaves them out of its limits. A deploy that goes live removes
+all but the newest six.
 
 A deploy never stops a run going. Each run is a process of its own (`pr-eval run`) that outlives the
 page's restart, and it keeps running the release it started from: the deploy removes an old release only

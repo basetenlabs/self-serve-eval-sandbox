@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval_sandbox import app, cli, config, judge, pipeline, report, runner, runtime, tasks, trace  # noqa: E402
+from eval_sandbox import app, cli, config, judge, pipeline, report, rundir, runner, runtime, tasks, trace  # noqa: E402
 from eval_sandbox.config import Judge, Model, Panel  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -1368,6 +1368,9 @@ class AppTest(unittest.TestCase):
             "run_id": run_id, "created_at": started, "request": request or {"repos": ["o/a"]},
             "tasks": [], "models": [], "status": {"phase": phase, "pid": 1}}))
         (jobs / run_id / "report.json").write_text(json.dumps({"models": [], "trials": [], "summary": {"m": {"cost_usd": cost}}}))
+        if cost:  # what it paid for, in its ledger, when it started
+            (jobs / run_id / rundir.SPEND_LEDGER).write_text(json.dumps(
+                {"at": started, "kind": "agent", "trial": "t", "model": "m", "usd": cost}) + "\n")
         if owner:
             (jobs / run_id / app.ACCESS).write_text(json.dumps({"owner": owner, "private": False}))
 
@@ -1426,7 +1429,7 @@ class AppTest(unittest.TestCase):
 
     def test_spending_counts_each_runs_ledger_by_when_it_was_spent(self):
         def ledger(jobs: Path, run_id: str, *entries: tuple) -> None:
-            (jobs / run_id / app.runner.SPEND_LEDGER).write_text("".join(
+            (jobs / run_id / rundir.SPEND_LEDGER).write_text("".join(
                 json.dumps({"at": (datetime.now(timezone.utc) - age).isoformat(timespec="seconds"), "kind": kind,
                             "trial": "t", "model": model, "usd": cost}) + "\n" for kind, model, cost, age in entries) + '{"at": "half')
         with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 50.0):
@@ -1451,7 +1454,7 @@ class AppTest(unittest.TestCase):
             trial_dir.mkdir(parents=True)
             runner.charge(trial_dir, "agent", "m", 1.25)
             runner.charge(trial_dir, "judge", "kimi", None)
-            lines = [json.loads(line) for line in (Path(d) / runner.SPEND_LEDGER).read_text().splitlines()]
+            lines = [json.loads(line) for line in (Path(d) / rundir.SPEND_LEDGER).read_text().splitlines()]
         self.assertEqual([(e["kind"], e["trial"], e["model"], e["usd"]) for e in lines],
                          [("agent", "t1", "m", 1.25), ("judge", "t1", "kimi", None)])
 
@@ -1465,7 +1468,8 @@ class AppTest(unittest.TestCase):
             self.add_run(jobs, "b-going", "b@x.co", cost=5)
             page = app.App(jobs)
             self.assertEqual(page.enforce_spending(), [])  # a has spent 40 of 50
-            (jobs / "a-going" / "report.json").write_text(json.dumps({"models": [], "trials": [], "summary": {"m": {"cost_usd": 25}}}))
+            with (jobs / "a-going" / rundir.SPEND_LEDGER).open("a") as ledger:  # its next attempt costs 15
+                ledger.write(json.dumps({"at": rundir.now(), "kind": "agent", "trial": "t2", "model": "m", "usd": 15}) + "\n")
             self.assertEqual(page.enforce_spending(), ["a-going"])  # a passed 50 while it ran; b's run goes on
             kill.assert_called_once_with(1, app.signal.SIGINT)
             self.assertEqual(page.enforce_spending(), [])  # told once: a second Ctrl-C would cut its cleanup short

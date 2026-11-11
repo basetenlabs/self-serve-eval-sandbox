@@ -70,6 +70,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from eval_sandbox import baseten, pipeline, runtime, tasks, trace  # noqa: E402
+from eval_sandbox.config import keychain  # noqa: E402
 WORKSPACE = ""  # set in main() from the same setting local runs use
 REGION = "us-pdx-1"
 SANDBOX = "pr-eval-host"
@@ -90,6 +91,7 @@ RELEASES = f"{APP}/releases"
 CURRENT = f"{APP}/current"
 SHARED = ["jobs", "tasks", "data"]  # linked into each release, where its code looks for them
 KEEP_RELEASES = 3  # besides the live one and any a process still runs from
+KEEP_SMOKE_RUNS = 6  # the smoke runs of the last three deploys stay on the volume, with their logs
 # The smoke test: one real attempt end to end, on the quick sample's largest task with the cheapest default
 # model, graded by the default judges. A release must pass it before people get it and again once they have.
 SMOKE_MODEL = "deepseek-v4.1-flash-1017-fast"
@@ -141,14 +143,6 @@ def step(message: str) -> None:
 def item(name: str, default: str) -> str:
     """The Keychain item that holds a key: its default name, or the one <NAME>_KEYCHAIN_ITEM sets."""
     return os.environ.get(f"{name}_KEYCHAIN_ITEM") or default
-
-
-def keychain(service: str) -> str | None:
-    try:
-        p = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, text=True)
-    except FileNotFoundError:  # not a Mac
-        return None
-    return p.stdout.strip() or None
 
 
 def secrets() -> dict[str, str]:
@@ -441,12 +435,32 @@ if os.path.islink(current) and app not in used and not inside(os.path.join(app, 
 """
 
 
+# Prints the deploy's own smoke runs to remove: all but the newest few. Only folders their access.json marks as a
+# smoke run, so a person's run on a repository named "smoke" is never one of them.
+OLD_SMOKE = """import json, os, sys
+jobs, keep = sys.argv[1], int(sys.argv[2])
+def smoke(path):
+    try:
+        return json.load(open(os.path.join(path, "access.json"))).get("smoke") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+runs = [p for p in (os.path.join(jobs, n) for n in os.listdir(jobs) if n.startswith("smoke-")) if smoke(p)]
+print(*sorted(runs, key=os.path.getmtime, reverse=True)[keep:])
+"""
+
+
 def prune(sandbox) -> None:
+    """After a deploy that went live: remove the release folders nothing uses any more, and the smoke runs of
+    older deploys. The page reads every run folder to list runs, and each deploy adds two."""
     unused = run(sandbox, f"/opt/venv/bin/python -c {shlex.quote(UNUSED)} {RELEASES} {CURRENT} {APP} {KEEP_RELEASES} "
                           + " ".join(RELEASE)).split()
     if unused:
         run(sandbox, "rm -rf " + " ".join(shlex.quote(p) for p in unused))
         print(f"removed {len(unused)} old release folder(s)")
+    old = run(sandbox, f"/opt/venv/bin/python -c {shlex.quote(OLD_SMOKE)} {APP}/jobs {KEEP_SMOKE_RUNS}").split()
+    if old:
+        run(sandbox, "rm -rf " + " ".join(shlex.quote(p) for p in old))
+        print(f"removed {len(old)} old smoke run(s)")
 
 
 # ---------- the smoke test ----------

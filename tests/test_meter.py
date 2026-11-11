@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from eval_sandbox import app, meter, runner  # noqa: E402
+from eval_sandbox import app, meter, rundir, runner  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_pr_eval as base  # noqa: E402
 from test_pr_eval import anthropic_model, baseten_model  # noqa: E402
@@ -104,7 +104,7 @@ class MeterTest(unittest.TestCase):
 
     def ledger(self, run_id: str, wait: bool = True) -> list[dict]:
         """The run's charges; the meter writes one just after the answer's last byte, so wait a moment for it."""
-        path = self.jobs / run_id / runner.SPEND_LEDGER
+        path = self.jobs / run_id / rundir.SPEND_LEDGER
         for _ in range(100 if wait else 1):
             if path.is_file():
                 return [json.loads(line) for line in path.read_text().splitlines()]
@@ -185,9 +185,6 @@ class MeterTest(unittest.TestCase):
         # http.server folds a leading "//" to "/" itself; the call still goes to the provider's own host.
         self.assertEqual(self.call(ticket, "//anthropic/v1/messages", {"model": "claude-opus-5-5"})[0], 200)
         self.assertEqual([seen[0] for seen in FakeProvider.seen], ["/v1/messages"])
-
-    def test_the_page_and_the_meter_name_the_same_files(self):
-        self.assertEqual((meter.ACCESS, meter.OVER_LIMIT), (app.ACCESS, app.OVER_LIMIT))
 
 
 class MeteredAttemptTest(unittest.TestCase):

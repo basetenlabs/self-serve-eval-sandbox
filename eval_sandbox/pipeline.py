@@ -25,8 +25,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config, judge, report, runner, runtime, tasks
+from .config import ROOT
+from .rundir import now, write_json
 
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JOBS = ROOT / "jobs"
 DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash-1017-fast", "glm-5.3-fast"]
 DEFAULT_LIMIT = 10
@@ -75,10 +76,6 @@ class Request:
         return list(dict.fromkeys([*self.repos, *self.pulls]))
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 class Job:
     """A run's folder under jobs/, and its run.json."""
 
@@ -91,7 +88,7 @@ class Job:
         return self.meta["run_id"]
 
     def save(self) -> None:
-        runner.write_json(self.path / "run.json", self.meta)
+        write_json(self.path / "run.json", self.meta)
 
     def status(self, phase: str, detail: str = "") -> None:
         if phase not in ACTIVE:  # while this run still reads as going, so no new run starts on files being deleted
@@ -288,7 +285,7 @@ def new_job(request: Request, models: list[config.Model], judge: config.Panel | 
     if (path / "run.json").exists():
         raise SystemExit(f"{path} exists: pass --resume {path} to finish it, or choose another --name")
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
-    runner.write_json(path / "run.json", {
+    write_json(path / "run.json", {
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
         "harness_version": None, "backend": "blaxel", "workspace": workspace, "image": image, "region": region,
         "attempts": attempts, "models": [m.as_dict() for m in models],
