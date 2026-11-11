@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPolicy, loadBrand, renderLogin } from '@blaxel/sign-in'
+import { createPolicy, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
 import { adminApi, SEED, seedAccess } from './access.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests, inviteLink } from './requests.mjs'
@@ -50,6 +50,26 @@ test('a refused account gets the shared access instructions from sign-in 0.4.3',
   })
   assert.match(html, /This account can&#39;t get in/)
   assert.match(html, /Ask an Eval Sandbox admin to add you\./)
+})
+
+test('a deploy keeps sessions: every release reads the access file deploy.py names, so the session scope stays', async t => {
+  // Sessions end when policy.scope changes, and the scope hashes the access file's path. Each release's own
+  // ../data/access.json is a different path; AUTH_ACCESS_FILE (deploy.py ACCESS) is the same one every time.
+  const root = folder(t)
+  const policy = async (release, env = {}) => {
+    const hosted = join(root, 'releases', release, 'hosted') // a release as deploy.py lays it out
+    if (!existsSync(hosted)) {
+      mkdirSync(join(hosted, '..'), { recursive: true })
+      symlinkSync(fileURLToPath(new URL('./', import.meta.url)), hosted)
+    }
+    return (await loadConfig({ file: join(hosted, 'site.config.mjs'), env: { ...env, AUTH_STATE_DIR: root }, log: quiet })).policy
+  }
+  const shared = { AUTH_ACCESS_FILE: '/data/app/data/access.json' }
+  const before = await policy('20261111-080000-aaaaaaa', shared), after = await policy('20261111-081500-d131a6e', shared)
+  assert.equal(before.file, '/data/app/data/access.json')
+  assert.equal(after.scope, before.scope)
+  // Without it, as before this fix: each release's own path, a new scope, everyone signed out.
+  assert.notEqual((await policy('20261111-080000-aaaaaaa')).scope, (await policy('20261111-081500-d131a6e')).scope)
 })
 
 test('who may sign in comes only from the access file, which starts with the seed', async t => {
