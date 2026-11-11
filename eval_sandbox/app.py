@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from . import config, meter, pipeline, report, runner, runtime, tasks, trace
+from . import causes, config, meter, pipeline, report, runner, runtime, tasks, trace
 
 PAGE = Path(__file__).with_name("app.html")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -254,7 +254,7 @@ class App:
         bl_cli = bool(shutil.which("bl"))
         try:
             runtime.check_connection()
-            image = bl_cli and pipeline.image_exists(runner.DEFAULT_IMAGE)
+            image = bl_cli and runtime.image_exists(runner.DEFAULT_IMAGE)
         except RuntimeError as exc:
             problem = str(exc)
         gh = not GITHUB_CLIENT_ID and bool(shutil.which("gh")) \
@@ -330,7 +330,7 @@ class App:
             "progress": {"done": done, "total": total},
             "checking": {"done": sum((tasks_dir / c / "validation" / "result.json").is_file() for c in candidates),
                          "total": len(candidates)},
-            "left_out": [{"id": t, "pr": t.rsplit("-", 1)[-1], "why": pipeline.LEFT_OUT.get(s, s)}
+            "left_out": [{"id": t, "pr": t.rsplit("-", 1)[-1], "why": pipeline.left_out_why(s)}
                          for t, s in (meta.get("left_out") or {}).items()],
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
             "cost": sum(s.get("cost_usd") or 0 for s in (data.get("summary") or {}).values()),  # so far, while it goes
@@ -361,7 +361,7 @@ class App:
             if task_id in kept:
                 check = {"stage": "passed"}
             elif task_id in left:
-                check = {"stage": "left-out", "why": pipeline.LEFT_OUT.get(left[task_id], left[task_id])}
+                check = {"stage": "left-out", "why": pipeline.left_out_why(left[task_id])}
             else:
                 live = read_json(tasks_dir / task_id / "validation" / "stage.json")
                 check = live if active and live.get("run_id") == run["id"] else {"stage": "queued" if active else "stopped"}
@@ -842,21 +842,21 @@ def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
     model, or UNKNOWN_JUDGE_COST for a judge's answer: a missing price never reads as free."""
     cost = 0.0
     try:
-        lines = ledger.read_text().splitlines()
+        with ledger.open(errors="replace") as lines:  # a line per model call: read as it goes, never whole
+            for line in lines:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:  # a line still being written
+                    continue
+                if not isinstance(entry, dict) or str(entry.get("at") or "") < since:
+                    continue
+                usd_spent = entry.get("usd")
+                if not isinstance(usd_spent, (int, float)):
+                    usd_spent = UNKNOWN_JUDGE_COST if entry.get("kind") == "judge" \
+                        else unpriced.get(entry.get("model") or "", unpriced[""])
+                cost += usd_spent
     except OSError:
         return 0.0
-    for line in lines:
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:  # a line still being written
-            continue
-        if not isinstance(entry, dict) or str(entry.get("at") or "") < since:
-            continue
-        usd_spent = entry.get("usd")
-        if not isinstance(usd_spent, (int, float)):
-            usd_spent = UNKNOWN_JUDGE_COST if entry.get("kind") == "judge" \
-                else unpriced.get(entry.get("model") or "", unpriced[""])
-        cost += usd_spent
     return cost
 
 
@@ -898,8 +898,10 @@ def cell(model: str, attempt: int, result: dict) -> dict:
     if result.get("started_at") and result.get("finished_at"):
         seconds = round((datetime.fromisoformat(result["finished_at"])
                          - datetime.fromisoformat(result["started_at"])).total_seconds())
+    # Not scored: the step it failed at in a few words, for the cell and the live activity; the attempt's
+    # sheet has the whole sentence and its log.
     return {"model": model, "attempt": attempt, "stage": result.get("outcome") or "invalid",
-            "reason": result.get("invalid_reason"), "seconds": seconds,
+            "reason": causes.short(result), "seconds": seconds,
             "cost": (result.get("agent") or {}).get("cost_usd"), "diff": result.get("diff"),
             "tests_passed": (result.get("tests") or {}).get("passed"),
             "judge": (result.get("judge") or {}).get("verdict")}
@@ -918,9 +920,7 @@ def usd(x: float) -> str:
 
 
 def tail(path: Path, lines: int = 15) -> str | None:
-    if not path.is_file():
-        return None
-    return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
+    return report.tail(path, lines)
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

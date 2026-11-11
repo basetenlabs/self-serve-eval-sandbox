@@ -53,7 +53,10 @@ export function Banners({ report, sample = true }: { report: Report; sample?: bo
   const { run, tasks, trials } = report;
   const expected = (run.tasks ?? []).length * report.models.length * (run.attempts || 1);
   const items: [string, string][] = [];
-  if (!report.complete) {
+  const stopped = !report.complete && ["failed", "stopped"].includes(run.status?.phase ?? "") ? run.status?.detail : null;
+  if (stopped) {
+    items.push(["Stopped", `${trials.length} of ${expected || "?"} attempts had finished. ${stopped}`]);
+  } else if (!report.complete) {
     items.push(["In progress", `${trials.length} of ${expected || "?"} attempts had finished at ${new Date(report.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Results update as attempts finish.`]);
   }
   if (run.note) items.push(["Note", run.note]);

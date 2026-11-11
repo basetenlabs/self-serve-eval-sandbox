@@ -75,7 +75,6 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 | `pr-eval report jobs/<run>` | rebuild a run's report |
 | `pr-eval validate` | check task folders in the trial image without running a model |
 | `pr-eval rejudge jobs/<run>` | grade a finished run again with the current judges |
-| `pr-eval retest jobs/<run>` | rerun a finished run's hidden tests from its saved diffs |
 | `pr-eval cleanup` | remove sandboxes a killed run left behind |
 | `pr-eval build-image` | rebuild the trial image on Blaxel |
 

@@ -72,11 +72,14 @@ const OUTCOME = {
 
 function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swatch?: SwatchT; runId: string }) {
   const a = r.agent ?? {};
-  const [view, setView] = React.useState("diff");
+  const notScored = r.outcome === "invalid";
+  const [view, setView] = React.useState(notScored ? "log" : "diff");
   const tools = a.tool_calls ? Object.entries(a.tool_calls).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") :"";
   const setAside = (r.tests?.set_aside ?? []).filter((f) => !CACHE.test(f));
   const patch = React.useMemo(() => withoutCaches(r.patch), [r.patch]);
   const views = [
+    // A not-scored attempt opens on the log that shows why.
+    ...(notScored ? [{ key: "log", label: "Log", text: r.log }] : []),
     { key: "diff", label: "Agent's diff", text: patch.text },
     { key: "trace", label: "Trace", text: null },
     { key: "merged", label: "Merged diff", text: t.reference_patch },
@@ -84,7 +87,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
     { key: "message", label: "Last message", text: a.final_message },
   ];
   const rows: [string, React.ReactNode][] = [];
-  if (r.outcome === "invalid") rows.push(["Why not scored", r.invalid_reason || "unknown"]);
+  if (notScored) rows.push(["Why not scored", r.cause || r.invalid_reason || "unknown"]);
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
   if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · on the agent's code alone, its edits to ${plural(setAside.length, "test file")} set aside` : ""}`} />]);
   if (r.judge) rows.push([(r.judge.panel?.length ?? 1) > 1 ? "Judges" : "Judge", r.judge.error ? `Error: ${r.judge.error}` : <Verdicts judge={r.judge} />]);
@@ -126,7 +129,8 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
           <TabsContent key={v.key} value={v.key} className="mt-2">
             {v.key === "trace" ? <TraceView runId={runId} trial={r.trial} active={view === "trace"} />
               : <Code text={v.text} diff={v.key === "diff" || v.key === "merged"}
-                  empty={v.key === "diff" && patch.hidden ? "This older run saved cache files in place of the change. The trace shows the agent's edits." : undefined} />}
+                  empty={v.key === "log" ? "No log was kept for this attempt."
+                    : v.key === "diff" && patch.hidden ? "This older run saved cache files in place of the change. The trace shows the agent's edits." : undefined} />}
           </TabsContent>
         ))}
       </Tabs>

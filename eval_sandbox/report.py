@@ -16,6 +16,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .causes import sentence
 from .config import redact_known
 from .runner import ANSI
 from .tasks import DEFAULT_TASKS
@@ -25,17 +26,28 @@ TEMPLATE = Path(__file__).with_name("report_template.html")
 MAX_PATCH_CHARS = 40_000
 
 
+# The most of a log's end a report or the page reads: enough for its last lines, never the whole file.
+TAIL_BYTES = 64 << 10
+
+
 def read(path: Path, limit: int = MAX_PATCH_CHARS) -> str | None:
+    """The file's first `limit` characters (only those are read), saying how much more there is."""
     if not path.is_file():
         return None
-    text = path.read_text(errors="replace")
-    return text if len(text) <= limit else text[:limit] + f"\n... [{len(text) - limit} more characters in {path.name}]"
+    with path.open(errors="replace") as file:
+        text = file.read(limit)
+    size = path.stat().st_size
+    return text if size <= len(text.encode()) else text + f"\n... [about {size - len(text.encode())} more bytes in {path.name}]"
 
 
 def tail(path: Path, lines: int = 60) -> str | None:
+    """The file's last lines, read from its end only."""
     if not path.is_file():
         return None
-    return "\n".join(ANSI.sub("", path.read_text(errors="replace")).splitlines()[-lines:])
+    with path.open("rb") as file:
+        file.seek(max(file.seek(0, 2) - TAIL_BYTES, 0))
+        text = file.read().decode(errors="replace")
+    return "\n".join(ANSI.sub("", text).splitlines()[-lines:])
 
 
 def median(values):
@@ -138,6 +150,9 @@ def trial_record(trial_dir: Path) -> dict | None:
         "diff": r.get("diff"), "tests": r.get("tests"), "judge": r.get("judge"), "setup": r.get("setup"),
         "patch": read(trial_dir / "agent.patch"),
         "verifier_tail": tail(trial_dir / "verifier.log", 40),
+        # Not scored: why, in a sentence, and the end of the log that shows it.
+        "step": r.get("step"), "cause": sentence(r),
+        "log": tail(trial_dir / r["log"], 80) if r.get("log") and ".." not in r["log"] else None,
     }
 
 

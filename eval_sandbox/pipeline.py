@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config, report, runner, runtime, tasks
+from . import config, judge, report, runner, runtime, tasks
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JOBS = ROOT / "jobs"
@@ -335,48 +335,43 @@ def restore_tasks(ids: list[str], tasks_dir: Path, request: dict) -> list[tasks.
     return tasks.discover(tasks_dir, ids)
 
 
-def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, skip_check: bool = False) -> int:
+def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> int:
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
     attempts = job.meta.get("attempts", 1)
-    asking = None
     try:
         restore_execution(job.meta, settings)
-        if job.meta.get("tasks") and job.meta.get("checked", True):  # resumed after the check: keep the same tasks
+        fit_memory(job, settings)
+        resumed = bool(job.meta.get("tasks") and job.meta.get("checked", True))  # after the check: the same tasks
+        if resumed:
             selected = restore_tasks(job.meta["tasks"], tasks_dir, job.meta.get("request") or {})
-            settings.image = prepare_image(job, settings.image)
-            asking = note_harness_version(job, settings)
-            if not skip_check and len(check(job, selected, settings)) != len(selected):
+        elif job.meta.get("candidates"):  # resumed while checking: the same pull requests
+            candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {})
+        else:
+            request = Request(**job.meta.get("request") or {})
+            job.status("collecting", f"Finding merged pull requests in {request.describe()}")
+            candidates = find_tasks(request, tasks_dir, on_progress=collecting(job))
+            if not candidates:
+                raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
+            job.meta["candidates"] = [t.id for t in candidates]
+        settings.image = prepare_image(job, settings.image)
+        if resumed:
+            if len(check(job, selected, settings)) != len(selected):
                 raise SystemExit("The original task set no longer passes validation; start a new run.")
             start_running(job, models, settings)
             runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
         else:
-            if job.meta.get("candidates"):  # resumed while checking: the same pull requests
-                candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {})
-            else:
-                request = Request(**job.meta.get("request") or {})
-                job.status("collecting", f"Finding merged pull requests in {request.describe()}")
-                candidates = find_tasks(request, tasks_dir, on_progress=collecting(job))
-                if not candidates:
-                    raise SystemExit(f"No merged pull requests in {request.describe()} change both code and tests.")
-                job.meta["candidates"] = [t.id for t in candidates]
-            settings.image = prepare_image(job, settings.image)
-            asking = note_harness_version(job, settings)
-            if skip_check:
-                job.meta.update(tasks=[t.id for t in candidates], checked=True)
-                start_running(job, models, settings)
-                runner.run(candidates, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
-            else:
-                check_and_run(job, candidates, models, settings)
-        if asking:
-            asking.join(120)
-            job.save()
+            check_and_run(job, candidates, models, settings)
         path = report.build(job.path)
         lost = runner.lost_trials(job.path)
         job.status("done", f"Finished. Report: {path}" + (
             f". {lost} attempt(s) were lost to sandbox, setup or provider problems, not the models; "
             f"run them again with: pr-eval run --resume {job.path}" if lost else ""))
         return 0
+    except runner.Halted as exc:
+        job.status("failed", str(exc))
+        rebuild_quietly(job)  # after the status, so the report says why the run stopped
+        return 1
     except KeyboardInterrupt:
         runner.cleanup(job.id, workspace=settings.workspace)
         job.status("stopped", "Stopped. Resume to finish the attempts that hadn't finished: "
@@ -389,9 +384,18 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings, *, 
     except Exception as exc:
         job.status("failed", f"{type(exc).__name__}: {exc}")
         raise
-    finally:
-        if asking:  # it deletes its sandbox when it's done, however the run ended
-            asking.join(120)
+
+
+def fit_memory(job: Job, settings: runner.Settings) -> None:
+    """Run as many attempts at once as this machine's free memory holds (runner.fit), up to the number asked
+    for, and as many Claude Code judges. The page shows the number; the log says when memory lowered it."""
+    asked = settings.concurrency
+    settings.concurrency, judges, free = runner.fit(asked)
+    judge.limit_processes(judges if free is not None else None)
+    job.meta.update(concurrency=settings.concurrency, free_memory_mb=free)
+    if settings.concurrency < asked:
+        print(f"Running {settings.concurrency} attempts at once, not {asked}: this machine has {free} MB free, "
+              f"and each attempt can hold {runner.ATTEMPT_MB} MB here.", flush=True)
 
 
 def collecting(job: Job):
@@ -417,33 +421,6 @@ def start_running(job: Job, models: list[config.Model], settings: runner.Setting
     job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models"
                           + (f" x {attempts} attempts" if attempts > 1 else ""))
     report.build(job.path)
-
-
-def note_harness_version(job: Job, settings: runner.Settings) -> threading.Thread | None:
-    """The image's Claude Code version, for the report. An image's tag names its contents, so an earlier
-    run on it knows the version; otherwise a sandbox asks the image beside the run's own work, so the
-    first check doesn't wait for one. Join the thread this returns before building the final report."""
-    if job.meta.get("harness_version"):
-        return None
-    if known := earlier_harness_version(job.path.parent, settings.image):
-        job.meta["harness_version"] = known
-        return None
-    job.meta.setdefault("harness_version", None)  # saving meanwhile never sees the keys change
-    asking = threading.Thread(target=lambda: job.meta.update(
-        harness_version=image_claude_version(settings.image, settings.region, job.id)), daemon=True)
-    asking.start()
-    return asking
-
-
-def earlier_harness_version(jobs_dir: Path, image: str) -> str | None:
-    for path in jobs_dir.glob("*/run.json"):
-        try:
-            meta = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if meta.get("image") == image and meta.get("harness_version"):
-            return meta["harness_version"]
-    return None
 
 
 def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Model],
@@ -476,8 +453,22 @@ def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Mo
     runner.check_and_run(candidates, models, job.meta.get("attempts", 1), job.path, settings, job.id,
                          on_checked=checked, on_result=progress_printer(job))
     if not job.meta["tasks"]:
-        raise SystemExit(f"None of the {len(candidates)} pull requests passed the check. "
-                         "If installing failed, give the install and test commands (--setup, --test).")
+        raise SystemExit(none_passed(len(candidates), statuses))
+
+
+def none_passed(count: int, statuses: dict[str, str | None]) -> str:
+    """Why a run has nothing to run: its most common reason, in words."""
+    reasons = [left_out_why(s) for s in statuses.values() if s != "valid"]
+    common = max(set(reasons), key=reasons.count) if reasons else None
+    return (f"None of the {count} pull requests passed the check" + (f" ({reasons.count(common)} because: "
+            f"{common.rstrip('.')})" if common else "") + ". If installing failed, give the install and test commands "
+            "(--setup, --test).")
+
+
+def left_out_why(status: str | None) -> str:
+    """A check's status in words: why its task was left out."""
+    status = status or "not checked"
+    return LEFT_OUT.get(status) or status.removeprefix("sandbox-error: ")
 
 
 def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> list[tasks.Task]:
@@ -493,8 +484,7 @@ def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> 
     kept = [t for t in candidates if statuses[t.id] == "valid"]
     leave_out(job, statuses)
     if not kept:
-        raise SystemExit(f"None of the {len(candidates)} pull requests passed the check. "
-                         "If installing failed, give the install and test commands (--setup, --test).")
+        raise SystemExit(none_passed(len(candidates), statuses))
     return kept
 
 
@@ -516,7 +506,11 @@ def progress_printer(job: Job):
         cost = (result.get("agent") or {}).get("cost_usd")
         reason = f" ({result['invalid_reason']})" if result.get("invalid_reason") else ""
         print(f"[{done}/{total}] {result['trial']}: {result['outcome']}{reason}"
-              + (f" ${cost:.3f}" if cost is not None else ""), flush=True)
+              + (f" ${cost:.3f}" if cost is not None else "")
+              + (f": {result['cause']}" if result.get("cause") else ""), flush=True)
+        if not job.meta.get("harness_version") and (version := (result.get("agent") or {}).get("claude_code_version")):
+            job.meta["harness_version"] = version  # the image's Claude Code, as its first agent reported it
+            job.save()
         if time.monotonic() - last_build > 30:
             last_build = time.monotonic()
             rebuild_quietly(job)
@@ -545,18 +539,6 @@ def restore_execution(meta: dict, settings: runner.Settings) -> None:
     os.environ["PR_EVAL_BLAXEL_WORKSPACE"] = settings.workspace
 
 
-def build_image(image: str, claude_code_version: str | None = None) -> int:
-    try:
-        runtime.check_connection()
-        return runtime.build_image(image, claude_code_version)
-    except RuntimeError as exc:
-        raise SystemExit(str(exc)) from exc
-
-
-def image_exists(image: str) -> bool:
-    return runtime.image_exists(image)
-
-
 def prepare_image(job: Job, image: str) -> str:
     ensure_image(image, job)
     resolved = runtime.resolve_image(image)
@@ -570,20 +552,16 @@ def ensure_image(image: str, job: Job | None = None) -> None:
     """Check the dedicated workspace and build the trial template remotely on first use."""
     try:
         runtime.check_connection()
-        if not image_exists(image):
+        if not runtime.image_exists(image):
             detail = f"Building the Blaxel trial image {image} remotely (first run only, a few minutes)"
             if job:
                 job.status("checking", detail)
             else:
                 print(detail, flush=True)
-            if build_image(image):
+            if runtime.build_image(image):
                 raise SystemExit("Blaxel image build failed; see the output above")
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-
-
-def image_claude_version(image: str, region: str = "us-pdx-1", run_id: str = "image-probe") -> str | None:
-    return runtime.image_claude_version(image, region, run_id)
 
 
 def resumed_models(meta: dict, requested: list[str] | None) -> tuple[list[str], list[str]]:

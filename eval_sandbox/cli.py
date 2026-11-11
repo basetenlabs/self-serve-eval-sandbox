@@ -67,10 +67,9 @@ def cmd_run(args) -> int:
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
                                region=args.region, workspace=args.workspace, agent_timeout=args.agent_timeout,
                                judge=judge, keep_sandboxes=args.keep_sandboxes)
-    job.meta["concurrency"] = settings.concurrency  # the page shows how many attempts run side by side
     job.status("collecting", "Starting")  # going before the sweep, so no sweep takes the clones and tasks it needs
     pipeline.sweep_private(job.path.parent)
-    return pipeline.execute(job, models, settings, skip_check=args.skip_validation)
+    return pipeline.execute(job, models, settings)
 
 
 def cmd_serve(args) -> int:
@@ -122,27 +121,6 @@ def cmd_rejudge(args) -> int:
     return 0
 
 
-def cmd_retest(args) -> int:
-    meta = json.loads((args.job / "run.json").read_text())
-    settings = runner.Settings(concurrency=args.concurrency, workspace=args.workspace)
-    pipeline.restore_execution(meta, settings)
-    pipeline.ensure_image(settings.image)
-    settings.image = runtime.resolve_image(settings.image)
-    tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
-    changed = []
-
-    def retested(r, done, total):
-        line = r.get("error") or f"{r['before']} -> {r['after']} (tests {r['tests']}, judge {r['judge']})"
-        print(f"[{done}/{total}] {r['trial']}: {line}", flush=True)
-        if r.get("before") != r.get("after") and not r.get("error"):
-            changed.append(r)
-
-    runner.retest(args.job, tasks_dir, settings, force=args.force, on_result=retested)
-    print(f"{len(changed)} attempt(s) changed outcome")
-    print(report.build(args.job))
-    return 0
-
-
 def cmd_report(args) -> int:
     for job in args.jobs:
         print(report.build(job))
@@ -150,7 +128,11 @@ def cmd_report(args) -> int:
 
 
 def cmd_build_image(args) -> int:
-    return pipeline.build_image(args.image, args.claude_code_version)
+    try:
+        runtime.check_connection()
+        return runtime.build_image(args.image, args.claude_code_version)
+    except runtime.RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def cmd_cleanup(args) -> int:
@@ -199,7 +181,6 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
     r.add_argument("--region", default="us-pdx-1", help="Blaxel region (default us-pdx-1)")
     r.add_argument("--agent-timeout", type=int, help="seconds per attempt (default 1800)")
-    r.add_argument("--skip-validation", action="store_true", help="run tasks without checking them first")
     r.add_argument("--keep-sandboxes", action="store_true", help="keep verifier sandboxes for debugging (agent sandboxes are always deleted)")
     r.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     r.add_argument("--image", default=runner.DEFAULT_IMAGE)
@@ -232,13 +213,6 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     j.set_defaults(func=cmd_rejudge)
 
-    t = sub.add_parser("retest", help="rerun a finished run's hidden tests from its saved diffs, with each "
-                       "attempt's own test changes set aside (no model calls)")
-    t.add_argument("job", type=Path)
-    t.add_argument("--concurrency", type=int, default=2)
-    t.add_argument("--force", action="store_true", help="also attempts already retested")
-    t.set_defaults(func=cmd_retest)
-
     k = sub.add_parser("cleanup", help="remove trial sandboxes a killed run left behind")
     k.add_argument("--run-id")
     k.set_defaults(func=cmd_cleanup)
@@ -248,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--claude-code-version", help="default: the version pinned in docker/Dockerfile")
     b.set_defaults(func=cmd_build_image)
 
-    for command in (s, r, v, t, k, b):
+    for command in (s, r, v, k, b):
         command.add_argument("--workspace", help="dedicated Blaxel workspace (or PR_EVAL_BLAXEL_WORKSPACE / saved config)")
 
     args = p.parse_args(argv)

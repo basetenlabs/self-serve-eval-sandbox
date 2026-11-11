@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval_sandbox import app, cli, config, judge, pipeline, report, runner, tasks, trace  # noqa: E402
+from eval_sandbox import app, cli, config, judge, pipeline, report, runner, runtime, tasks, trace  # noqa: E402
 from eval_sandbox.config import Judge, Model, Panel  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -631,8 +631,6 @@ class PatchCaptureTest(unittest.TestCase):
                      for name in ("lib.go", "lib_test.go", "fix_test.go")}
         self.assertEqual(sorted(set_aside), ["fix_test.go", "lib_test.go"])
         self.assertEqual(files, {"lib.go": "fixed", "lib_test.go": "old", "fix_test.go": None})
-        self.assertTrue(runner.touches_tests("diff --git a/lib.go b/lib.go\ndiff --git a/x_test.go b/x_test.go\n"))
-        self.assertFalse(runner.touches_tests("diff --git a/lib.go b/lib.go\n"))
 
     def test_the_hidden_tests_run_in_a_network_of_their_own(self):
         task = tasks.Task(id="t", path=Path("/nonexistent"), instruction="", meta={"verifier": {}})
@@ -911,7 +909,6 @@ class PipelineTest(unittest.TestCase):
                 saved.append((meta["status"]["phase"], meta["tasks"]))
                 on_checked(candidates[1], "reference-fails", 0)
             with mock.patch.object(runner, "check_and_run", side_effect=check_and_run), \
-                    mock.patch.object(pipeline, "image_claude_version", return_value="2.1.0"), \
                     mock.patch.object(pipeline.report, "build"), contextlib.redirect_stdout(io.StringIO()):
                 pipeline.check_and_run(job, [SimpleNamespace(id="a"), SimpleNamespace(id="b")],
                                        [baseten_model()], runner.Settings())
@@ -919,7 +916,6 @@ class PipelineTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as other, \
                     mock.patch.object(runner, "check_and_run",
                                       side_effect=lambda c, *_, on_checked, **__: on_checked(c[0], "setup-error", 0)), \
-                    mock.patch.object(pipeline, "image_claude_version", return_value=None), \
                     mock.patch.object(pipeline.report, "build"), \
                     contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "None of the 1"):
                 pipeline.check_and_run(self.job(other, pipeline.Request()), [SimpleNamespace(id="c")],
@@ -928,32 +924,18 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual((meta["tasks"], meta["left_out"], meta["checked"]), (["a"], {"b": "reference-fails"}, True))
         self.assertEqual(meta["status"]["phase"], "running")
 
-    def test_the_claude_code_version_never_holds_up_the_first_check(self):
-        go = threading.Event()
-
-        def ask(*_):
-            go.wait(5)
-            return "2.1.0"
-
-        def job(d, name, image):
-            with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
-                made = pipeline.new_job(pipeline.Request(), [baseten_model()], None, name=name,
-                                        jobs_dir=Path(d) / "jobs", image=image, tasks_dir=Path(d) / "tasks")
-            return made, runner.Settings(image=image)  # as prepare_image leaves them: the image's exact tag
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(pipeline, "image_claude_version", side_effect=ask) as probe:
-            first, settings = job(d, "first", "img:abc")
-            asking = pipeline.note_harness_version(first, settings)
-            self.assertIsNone(first.meta["harness_version"])  # the run goes on while a sandbox asks the image
-            go.set()
-            asking.join(5)
-            first.save()
-            later, settings = job(d, "later", "img:abc")
-            self.assertIsNone(pipeline.note_harness_version(later, settings))  # an earlier run on the image knows it
-            other, settings = job(d, "other", "img:new")
-            pipeline.note_harness_version(other, settings).join(5)
-        self.assertEqual([j.meta["harness_version"] for j in (first, later, other)], ["2.1.0"] * 3)
-        self.assertEqual(probe.call_count, 2)
+    def test_the_claude_code_version_comes_from_the_first_agent_and_needs_no_sandbox_of_its_own(self):
+        with tempfile.TemporaryDirectory() as d:
+            job = self.job(d, pipeline.Request())
+            log = Path(d) / "agent.jsonl"
+            log.write_text(json.dumps({"type": "system", "subtype": "init", "claude_code_version": "2.1.296"}) + "\n")
+            agent = runner.summarize_stream(log)
+            progress = pipeline.progress_printer(job)
+            with contextlib.redirect_stdout(io.StringIO()):
+                progress({"trial": "t", "outcome": "failed", "agent": {"claude_code_version": None}}, 1, 2)
+                progress({"trial": "t", "outcome": "failed", "agent": agent}, 2, 2)
+            self.assertEqual(pipeline.Job(job.path).meta["harness_version"], "2.1.296")
+        self.assertFalse(hasattr(runtime, "image_claude_version"))
 
     def test_resume_runs_again_the_attempts_lost_to_infrastructure(self):
         model, task = baseten_model(), SimpleNamespace(id="t")

@@ -262,6 +262,10 @@ export interface Trial {
   attempt: number;
   outcome: Outcome;
   invalid_reason?: string | null;
+  /** Not scored: the step it failed at, why in one sentence, and the end of the log that shows it. */
+  step?: string | null;
+  cause?: string | null;
+  log?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
   agent?: {
@@ -310,6 +314,7 @@ export interface Report {
     harness_version?: string;
     judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;
     note?: string | null;
+    status?: { phase?: string; detail?: string } | null;
     request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;
   };
   models: Model[];

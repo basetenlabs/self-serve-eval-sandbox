@@ -278,15 +278,33 @@ def redact_known(text: str) -> str:
     return text
 
 
-def redact_file(path: Path) -> None:
-    """Rewrite an artifact in place if it holds a known credential."""
+def redact_file(path: Path, piece: int = 1 << 20) -> None:
+    """Rewrite an artifact in place if it holds a known credential, a megabyte at a time: an agent's log
+    can be tens of MB. Each piece is searched with the end of the one before, so a value split between
+    two pieces is found too."""
     if not path.is_file():
         return
-    raw = clean = path.read_bytes()
-    for value in known_secrets():
-        clean = clean.replace(value.encode(), MASK.encode())
-    if clean != raw:
-        path.write_bytes(clean)
+    values = [v.encode() for v in known_secrets()]
+    if not values:
+        return
+    overlap = max(map(len, values)) - 1
+    found, carry, tmp = False, b"", path.with_name(path.name + ".redacting")
+    with path.open("rb") as src, tmp.open("wb") as out:
+        while chunk := src.read(piece):
+            data = carry + chunk
+            for value in values:
+                if value in data:
+                    found = True
+                    data = data.replace(value, MASK.encode())
+            # Keep back the tail that could start a value the next piece finishes.
+            cut = max(len(data) - overlap, 0)
+            out.write(data[:cut])
+            carry = data[cut:]
+        out.write(carry)
+    if found:
+        tmp.replace(path)
+    else:
+        tmp.unlink()
 
 
 def missing_credential(model: Model) -> str | None:

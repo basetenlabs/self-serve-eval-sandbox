@@ -149,7 +149,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
                     <TD key={m.key}>
                       <div className="flex gap-0.5">
                         {ts.map((r) => (
-                          <Tip key={r.attempt} content={`Attempt ${r.attempt}: ${r.outcome === "invalid" ? `not scored${r.invalid_reason ? ` (${r.invalid_reason})` : ""}` : r.outcome === "solved" ? "solved" : "not solved"}`}>
+                          <Tip key={r.attempt} content={`Attempt ${r.attempt}: ${r.outcome === "invalid" ? `not scored${r.cause || r.invalid_reason ? ` (${r.cause || r.invalid_reason})` : ""}` : r.outcome === "solved" ? "solved" : "not solved"}`}>
                             <span><Pip outcome={r.outcome} fill={colors[m.key]?.fill} ink={colors[m.key]?.ink} /></span>
                           </Tip>
                         ))}
