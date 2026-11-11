@@ -21,6 +21,17 @@ test('link previews carry the name, the description and the public card', () => 
   assert.match(html, /<meta name="twitter:card" content="summary_large_image">/)
 })
 
+test('an open source site links its repository under the button on every state of the page', () => {
+  const source = 'https://github.com/basetenlabs/self-serve-eval-sandbox'
+  const refused = { code: 'not_allowed', request: { token: 'sealed' } }
+  for (const state of [{}, { code: 'signed_out' }, { code: 'session_ended' }, { code: 'expired' }, refused]) {
+    const html = renderLogin({ brand, state, blaxelSignOut: signOut, source })
+    assert.match(text(html), /Continue with Blaxel View the open source repository$/)
+    assert.match(html, /<a class="bt-link bt-external source" href="https:\/\/github\.com\/basetenlabs\/self-serve-eval-sandbox" target="_blank" rel="noopener">/)
+  }
+  assert.doesNotMatch(renderLogin({ brand }), /open source/)
+})
+
 test('signed-out and failed sign-ins add at most one short line', () => {
   for (const code of ['signed_out', 'session_ended']) assert.equal(text(renderLogin({ brand, state: { code } })), 'Some Site Continue with Blaxel')
   assert.equal(text(renderLogin({ brand, state: { code: 'expired', message: 'secret detail' } })), 'Some Site Sign-in didn&#39;t finish. Try again. Continue with Blaxel')

@@ -26,6 +26,10 @@
 .sb-auth h1 { margin: 0; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; text-wrap: balance; }
 @media (min-width: 801px) { .sb-auth h1 { font-size: 40px; line-height: 1.1; } }
 
+/* The repository link under the button: a quiet Dark Grey 2 text link, 16px below it, Black on hover. */
+.sb-auth .source { align-self: flex-start; margin-block-start: -8px; color: var(--color-darkGrey2); }
+.sb-auth .source:is(:hover, :focus-visible) { color: var(--color-black); }
+
 /* A failed or refused sign-in: one line on a Light ramp block, then what to do about it. */
 .sb-auth .bt-notice { flex-direction: column; gap: 16px; }
 .sb-auth .bt-notice p { margin: 0; color: var(--color-black); }

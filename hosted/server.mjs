@@ -15,6 +15,9 @@ import { baseHeaders, createSiteServer, listen, loadConfig, proxySite, runMain, 
 import { renderLogin } from './login-page.mjs'
 import { publicAssets, servePublicAssets } from './public.mjs'
 
+// The page's open source repository, linked under "Continue with Blaxel".
+const SOURCE = 'https://github.com/basetenlabs/self-serve-eval-sandbox'
+
 /** Whether a `pr-eval run` process is going in this sandbox (the page starts them as `python -m eval_sandbox run`). */
 async function running() {
   for (const pid of await readdir('/proc').catch(() => [])) {
@@ -62,7 +65,7 @@ runMain(async () => {
   const requestAccess = key && config.policy.file
     ? accessRequests({ file: config.policy.file, origin: config.origin, mailer: resendMailer({ key, from: process.env.PR_EVAL_MAIL_FROM }) })
     : undefined
-  const server = await createSiteServer({ config, app, api, requestAccess, renderLogin })
+  const server = await createSiteServer({ config, app, api, requestAccess, renderLogin: page => renderLogin({ ...page, source: SOURCE }) })
   servePublicAssets(server, await publicAssets(), baseHeaders({ https: config.origin.startsWith('https:') }))
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
