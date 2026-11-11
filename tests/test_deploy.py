@@ -21,6 +21,55 @@ WENT = {"outcome": "failed", "invalid_reason": None, "setup": {"exit_code": 0}, 
         "diff": {"files": 2}, "tests": {"passed": False}, "judge": {"verdict": "fail"}}
 
 
+
+class FakeSandboxes:
+    """The management API as host() sees it: one sandbox record and the volume it mounts."""
+
+    def __init__(self, status, attached_polls):
+        self.box = {"name": deploy.SANDBOX, "status": status, "created_at": "2026-11-11T06:15:17Z"}
+        self.attached_polls, self.calls = attached_polls, []
+
+    def volume(self, *args):
+        return {}
+
+    def get(self, name):
+        return self.box
+
+    def delete(self, name):
+        self.calls.append("delete")
+        self.box = None
+
+    def manage(self, method, path, body=None, allow=()):
+        self.attached_polls -= 1
+        return {"attached_to": deploy.SANDBOX} if self.attached_polls >= 0 else {}
+
+    def create(self, body):
+        self.calls.append(("create", self.attached_polls))
+        self.box = {"name": deploy.SANDBOX, "status": "DEPLOYED"}
+        return self.box
+
+    def preview(self, sandbox, name, port):
+        return f"https://{name}"
+
+
+class HostRecovery(unittest.TestCase):
+    def host(self, status, renew=False):
+        fake = FakeSandboxes(status, attached_polls=2)
+        with mock.patch.object(deploy, "CLIENT", fake), mock.patch.object(deploy, "image", lambda: "img"), \
+                mock.patch.object(deploy, "ready", lambda box: None), mock.patch.object(deploy.time, "sleep"):
+            _, _, _, created = deploy.host(renew=renew)
+        return fake, created
+
+    def test_a_failed_sandbox_is_deleted_and_created_once_its_volume_is_free(self):
+        fake, created = self.host("FAILED")
+        self.assertTrue(created)
+        self.assertEqual(fake.calls, ["delete", ("create", -1)])
+
+    def test_a_deployed_sandbox_is_kept(self):
+        fake, created = self.host("DEPLOYED")
+        self.assertFalse(created)
+        self.assertEqual(fake.calls, [])
+
 class SmokeVerdict(unittest.TestCase):
     def test_an_attempt_that_went_end_to_end_passes_whether_or_not_it_solved(self):
         self.assertIsNone(deploy.verdict({}, WENT))

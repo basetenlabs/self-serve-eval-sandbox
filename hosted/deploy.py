@@ -195,6 +195,11 @@ def host(renew: bool = False):
     client().volume(VOLUME, VOLUME_SIZE, REGION)
     sandbox = client().get(SANDBOX)
     created = False
+    if sandbox and sandbox.get("status") in ("FAILED", "TERMINATED"):
+        # A create that failed (e.g. a 500) leaves a record with no workload behind it; nothing can serve from it.
+        step(f"Sandbox {SANDBOX} is {sandbox['status']}; recreating it")
+        delete(volume=False)
+        sandbox = None
     if sandbox and renew:
         age = (time.time() - datetime.fromisoformat(sandbox["created_at"].replace("Z", "+00:00")).timestamp()) / 86400
         if age < RENEW_AFTER_DAYS:
@@ -585,6 +590,14 @@ def delete(volume: bool) -> None:
     else:
         raise SystemExit(f"sandbox {SANDBOX} is still there; try again in a minute")
     print(f"deleted sandbox {SANDBOX}")
+    # The volume stays attached for a few seconds after the sandbox is gone; a create that mounts it before then
+    # fails with a 500 and leaves a FAILED sandbox (Nov 11 renew).
+    for _ in range(100):
+        if not client().manage("GET", f"/v1/sandboxes/volumes/{VOLUME}", allow=(404,)).get("attached_to"):
+            break
+        time.sleep(3)
+    else:
+        raise SystemExit(f"volume {VOLUME} is still attached; try again in a minute")
     if volume:
         for _ in range(60):
             try:
