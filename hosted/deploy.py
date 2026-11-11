@@ -23,7 +23,9 @@ neither is set.
              releases/<time>-<commit> and current -> the live one) and the sign-in state (/data/sign-in)
     Release  each deploy's code in a folder of its own. It serves people only once a real attempt passes on it
              (the smoke test, below), and again once it does, else the deploy rolls back. A run going keeps
-             the release it started on: a deploy restarts the page, never a run
+             the release it started on: a deploy restarts the page, never a run. A deploy killed once its
+             release is live but before the second smoke test leaves /data/app/unverified.json; the next
+             deploy or renew runs that smoke test first and rolls back on a failure
     Secrets  read on the deploying machine (macOS Keychain or environment) and handed to the page's
              process environment only; never written to the volume, the image or this repository
 
@@ -88,6 +90,10 @@ NEXT_METER_PORT = 8768
 APP = "/data/app"  # what runs share across releases: jobs/, tasks/, data/; and current -> releases/<id>
 RELEASES = f"{APP}/releases"
 CURRENT = f"{APP}/current"
+# Written once a release goes live, removed once the smoke test on the live page passes (or the deploy rolled
+# back): {"release", "previous", "task"}. A deploy killed between the two (its session ended, T-859) leaves it,
+# and the next deploy or renew finishes that smoke test first, rolling back on a failure.
+UNVERIFIED = f"{APP}/unverified.json"
 SHARED = ["jobs", "tasks", "data"]  # linked into each release, where its code looks for them
 KEEP_RELEASES = 3  # besides the live one and any a process still runs from
 # The smoke test: one real attempt end to end, on the quick sample's largest task with the cheapest default
@@ -542,6 +548,38 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
           f"judges {result['judge']['verdict']}; {took}", flush=True)
 
 
+def roll_back(sandbox, origin: str, meter: str, keys: dict[str, str], previous: str) -> None:
+    step(f"Rolling back to {previous}")
+    switch(sandbox, previous)
+    start(sandbox, origin, meter, keys, previous)
+    verify(origin, meter)
+    run(sandbox, f"rm -f {UNVERIFIED}")
+    print(f"Rolled back: the page is on {previous} again.", file=sys.stderr)
+
+
+def finish_unverified(sandbox, origin: str, meter: str, keys: dict[str, str]) -> bool:
+    """A release a killed deploy left live without the smoke test on the live page gets it now; a failure rolls
+    back to the release before it. False when the live page failed it."""
+    left = remote_json(sandbox, UNVERIFIED)
+    if not left:
+        return True
+    release, previous = left.get("release"), left.get("previous")
+    if live_release(sandbox) != release:  # the deploy got as far as its rollback, or a later one replaced it
+        run(sandbox, f"rm -f {UNVERIFIED}")
+        return True
+    step(f"Smoke test on the live page: the deploy of {release} stopped before it")
+    try:
+        verify(origin, meter)
+        smoke(sandbox, release, keys, origin, meter, left["task"], "after")
+    except (SmokeFailed, SystemExit, baseten.SandboxError) as exc:
+        print(f"\nFAILED once live: {getattr(exc, 'code', None) or exc}", file=sys.stderr)
+        if previous:
+            roll_back(sandbox, origin, meter, keys, previous)
+        return False
+    run(sandbox, f"rm -f {UNVERIFIED}")
+    return True
+
+
 def try_release(sandbox, release: str, keys: dict[str, str], origin: str, task: str) -> None:
     """The smoke test on a release before anyone gets it, through its own page and meter beside the live ones."""
     meter = client().preview(SANDBOX, "meter-next", NEXT_METER_PORT)
@@ -640,8 +678,9 @@ def main() -> int:
     step(f"Sandbox and previews on Baseten (trials in Blaxel workspace {WORKSPACE})")
     sandbox, origin, meter, created = host(renew=args.renew)
     print(origin, meter)
+    verified = created or finish_unverified(sandbox, origin, meter, keys)
     if args.renew and not created:
-        return 0
+        return 0 if verified else 1
     step("Fetching Baseten's brand face for signed-in visitors")
     subprocess.run(["node", str(ROOT / "hosted" / "fonts.mjs")], check=False)  # best effort: without it, Geist
     step("Uploading the app as a new release")
@@ -661,6 +700,8 @@ def main() -> int:
               file=sys.stderr)
         return 1
     step("Starting the page and the sign-in server on the new release")
+    marker = json.dumps({"release": release, "previous": previous, "task": task})
+    run(sandbox, f"printf %s {shlex.quote(marker)} > {UNVERIFIED}")
     try:
         switch(sandbox, release)
         start(sandbox, origin, meter, keys, release)
@@ -669,14 +710,10 @@ def main() -> int:
         smoke(sandbox, release, keys, origin, meter, task, "after")
     except (SmokeFailed, SystemExit, baseten.SandboxError) as exc:
         print(f"\nFAILED once live: {getattr(exc, 'code', None) or exc}", file=sys.stderr)
-        if not previous:
-            return 1
-        step(f"Rolling back to {previous}")
-        switch(sandbox, previous)
-        start(sandbox, origin, meter, keys, previous)
-        verify(origin, meter)
-        print(f"Rolled back: the page is on {previous} again.", file=sys.stderr)
+        if previous:
+            roll_back(sandbox, origin, meter, keys, previous)
         return 1
+    run(sandbox, f"rm -f {UNVERIFIED}")
     prune(sandbox)
     print(f"\nOpen {origin}/ and sign in with a @baseten.co or @blaxel.ai Blaxel account.")
     return 0
