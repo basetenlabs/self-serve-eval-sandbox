@@ -253,6 +253,18 @@ class StoppedRunTest(unittest.TestCase):
         self.assertEqual(agent["tokens"]["output"], 700)
         self.assertAlmostEqual(agent["cost_usd"], (10 * 1.40 + 1000 * 0.14 + 700 * 4.40) / 1e6)
 
+    def test_served_model_id_is_priced_as_the_configured_model(self):
+        # GLM-5.3 Fast answers as "glm-53-sgl-agg-fast"; the table prices "zai-org/GLM-5.3-Fast".
+        with tempfile.TemporaryDirectory() as d:
+            path = self.write(d, [assistant("m1", model="glm-53-sgl-agg-fast", cache_creation_input_tokens=0,
+                                            cache_creation={})])
+            proxy = Path(d) / "proxy.log"
+            proxy.write_text("turn=1 /v1/messages -> 200 in=1010 out=700\n")
+            agent = runner.price_agent({"timed_out": True}, baseten_model(), path, proxy)
+        self.assertEqual(list(agent["model_usage"]), ["zai-org/GLM-5.3"])
+        self.assertEqual(agent["cost_source"], "rebuilt")
+        self.assertAlmostEqual(agent["cost_usd"], (10 * 1.40 + 1000 * 0.14 + 700 * 4.40) / 1e6)
+
     def test_finished_run_keeps_claude_codes_figures(self):
         usage = {"zai-org/GLM-5.3": {"inputTokens": 1_000_000, "outputTokens": 0}}
         agent = runner.price_agent({"model_usage": usage}, baseten_model(), Path("/nonexistent"))

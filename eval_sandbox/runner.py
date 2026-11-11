@@ -305,7 +305,12 @@ def rebuild_usage(stream: Path, model: Model, proxy_log: Path | None = None) -> 
             message = event.get("message") or {}
             # "<synthetic>" messages are Claude Code's own (an API error shown as a reply)
             if message.get("id") and message.get("model") != "<synthetic>":
-                messages[message["id"]] = (message.get("model") or model.model, message.get("usage") or {})
+                model_id = message.get("model") or model.model
+                # A served deployment answers with its own id (GLM-5.3 Fast: "glm-53-sgl-agg-fast"), which
+                # the price table doesn't name: count it as the model the attempt asked for.
+                if model.rate_for(model_id) is None:
+                    model_id = model.model
+                messages[message["id"]] = (model_id, message.get("usage") or {})
         elif event.get("type") == "stream_event":
             inner, parent = event.get("event") or {}, event.get("parent_tool_use_id")
             if inner.get("type") == "message_start":

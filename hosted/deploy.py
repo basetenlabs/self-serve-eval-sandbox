@@ -121,6 +121,10 @@ SEED_FILES = ["run.json", "report.json", "report.html"]
 # sandbox never needs a GitHub Packages token.
 SIGN_IN = ROOT / "hosted" / "node_modules" / "@blaxel" / "sign-in"
 AUTH = "/data/sign-in"
+# Who may sign in, on the volume beside the runs. The sign-in server gets this path, not the release's own
+# data/ link to it: @blaxel/sign-in keys its sessions to the access file's path, so a path that changed with
+# each release would sign everyone out on every deploy.
+ACCESS = f"{APP}/data/access.json"
 SECRETS = {
     "BASETEN_API_KEY": "pr-eval-host-baseten-api-key",
     "ANTHROPIC_API_KEY": "pr-eval-host-anthropic-api-key",
@@ -372,7 +376,7 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     env = page_env(keys, origin, meter, METER_PORT)
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
-                   "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
+                   "AUTH_STATE_DIR": AUTH, "AUTH_ACCESS_FILE": ACCESS, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
     name, service = GITHUB_TOKEN
     print(f'Public repositories without a GitHub sign-in: {"on" if name in env else "off (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
