@@ -70,6 +70,20 @@ class HostRecovery(unittest.TestCase):
         self.assertFalse(created)
         self.assertEqual(fake.calls, [])
 
+class SignInAcrossReleases(unittest.TestCase):
+    def test_every_release_gives_the_sign_in_the_same_access_file_on_the_volume(self):
+        # @blaxel/sign-in ends every session when the access file's path changes; a release's own data/ link
+        # (releases/<id>/data/access.json) changed it on each deploy and signed everyone out.
+        started = []
+        fake = mock.Mock(processes=lambda sandbox: [], start=lambda sandbox, name, **kw: started.append((name, kw)))
+        with mock.patch.object(deploy, "CLIENT", fake), mock.patch.object(deploy, "serving"), \
+                mock.patch.object(deploy, "mail_key", return_value=None), mock.patch.object(deploy, "keychain", return_value=None):
+            for release in [f"{deploy.RELEASES}/20261111-080000-aaaaaaa", f"{deploy.RELEASES}/20261111-081500-d131a6e"]:
+                deploy.start("box", "https://eval.example", "https://meter.example", {}, release)
+        files = [kw["env"]["AUTH_ACCESS_FILE"] for name, kw in started if name.startswith("pr-eval-sign-in")]
+        self.assertEqual(files, ["/data/app/data/access.json"] * 2)
+
+
 class SmokeVerdict(unittest.TestCase):
     def test_an_attempt_that_went_end_to_end_passes_whether_or_not_it_solved(self):
         self.assertIsNone(deploy.verdict({}, WENT))
