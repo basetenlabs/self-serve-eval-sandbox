@@ -76,7 +76,7 @@ export function Banners({ report, sample = true }: { report: Report; sample?: bo
   );
 }
 
-/** Results: the head-to-head, every model, and quality against cost.
+/** Results: every model side by side, the table of them, and quality against cost.
  *  `onOpen` opens a PR's attempts from the head-to-head. */
 export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: string) => void }) {
   const { S, colors, ranked, t } = useReportModel(report);
@@ -91,7 +91,7 @@ export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: 
   return (
     <div className="grid gap-14">
       <Banners report={report} sample={!inDetails} />
-      <HeadToHead t={t} S={S} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen}
+      <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen}
         sample={inDetails ? smallSample(report.tasks.length, false) : null} />
       <Leaderboard report={report} ranked={ranked} colors={colors} />
       <Scatter models={ranked} S={S} colors={colors} />

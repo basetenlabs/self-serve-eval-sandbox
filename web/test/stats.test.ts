@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { palette } from "../src/lib/models";
-import { rank, takeaway, wilson } from "../src/lib/stats";
+import { rank, solvedBy, takeaway, wilson } from "../src/lib/stats";
 import type { Model, Summary, Task, Trial } from "../src/lib/types";
 
 const s = (pass: number, solved: number, valid: number, cost: number | null, seconds: number | null): Summary => ({
@@ -103,6 +103,27 @@ describe("stats", () => {
       r.trials = r.trials.map((x) => (x.task_id === "t3" && x.model === "glm" ? { ...x, outcome: "invalid" } : x));
       const p = takeaway([glm, sonnet], { glm: s(0.7, 2, 3, 0.1, 1), sonnet: s(0.5, 2, 4, 0.1, 1) }, r).pairs!;
       expect([p.n, p.both.length, p.open.length, p.unscored]).toEqual([3, 2, 1, 1]);
+    });
+  });
+
+  describe("what each model solved", () => {
+    const t = (model: string, task_id: string, outcome: string) => ({ model, task_id, outcome }) as Pick<Trial, "model" | "task_id" | "outcome">;
+
+    it("covers every model of the run, not only the headline's two", () => {
+      const by = solvedBy([t("glm", "a", "solved"), t("kimi", "a", "failed"), t("sonnet", "a", "solved"), t("kimi", "b", "solved")]);
+      expect([...by.keys()].sort()).toEqual(["glm", "kimi", "sonnet"]);
+      expect([by.get("glm")!.get("a"), by.get("kimi")!.get("a"), by.get("kimi")!.get("b")]).toEqual([true, false, true]);
+    });
+
+    it("leaves a PR out for a model whose attempt on it was lost", () => {
+      const by = solvedBy([t("glm", "a", "invalid"), t("sonnet", "a", "solved")]);
+      expect(by.get("glm")?.has("a") ?? false).toBe(false);
+      expect(by.get("sonnet")!.get("a")).toBe(true);
+    });
+
+    it("counts a PR solved when at least half its scored attempts were", () => {
+      const by = solvedBy([t("glm", "a", "solved"), t("glm", "a", "failed"), t("glm", "b", "solved"), t("glm", "b", "failed"), t("glm", "b", "failed"), t("glm", "b", "invalid")]);
+      expect([by.get("glm")!.get("a"), by.get("glm")!.get("b")]).toEqual([true, false]);
     });
   });
 });

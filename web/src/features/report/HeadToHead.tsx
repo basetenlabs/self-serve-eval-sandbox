@@ -2,44 +2,60 @@ import type * as React from "react";
 import { Column, DeltaChip } from "@/components/brand";
 import { Chevron } from "@/components/brand/icons";
 import { dur, pct, plural, usd } from "@/lib/format";
+import { isOpen, type Swatch } from "@/lib/models";
 import { Count, Scramble } from "@/lib/motion";
-import { type Paired, type Takeaway, wilson } from "@/lib/stats";
-import type { Model, Summary, Task } from "@/lib/types";
+import { type Paired, solvedBy, type Takeaway, wilson } from "@/lib/stats";
+import type { Model, Summary, Task, Trial } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: string; units: string; format: (x: number | null) => string; delta?: string; max?: number };
 
-// The brand's head-to-head: Baseten's bar is always Green, the comparison always Blue.
-const GREEN = "var(--color-green)", BLUE = "var(--color-blue)";
+// The brand's head-to-head: Baseten's side is Green, the comparison Blue. Each model keeps the colour
+// it has in the table and the chart under this, so a second open model is Dark Green, not Green again.
+const GREEN = "var(--color-green)", BLUE = "var(--color-blue)", BLACK = "var(--color-black)";
+
+type Side = { m: Model; fill: string; ink: string };
 
 /**
- * Baseten's open model against the closed comparison. First who solved which of the same PRs, then
- * one row per metric in the brand's head-to-head form: the metric and its pink delta chip on the
- * left, the Baseten bar directly above the comparison bar on the right, scaled within the metric.
+ * Every model of the run, Baseten's open models above the closed comparison, best first. First who
+ * solved which of the same PRs, then one row per metric in the brand's head-to-head form: the metric
+ * and its pink delta chip on the left, one bar per model on the right, scaled within the metric.
+ * The delta chip is the headline's comparison: the open model it names against the closed one.
  */
-export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
-  t: Takeaway; S: Record<string, Summary>; judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
+export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onOpen, sample }: {
+  t: Takeaway; S: Record<string, Summary>; ranked: Model[]; colors: Record<string, Swatch>; trials: Trial[];
+  judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   if (!t.open || !t.closed) return null;
   const grid = !!t.pairs?.n;
+  const scored = ranked.filter((m) => S[m.key]?.valid);
+  const sides: Side[] = [...scored.filter(isOpen), ...scored.filter((m) => !isOpen(m))]
+    .map((m) => ({ m, fill: colors[m.key]?.fill ?? (isOpen(m) ? GREEN : BLUE), ink: colors[m.key]?.ink ?? BLACK }));
+  const many = sides.length > 2;
+  // With more than two models the chip says which two it measures.
+  const pair = many ? `${t.open.label} vs ${t.closed.label}` : null;
+  const fills = (open: boolean) => [...new Set(sides.filter((s) => isOpen(s.m) === open).map((s) => s.fill))];
   const metrics: Metric[] = [
     ...(grid ? [] : [{ key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x: number | null) => pct(x), delta: t.solve?.text, max: 1 } as Metric]),
     { key: "cost_per_solved", name: "Cost per solved task", units: "USD · lower is better", format: usd, delta: t.cost?.text },
     { key: "median_seconds", name: "Time per task", units: "Median per attempt · lower is better", format: dur, delta: t.time?.text },
   ];
-  const sides = [{ m: t.open, fill: GREEN }, { m: t.closed, fill: BLUE }];
   return (
     <Column
-      heading="Head to head"
+      heading={many ? "Side by side" : "Head to head"}
       aside={
         <span className="label-mono flex items-center gap-4 text-muted-foreground">
-          <span className="inline-flex items-center gap-2"><span aria-hidden className="size-2.5" style={{ background: GREEN }} />Open, on Baseten</span>
-          <span className="inline-flex items-center gap-2"><span aria-hidden className="size-2.5" style={{ background: BLUE }} />Closed</span>
+          {([["Open, on Baseten", fills(true)], ["Closed", fills(false)]] as const).map(([name, chips]) => (
+            <span key={name} className="inline-flex items-center gap-2">
+              <span aria-hidden className="inline-flex">{chips.map((fill) => <span key={fill} className="size-2.5" style={{ background: fill }} />)}</span>
+              {name}
+            </span>
+          ))}
         </span>
       }
     >
       <div>
-        {grid && <Solved p={t.pairs!} open={t.open} closed={t.closed} S={S} judged={judged} attempts={attempts} onOpen={onOpen} sample={sample} />}
+        {grid && <Solved p={t.pairs!} sides={sides} by={solvedBy(trials)} S={S} judged={judged} attempts={attempts} onOpen={onOpen} sample={sample} />}
         {metrics.map((metric) => {
           const values = sides.map((s) => S[s.m.key]?.[metric.key] ?? null);
           const max = metric.max ?? (Math.max(...values.map((v) => v ?? 0)) || 1);
@@ -49,6 +65,7 @@ export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
                 <h3 className="text-[20px] leading-7 font-normal">{metric.name}</h3>
                 <div className="label-mono mt-0.5 text-muted-foreground">{metric.units}</div>
                 {metric.delta && <DeltaChip className="mt-3">{metric.delta}</DeltaChip>}
+                {metric.delta && pair && <div className="label-xs mt-2 max-w-[30ch] leading-[1.5] text-muted-foreground">{pair}</div>}
               </div>
               <div className="grid grid-cols-1 items-center gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-y-0">
                 {sides.map((s, i) => {
@@ -63,7 +80,8 @@ export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
                           <div className="placeholder-cell flex h-full items-center px-3 label-mono text-muted-foreground">Not measured</div>
                         ) : (
                           <div className="relative h-full origin-left animate-grow" style={{ width: `${w}%`, background: s.fill, animationDelay: `${i * 80}ms` }}>
-                            <span className={cn("num absolute top-1/2 -translate-y-1/2 font-mono text-[12px] whitespace-nowrap", inside ? "right-3 text-black" : "left-full ml-2 text-foreground")}>
+                            <span className={cn("num absolute top-1/2 -translate-y-1/2 font-mono text-[12px] whitespace-nowrap", inside ? "right-3" : "left-full ml-2 text-foreground")}
+                              style={inside ? { color: s.ink } : undefined}>
                               {metric.format(v)}
                             </span>
                           </div>
@@ -84,22 +102,32 @@ export function HeadToHead({ t, S, judged, attempts, onOpen, sample }: {
 
 const ROW = "grid items-center gap-x-8 gap-y-3 border-t border-rule py-6 first:border-t-0 first:pt-2 md:grid-cols-[300px_minmax(0,1fr)]";
 
-/** What each model solved, big, with its cost per solved task. The solve rate, its 95% range and
- *  each PR's result stay in a details row under it. */
-function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
-  p: Paired; open: Model; closed: Model; S: Record<string, Summary>; judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
+// One card per model: two side by side, three in a row from tablet width, four in a row on a wide
+// screen. More than four wrap, with blank cells finishing the last row so no grey gap shows.
+const CARDS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-1 sm:grid-cols-3", 4: "grid-cols-2 xl:grid-cols-4" };
+
+/** What each model solved on the headline's PRs, big, with its cost per solved task. The solve rate,
+ *  its 95% range and each PR's result stay in a details row under it. */
+function Solved({ p, sides: shown, by, S, judged, attempts, onOpen, sample }: {
+  p: Paired; sides: Side[]; by: Map<string, Map<string, boolean>>; S: Record<string, Summary>; judged: boolean; attempts: number;
+  onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   // How to read the rates, said only once someone opens them.
   const notes: [string, string][] = [
     ["Single pass", "Read these rates as a floor. Each attempt is one pass with no second try and no human review, and the agent never sees the PR's tests or reaches GitHub or package registries. In real work a developer reviews the change, runs the tests and sends the agent back for another pass."],
     ...(sample ? [["Small sample", sample] as [string, string]] : []),
   ];
-  const sides = [
-    { m: open, fill: GREEN, n: p.both.length + p.open.length, has: new Set([...p.both, ...p.open]) },
-    { m: closed, fill: BLUE, n: p.both.length + p.closed.length, has: new Set([...p.both, ...p.closed]) },
-  ];
-  // Solved by both first, then by one, so the list reads like the figures above it.
+  // Solved by both of the headline's models first, then by one, so the list reads like the figures above it.
   const tasks = [...p.both, ...p.open, ...p.closed, ...p.neither];
+  // A model beyond the headline's two may have lost its attempt on one of these PRs: that PR counts
+  // as not scored for it, said on its card.
+  const sides = shown.map((s) => {
+    const mine = by.get(s.m.key);
+    const has = new Set(tasks.filter((task) => mine?.get(task.id)));
+    return { ...s, has, n: has.size, scored: new Set(tasks.filter((task) => mine?.has(task.id))) };
+  });
+  const many = sides.length > 2;
+  const blanks = sides.length > 4 ? { two: sides.length % 2, three: (3 - (sides.length % 3)) % 3 } : { two: 0, three: 0 };
   return (
     <div className={cn(ROW, "items-start")}>
       <div>
@@ -111,7 +139,7 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
         </p>
       </div>
       <div className="grid gap-4">
-        <div className="grid grid-cols-2 gap-px bg-lightGrey2">
+        <div className={cn("grid gap-px bg-lightGrey2", CARDS[sides.length] ?? "grid-cols-2 lg:grid-cols-3")}>
           {sides.map((s) => (
             <div key={s.m.key} className="min-w-0 bg-surface p-5">
               <div className="label-mono flex min-w-0 items-center gap-2 text-foreground">
@@ -124,8 +152,13 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
                   <b className="num font-medium text-foreground"><Scramble value={usd(S[s.m.key]?.cost_per_solved)} /></b> per solved task
                 </span>
               </div>
+              {s.scored.size < tasks.length && (
+                <div className="label-xs mt-3 text-muted-foreground">{tasks.length - s.scored.size} of these PRs not scored</div>
+              )}
             </div>
           ))}
+          {Array.from({ length: blanks.two }, (_, i) => <div key={`two-${i}`} aria-hidden className="bg-surface lg:hidden" />)}
+          {Array.from({ length: blanks.three }, (_, i) => <div key={`three-${i}`} aria-hidden className="hidden bg-surface lg:block" />)}
         </div>
         <details className="ev-details">
           <summary>
@@ -157,12 +190,21 @@ function Solved({ p, open, closed, S, judged, attempts, onOpen, sample }: {
               {tasks.map((task) => (
                 <li key={task.id} className="border-b border-lightGrey2">
                   <PullRow task={task} onOpen={onOpen}>
-                    {sides.map((s) => (
-                      <span key={s.m.key} className="label-xs inline-flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-                        <span aria-hidden className="size-2" style={s.has.has(task) ? { background: s.fill } : { border: "1px solid var(--color-darkGrey3)" }} />
-                        {s.has.has(task) ? "Solved" : "—"}
-                      </span>
-                    ))}
+                    {sides.map((s) => {
+                      const state = s.has.has(task) ? "Solved" : s.scored.has(task) ? "Not solved" : "Not scored";
+                      const mark = state === "Not scored" ? null
+                        : <span aria-hidden className="size-2" style={state === "Solved" ? { background: s.fill } : { border: "1px solid var(--color-darkGrey3)" }} />;
+                      // Two models have room for the word; more show the square alone, in the order of the line above.
+                      return many ? (
+                        <span key={s.m.key} className="inline-flex w-4 shrink-0 justify-center" title={`${s.m.label}: ${state}`}>
+                          {mark}<span className="sr-only">{s.m.label}: {state}</span>
+                        </span>
+                      ) : (
+                        <span key={s.m.key} className="label-xs inline-flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
+                          {mark}{state === "Solved" ? "Solved" : "—"}
+                        </span>
+                      );
+                    })}
                   </PullRow>
                 </li>
               ))}

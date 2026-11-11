@@ -41,6 +41,9 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   const pts = models
     .map((m) => ({ m, s: S[m.key] }))
     .filter((p) => p.s?.pass_at_1 != null && p.s.cost_per_solved != null);
+  // A model with scored attempts but no cost per solved task has no place on the cost axis: named under the chart.
+  const off = models.filter((m) => S[m.key]?.valid && !pts.some((p) => p.m.key === m.key))
+    .map((m) => `${m.label} (${S[m.key].tasks_solved ? "cost not measured" : "solved none"})`);
 
   if (!pts.length) {
     return (
@@ -171,6 +174,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
           </div>
         )}
       </div>
+      {off.length > 0 && <div className="label-xs border-t border-lightGrey2 pt-3 text-muted-foreground">Not on the chart: {off.join(", ")}</div>}
     </Column>
   );
 }
