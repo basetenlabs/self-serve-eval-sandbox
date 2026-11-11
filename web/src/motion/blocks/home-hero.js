@@ -97,8 +97,10 @@ export function mountHomeHero(root, { slides, autoplaySeconds = 8, ...mountOptio
 	// (a click leaves focus on the tab, which must not keep it paused).
 	let hovered = false
 	let focused = false
-	const hold = () =>
-		slider.setPaused(hovered || focused || matchMedia('(prefers-reduced-motion: reduce)').matches)
+	const motionPreference = matchMedia('(prefers-reduced-motion: reduce)')
+	const reduced = () => mountOptions.reducedMotion ?? motionPreference.matches
+	const hold = () => slider.setPaused(hovered || focused || reduced())
+	motionPreference.addEventListener('change', hold) // the preference can change while the page is open
 	tablist.addEventListener('pointerenter', () => ((hovered = true), hold()))
 	tablist.addEventListener('pointerleave', () => ((hovered = false), hold()))
 	tablist.addEventListener(
@@ -144,6 +146,7 @@ export function mountHomeHero(root, { slides, autoplaySeconds = 8, ...mountOptio
 		dispose() {
 			unsubscribe()
 			removeKeyboard()
+			motionPreference.removeEventListener('change', hold)
 			handle.dispose()
 		},
 	}

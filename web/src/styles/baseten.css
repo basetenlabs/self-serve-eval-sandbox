@@ -288,7 +288,9 @@ img, svg { display: block; }
 .bt-hero-composition > .content { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1.5rem; background: var(--color-white); }
 .bt-hero-composition > .visual { grid-column: 1 / -1; position: relative; overflow: clip; block-size: 87.3156cqw; min-inline-size: 0; }
 .bt-hero-composition > .visual > :is(img, svg, canvas, video, .bt-webgl) { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
-.bt-hero-composition > .visual:has(> .bt-webgl) { background: var(--color-lightGrey2); }   /* behind the live scene until it has rendered */
+.bt-hero-composition > .visual:has(> .bt-webgl) { background: var(--color-lightGrey2); }
+/* A still picture left beside the live scene is its stand-in: shown when scripts are off or WebGL fails, hidden while the scene loads and runs. */
+@media (scripting: enabled) { .bt-hero-composition > .visual:has(> .bt-webgl:not([data-webgl-state=fallback])) > :is(img, svg) { visibility: hidden; } }   /* behind the live scene until it has rendered */
 @media (min-width: 801px) {
   .bt-hero-composition > .content { grid-area: 1 / 1 / auto / span 4; z-index: 1; align-self: start; margin-inline-end: calc(-1 * var(--grid-gap)); padding: 0 1.5rem 1.5rem 0; }
   .bt-hero-composition > .visual { grid-row: 1; block-size: max(24rem, calc(100cqw * 492 / 1368)); }
@@ -301,6 +303,9 @@ img, svg { display: block; }
 @media (min-width: 801px) {
   .bt-hero-composition > .bt-logos.stepped { --logo-h: max(5rem, calc((100cqw - 5 * var(--grid-gap)) / 6 * 106 / 218)); position: relative; z-index: 2; grid-auto-rows: var(--logo-h); margin-top: calc(-2 * (var(--logo-h) + var(--grid-gap))); pointer-events: none; }
   .bt-logos.stepped > .bt-logo-tile { aspect-ratio: auto; box-shadow: 0 0 0 var(--grid-gap) var(--color-white); pointer-events: auto; }
+  /* Each tile carries a 12px square of the page texture at its outer lower right corner, where the gaps cross.
+     alignTexture(tiles, undefined, { corner: true }) in motion.js (initMotion does it) lines its dots up with the page's. */
+  .bt-logos.stepped > .bt-logo-tile:after { content: ""; position: absolute; z-index: 1; inset-block-start: 100%; inset-inline-start: 100%; inline-size: var(--grid-gap); block-size: var(--grid-gap); background: var(--background-texture); background-position: var(--hole-position, 0 0); pointer-events: none; }
   .bt-hero-composition > .switcher { grid-row: 1; grid-column: 1 / span 4; z-index: 1; align-self: end; justify-self: start; display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; inline-size: min(20rem, 100% - var(--grid-gap)); margin: 0 0 var(--grid-gap) var(--grid-gap); }
 }
 @media (max-width: 800.98px) { .bt-logos.stepped > i { display: none; } .bt-logos > i.hole { display: block; background: var(--background-texture); } .bt-hero-composition > .switcher { grid-column: 1 / -1; } }
@@ -336,7 +341,9 @@ img, svg { display: block; }
 .bt-title-rows .bt-ctas { grid-area: 2 / 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 12px; padding: 24px 0 32px; }
 @media (max-width: 800.98px) {
   .bt-title-rows { display: flex; flex-direction: column; gap: 8px; background: none; }
-  .bt-title-rows h1 { font-size: 56px; line-height: 1.1; letter-spacing: -.02em; inset-block-start: 0; }
+  .bt-title-rows h1 { padding-right: 0; font-size: 56px; line-height: 1.1; letter-spacing: -.02em; inset-block-start: 0; }
+  .bt-title-rows .description { padding: 9px 24px 9px 0; }
+  .bt-title-rows .bt-ctas { padding-bottom: 0; }
 }
 
 /* Product page hero: a wide scene (342:115) with the product subnav cut into its top right and a White notch at its
@@ -430,7 +437,8 @@ img, svg { display: block; }
 .bt-section-heading { margin: 0; max-inline-size: 640px; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; white-space: pre-line; }
 @media (min-width: 801px) {
   .bt-section-heading { font-size: 40px; line-height: 1.1; text-wrap: balance; }
-  .bt-section-heading.large { font-size: 56px; line-height: 1.05; letter-spacing: -.02em; max-inline-size: none; }
+  .bt-section-heading.large { font-size: 56px; line-height: 1.1; letter-spacing: -.02em; max-inline-size: none; }
+  .bt-cta .bt-section-heading.large { line-height: 1.05; }   /* the closing heading alone sets tighter */
 }
 /* Section head: eyebrow, then heading (and optional copy), above the section's content. */
 .bt-section-head { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: flex-start; gap: 24px; margin-bottom: 24px; }
@@ -453,9 +461,8 @@ img, svg { display: block; }
   border: 0; border-bottom: 1px solid var(--color-lightGrey2); background: none; cursor: pointer; text-align: left; text-decoration: none;
   font: 400 14px/1.2 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey3);
 }
-.bt-tabs > :is(a, button):hover { color: var(--color-darkGrey2); border-color: var(--color-darkGrey2); }
-.bt-tabs > .active, .bt-tabs > [aria-selected=true] { color: var(--color-black); border-color: var(--color-black); }
-.bt-tabs > :is(a, button):focus-visible { color: var(--color-darkGrey2); border-color: var(--color-darkGrey2); }
+.bt-tabs > :is(a, button):is(:hover, :focus-visible) { color: var(--color-darkGrey2); border-color: var(--color-darkGrey2); }
+.bt-tabs > :is(a, button):is(.active, [aria-selected=true]) { color: var(--color-black); border-color: var(--color-black); }   /* after the hover rule at the same weight: the selected tab stays Black under the pointer */
 .bt-tabs > * > svg, .bt-tabs > * > img, .bt-tabs .mark { flex-shrink: 0; inline-size: 14px; block-size: 14px; color: var(--color-lightGrey2); }
 .bt-tabs > .active > svg, .bt-tabs > :is(:hover, :focus-visible, .active) > .mark { color: inherit; }
 /* A tab's mark (motion/blocks/products.js): the square that unfolds into an arrow on hover; the product icon once selected. */
@@ -478,10 +485,20 @@ img, svg { display: block; }
 :is(a, button):is(:hover, :focus-visible) .bt-arrow.point g { transform: rotate(90deg); }
 :is(a, button):is(:hover, :focus-visible) .bt-arrow.point path:first-child { d: path("M3.536 3.536L3.536 10.607L10.607 3.536Z"); }
 :is(a, button):is(:hover, :focus-visible) .bt-arrow.point path:last-child { d: path("M10.607 10.607L10.607 3.536L3.536 10.607Z"); }
-.bt-tabs.compact { gap: 6px; } .bt-tabs.compact > :is(a, button) { block-size: 26px; padding: 4px 0; }
+.bt-tabs.compact { gap: 6px; } .bt-tabs.compact > :is(a, button) { block-size: auto; padding: 4px 0; }   /* 25.8px rows: 16.8px of text, 4px above and below, the rule */
 .bt-tabs.compact > :is(a, button):hover, .bt-tabs.compact > .active, .bt-tabs.compact > [aria-selected=true] { border-color: var(--color-lightGrey2); }   /* compact rows keep the pale rule */
-.bt-tabs.compact > :is(a, button):after { content: ""; flex-shrink: 0; inline-size: 7px; block-size: 7px; margin-inline-end: 2px; background: var(--color-black); opacity: 0; transition: opacity .2s; }
-.bt-tabs.compact > :is(a, button):is(:hover, :focus-visible, .active, [aria-selected=true]):after { opacity: 1; }
+/* A compact tab's mark is a .bt-arrow at the row's end: hidden at rest, shown at once (no fade) as the arrow on hover and focus;
+   on the selected tab it turns a quarter and folds into the square over .4s on the lift curve. A deselected tab's mark goes at once. */
+.bt-tabs.compact > * > .bt-arrow { inline-size: 13px; block-size: 14px; margin-inline-start: -1px; color: inherit; opacity: 0; }
+.bt-tabs.compact > :is(:hover, :focus-visible, .active, [aria-selected=true]) > .bt-arrow { opacity: 1; }
+.bt-tabs.compact > * > .bt-arrow g { transform: none; }
+.bt-tabs.compact > * > .bt-arrow path:first-child { d: path("M10 7L5 2L5 7Z"); } .bt-tabs.compact > * > .bt-arrow path:last-child { d: path("M10 7L5 7L5 12Z"); }
+.bt-tabs.compact > :is(.active, [aria-selected=true]) > .bt-arrow g { transform: rotate(90deg); }
+.bt-tabs.compact > :is(.active, [aria-selected=true]) > .bt-arrow path:first-child { d: path("M3.536 3.536L3.536 10.607L10.607 3.536Z"); }
+.bt-tabs.compact > :is(.active, [aria-selected=true]) > .bt-arrow path:last-child { d: path("M10.607 10.607L10.607 3.536L3.536 10.607Z"); }
+/* A compact tab written without the mark still gets the 7px square, at once. */
+.bt-tabs.compact > :is(a, button):not(:has(> .bt-arrow)):after { content: ""; flex-shrink: 0; inline-size: 7px; block-size: 7px; margin-inline-end: 2px; background: currentColor; opacity: 0; }
+.bt-tabs.compact > :is(a, button):not(:has(> .bt-arrow)):is(:hover, :focus-visible, .active, [aria-selected=true]):after { opacity: 1; }
 /* Sticky left rail (eyebrow + tabs) for a tabbed section: columns 1 to 2, content from column 4. */
 .bt-rail { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 24px; }
 .bt-rail-content { grid-column: 1 / -1; min-inline-size: 0; }
@@ -514,6 +531,9 @@ img, svg { display: block; }
 .bt-logo-tile > span { font: 500 20px/1 var(--beausite); letter-spacing: -.01em; }   /* text stand-in when a logo file is missing (mocks only) */
 .bt-logo-tile.blue { background: var(--color-lightBlue); } .bt-logo-tile.green { background: var(--color-lightGreen); }
 .bt-logo-tile.pink { background: var(--color-lightPink); } .bt-logo-tile.gold { background: var(--color-lightGold); }
+/* A tile that links to the customer's story carries an 11px corner mark (two brackets, an "open" sign), 10px in from its top right;
+   it rides the tile when the tile lifts. Drawn by the link itself, so no markup: <a class="bt-lift blue" href="…"><span class="bt-logo-tile blue">…</span></a> */
+a.bt-logo-tile:before, a > .bt-logo-tile:before { content: ""; position: absolute; inset-block-start: 10px; inset-inline-end: 10px; inline-size: 11px; block-size: 11px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 11 11' fill='none'%3E%3Cpath d='M5.625 0.625H9.625V4.625' stroke='%230E0E0E' stroke-width='1.25'/%3E%3Cpath d='M4.625 9.625L0.625 9.625L0.625 5.625' stroke='%230E0E0E' stroke-width='1.25'/%3E%3C/svg%3E") center / 100% no-repeat; }
 
 /* ---------- Stats ---------- */
 /* Columns divided by a left hairline; index, value and label sit on shared rows so they align when a label wraps. */
@@ -622,6 +642,11 @@ a.bt-panel, .bt-panel.linked { color: inherit; text-decoration: none; transition
   transition: color .4s, background-color .4s, opacity .4s;
 }
 .bt-chip:hover { color: var(--color-darkGrey3); }
+/* Small controls keep their drawn size and take a 36px-high target: a pressable chip (21px), a standalone link (20px), a compact tab (26px). */
+:is(a, button).bt-chip, .bt-link, .bt-tabs.compact > :is(a, button) { position: relative; }
+:is(a, button).bt-chip:before, .bt-link:before { content: ""; position: absolute; inset: -8px 0; }
+.bt-press .bt-link { position: static; } .bt-press .bt-link:before { inset: 0; }   /* in a linked card the link's target is the card, edge to edge and no further */
+.bt-tabs.compact > :is(a, button):before { content: ""; position: absolute; inset: -5px 0; }
 .bt-chip.active { background: var(--color-green); color: var(--color-black); }
 /* The one rounded thing on the site: a 4px outline note inside a table row ("20% off for limited time") */
 .bt-note { display: block; inline-size: fit-content; margin-top: 4px; padding: 2px 6px; border: 1px solid var(--color-lightGrey3); border-radius: 4px; font: 500 12px/1.4 var(--beausite); }
@@ -666,7 +691,7 @@ code, .bt-inline-code { font-family: var(--geist-mono); }
   font: 350 16px/1.4 var(--beausite); letter-spacing: .01em;
 }
 textarea.bt-input { block-size: auto; min-block-size: 108px; }
-.bt-input::placeholder { color: #00000080; opacity: 1; }
+.bt-input::placeholder { color: #0000008c; opacity: 1; }   /* the site uses #00000080 (3.95:1 on White); 8c is the nearest step that passes 4.5:1 */
 .bt-input:focus-visible { outline: 1px solid var(--color-black); outline-offset: -1px; }
 .bt-search { display: flex; inline-size: 100%; block-size: 36px; border: 1px solid var(--color-lightGrey2); }
 .bt-search .bt-input { flex: 1; min-inline-size: 0; block-size: 100%; border: 0; }
@@ -773,6 +798,13 @@ textarea.bt-input { block-size: auto; min-block-size: 108px; }
 .bt-tabbar > :is(a, button):not(:disabled, [aria-disabled=true]):hover { color: var(--color-black); }
 .bt-tabbar > :is(:disabled, [aria-disabled=true]) { color: var(--color-darkGrey3); cursor: default; }
 .bt-tabbar > .active, .bt-tabbar > [aria-selected=true] { color: var(--color-black); border-color: var(--color-black); }
+/* A tab bar that can scroll sits in .bt-tabbar-scroll: at an end that hides tabs, scrollCue() in motion.js puts a 36px White fade
+   with the 5 x 10 chevron, which scrolls the bar to that end. Without it a bar cut exactly at a gap shows no sign of more tabs. */
+.bt-tabbar-scroll { position: relative; display: flex; min-inline-size: 0; }
+.bt-tabbar-scroll > .bt-tabbar { flex: 1; }
+.bt-tabbar-scroll > .more { position: absolute; inset-block: 0; inset-inline-end: 0; box-sizing: border-box; display: flex; align-items: center; justify-content: flex-end; inline-size: 36px; margin: 0; padding: 0; border: 0; border-bottom: 1px solid var(--color-lightGrey2); background: linear-gradient(to right, transparent, var(--color-white) 50%); color: var(--color-black); cursor: pointer; }   /* full row height: its hairline covers the Black rule of a selected tab cut by the edge */
+.bt-tabbar-scroll > .more.back { inset-inline: 0 auto; justify-content: flex-start; background: linear-gradient(to left, transparent, var(--color-white) 50%); }
+.bt-tabbar-scroll > .more.back > svg { rotate: 180deg; }
 /* Switch: a square 36 x 20 track with a 12px square thumb; Black when on. Use role="switch" and aria-checked. */
 .bt-switch { position: relative; flex-shrink: 0; inline-size: 36px; block-size: 20px; margin: 0; padding: 0; border: 1px solid var(--color-lightGrey3); background: var(--color-lightGrey1); cursor: pointer; transition: background-color .4s var(--ease), border-color .4s var(--ease); }
 .bt-switch:after { content: ""; position: absolute; top: 3px; left: 3px; inline-size: 12px; block-size: 12px; background: var(--color-darkGrey3); transition: transform .4s var(--ease), background-color .4s var(--ease); }
@@ -857,6 +889,55 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-resource .bt-media > .plate, .bt-resource .bt-media > img { inline-size: 100%; block-size: 100%; max-inline-size: none; max-block-size: none; object-fit: cover; }
 .bt-resource .title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; }
 .bt-resource .byline { margin-top: 12px; font: 400 12px/1.2 var(--geist-mono); letter-spacing: .02em; text-transform: uppercase; color: var(--color-darkGrey3); }
+/* Use-case tabs (product pages, "Powering the frontier"): at the left (columns 1 to 3) a Base-colour tile with the customer's logo
+   over a Light-ramp block of compact tabs; at the right (4 to 12) the selected quote and metrics on Light Grey 1.
+   motion/blocks/usecases.js fills it, runs the tabs and mounts the glitch scene in the tile. On a tab change the tile and the
+   tab block change colour over .3s ease-out, the old panel goes at once and the new one fades in over .3s ease-out. */
+.bt-usecases { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; color: var(--color-black); }
+.bt-usecases > .panels { grid-column: 1 / -1; min-inline-size: 0; margin-bottom: 12px; background: var(--color-lightGrey1); }
+.bt-usecases > .panels > * { display: flex; flex-direction: column; justify-content: space-between; gap: 88px; margin: 0; padding: 20px; position: relative; }
+.bt-usecases .heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px 24px; min-inline-size: 0; }
+@media (max-width: 800.98px) { .bt-usecases .heading > .bt-quote-mark { grid-area: 1 / 2 / span 2; } }
+.bt-usecases .heading > blockquote { grid-area: 1 / 1; margin: 0; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; overflow-wrap: anywhere; }
+.bt-usecases .heading > .bt-attribution { grid-area: 2 / 1; margin: 0; overflow-wrap: anywhere; }
+.bt-usecases .bottom { display: flex; flex-direction: column; gap: 40px; min-inline-size: 0; margin-top: auto; }
+.bt-usecases .bottom > dl { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; min-inline-size: 0; margin: 0; }
+.bt-usecases .bottom > dl > div { display: flex; flex-direction: column-reverse; justify-content: flex-end; gap: 4px; min-inline-size: 0; }
+.bt-usecases .bottom dt { margin: 0; font: 400 10px/1 var(--geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-darkGrey2); overflow-wrap: anywhere; }
+.bt-usecases .bottom dd { margin: 0; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; }
+.layout-grid:has(> .bt-usecases) { row-gap: 32px; }   /* eyebrow to block: 32px, 40px on desktop */
+@media (min-width: 801px) { .layout-grid:has(> .bt-usecases) { row-gap: 40px; } }
+.bt-usecases > .nav { grid-column: 1 / -1; display: flex; flex-direction: column; min-inline-size: 0; position: relative; }
+.bt-usecases .tile { display: flex; align-items: center; justify-content: center; flex-shrink: 0; aspect-ratio: 2; inline-size: 100%; padding: 16px; position: relative; isolation: isolate; overflow: clip; background-color: var(--color-lightGrey2); transition: background-color .3s ease-out; }
+.bt-usecases .tile > .texture { position: absolute; inset: 0; z-index: -1; inline-size: 100%; block-size: 100%; object-fit: cover; mix-blend-mode: multiply; }
+.bt-usecases .tile > .bt-webgl { position: absolute; inset: 0; pointer-events: none; }
+.bt-usecases .tile > .logo { display: block; position: relative; inline-size: auto; max-inline-size: 50%; block-size: auto; max-block-size: 100%; object-fit: contain; }
+.bt-usecases > .nav > .hole { display: none; }
+.bt-usecases .bt-tabs { flex: 1; gap: 6px; padding: 20px; background-color: var(--color-lightGrey1); transition: background-color .3s ease-out; }
+.bt-usecases .bt-tabs > :is(a, button), .bt-usecases .bt-tabs > :is(a, button):is(.active, [aria-selected=true]) { border-color: var(--color-black-10); }
+.bt-usecases .bt-tabs > :is(a, button):is(:hover, :focus-visible) { border-color: var(--color-lightGrey2); }   /* under the pointer or focus the rule lightens, on the selected tab too */
+.bt-usecases .bt-tabs > :is(a, button):focus-visible { outline: 2px solid; outline-offset: 3px; }
+/* The 48px Black square with the quote mark */
+.bt-quote-mark { display: block; flex-shrink: 0; inline-size: 48px; block-size: 48px; background: var(--color-black) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M20.9427 24.1787V32H14V24.5019C14 21.7871 14.6582 19.6755 15.9745 18.1673C17.2909 16.616 19.0743 15.5602 21.3248 15V19.1369C20.4331 19.4385 19.6476 19.9556 18.9682 20.6882C18.2887 21.4208 17.949 22.2826 17.949 23.2738C17.949 23.5754 18.034 23.8124 18.2038 23.9848C18.3737 24.1141 18.6285 24.1787 18.9682 24.1787H20.9427ZM33.6178 24.1787V32H26.6752V24.5019C26.6752 21.7871 27.3333 19.6755 28.6497 18.1673C29.966 16.616 31.7495 15.5602 34 15V19.1369C33.1083 19.4385 32.3227 19.9556 31.6433 20.6882C30.9639 21.4208 30.6242 22.2826 30.6242 23.2738C30.6242 23.5754 30.7091 23.8124 30.879 23.9848C31.0488 24.1141 31.3036 24.1787 31.6433 24.1787H33.6178Z' fill='white'/%3E%3C/svg%3E") center / 100% no-repeat; }
+@media (min-width: 801px) {
+  .bt-usecases > .panels { grid-area: 1 / 4 / auto / -1; grid-template-columns: subgrid; margin-bottom: 0; }
+  .bt-usecases > .panels > * { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; row-gap: 32px; min-block-size: 480px; padding: 88px 24px 24px 0; }
+  .bt-usecases .heading { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 24px; max-inline-size: 720px; }
+  .bt-usecases .heading > .bt-quote-mark { position: absolute; inset-block-start: 0; inset-inline-start: 0; }
+  .bt-usecases .heading > blockquote { font-size: 32px; line-height: 1.2; }
+  .bt-usecases .bottom { grid-column: 2 / -1; flex-flow: wrap; justify-content: space-between; align-items: flex-end; gap: 24px; }
+  .bt-usecases .bottom:not(:has(> .cta)), .bt-usecases .bottom:not(:has(> .cta)) > dl { justify-content: flex-end; }
+  .bt-usecases .bottom > dl { justify-content: flex-start; gap: 24px 56px; }
+  .bt-usecases .bottom dt { font-size: 12px; line-height: 1.2; letter-spacing: .02em; }
+  .bt-usecases .bottom dd { font-size: 56px; line-height: 1.05; letter-spacing: -.02em; }
+  .bt-usecases .bottom > .cta { margin-inline-start: auto; }
+  .bt-usecases > .nav { grid-area: 1 / 1 / auto / span 3; row-gap: 12px; }
+  /* a 12px square of the page texture above the gap between the two halves, in the row gap over the block */
+  .bt-usecases > .nav > .hole { display: block; position: absolute; inset-block-start: calc(-1 * var(--grid-gap)); inset-inline-start: 100%; inline-size: var(--grid-gap); block-size: var(--grid-gap); background: var(--background-texture); }
+  .bt-usecases .tile { flex: 1; aspect-ratio: auto; min-block-size: 252px; padding: 0; }
+  .bt-usecases .tile > .logo { inline-size: 56%; max-inline-size: none; max-block-size: 80%; }
+  .bt-usecases .bt-tabs { justify-content: flex-end; min-block-size: 216px; }
+}
 /* Avatars: the only other rounding, 2px with a Light Grey 2 border, greyscale */
 .bt-avatar { inline-size: 16px; block-size: 16px; border: 1px solid var(--color-lightGrey2); border-radius: 2px; filter: grayscale(1); }
 
@@ -963,6 +1044,9 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-fade-stack { display: grid; }
 .bt-fade-stack > * { grid-area: 1 / 1; min-inline-size: 0; opacity: 0; visibility: hidden; transition: opacity .3s ease-out, visibility 0s linear .3s; }
 .bt-fade-stack > .active { opacity: 1; visibility: inherit; transition: opacity .3s ease-out, visibility 0s; }
+/* .cut: the old slide goes at once and the new one fades in (.3s ease-out), as the site's tab panels do. */
+.bt-fade-stack.cut > * { transition: none; }
+.bt-fade-stack.cut > .active { transition: none; animation: bt-reveal .3s ease-out; }
 /* Artwork swapped by a step list: the old one fades and sinks 30px in .3s, then the new one rises in over the next .3s. */
 .bt-fade-stack.shift > * { translate: 0 30px; transition: opacity .3s ease-out, translate .3s ease-out, visibility 0s linear .3s; }
 .bt-fade-stack.shift > .active { translate: 0 0; transition: opacity .3s ease-out .3s, translate .3s ease-out .3s, visibility 0s; }
@@ -1014,7 +1098,7 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 .bt-features > .content > header { margin-block-end: 40px; }
 .bt-features > .content > header > .bt-eyebrow { margin-bottom: 32px; }
 .bt-features > .content > header > :is(h2, h3) { margin: 0; font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; }
-.bt-features > .content > header > p { max-inline-size: 330px; margin: 24px 0 0; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; }
+.bt-features > .content > header > p { max-inline-size: 440px; text-wrap: balance; margin: 24px 0 0; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; }
 .bt-features > .frame { display: none; }
 .bt-features .filler { display: none; }
 @media (min-width: 801px) {
@@ -1189,6 +1273,9 @@ select.bt-input { padding-inline-end: 28px; background: url("data:image/svg+xml,
 :where(.bt-mobile-menu .sub > * > :has(> .bt-row-link)) { padding-top: 0; }   /* a list of rows starts right under its heading row */
 .bt-mobile-menu .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--grid-gap); margin-top: 1.5rem; }
 .bt-mobile-menu .actions > li:last-child:nth-child(odd) { grid-column: 1 / -1; }
+/* A second list under the buttons holds the plain links (Docs) */
+.bt-mobile-menu .actions + .actions { margin-top: var(--grid-gap); }
+.bt-mobile-menu .actions a.bt-external { padding: 8px 4px; font: 350 16px/1.2 var(--beausite); letter-spacing: .01em; color: var(--color-black); text-decoration: none; }
 @media (min-width: 1025px) { .bt-mobile-menu { display: none; } }
 
 /* Page change (motion.js pageTransitions): a White sheet over the page fades in (.4s power2.out) before the browser

@@ -162,8 +162,12 @@ export function startTimer(timer) {
  * Lines the dotted texture of "holes" (elements whose background is the page texture, such as
  * `.bt-logos i.hole` and the dotted corner rectangles) up with the texture behind them, so they
  * read as cut through the white block rather than as a patch laid on it.
+ *
+ * `corner: true` is for a hole drawn by the target's `:after` at its outer lower right corner
+ * (the stepped hero logo tiles): the offset is worked out for that corner and set as
+ * `--hole-position` on the target, which the stylesheet reads.
  */
-export function alignTexture(targets, textureElement = document.documentElement) {
+export function alignTexture(targets, textureElement = document.documentElement, { corner = false } = {}) {
 	const list = [...targets]
 	const align = () => {
 		// Backgrounds are painted from box origins snapped to whole CSS pixels: snap both sides
@@ -173,9 +177,11 @@ export function alignTexture(targets, textureElement = document.documentElement)
 		const originY = Math.round(origin.top + textureElement.clientTop)
 		for (const target of list) {
 			const box = target.getBoundingClientRect()
-			const left = Math.round(box.left + target.clientLeft)
-			const top = Math.round(box.top + target.clientTop)
-			target.style.backgroundPosition = `${originX - left}px ${originY - top}px`
+			const left = Math.round(corner ? box.right : box.left + target.clientLeft)
+			const top = Math.round(corner ? box.bottom : box.top + target.clientTop)
+			const position = `${originX - left}px ${originY - top}px`
+			if (corner) target.style.setProperty('--hole-position', position)
+			else target.style.backgroundPosition = position
 		}
 	}
 	align()
@@ -185,7 +191,10 @@ export function alignTexture(targets, textureElement = document.documentElement)
 	}
 	return () => {
 		observer.disconnect()
-		for (const target of list) target.style.backgroundPosition = ''
+		for (const target of list) {
+			if (corner) target.style.removeProperty('--hole-position')
+			else target.style.backgroundPosition = ''
+		}
 	}
 }
 
@@ -453,14 +462,28 @@ function numberText({ decimals = 0, prefix = '', suffix = '' }) {
 
 /* ---------- Tabs and steps ---------- */
 
+let tabsCount = 0
+
 /**
  * Tabs whose panels swap in place. Tabs are `[role="tab"]` inside `tablist`; `panels` are in the
  * same order and hidden with the `hidden` attribute (give them `.bt-reveal` to fade in, 0.3s), or,
  * for a `.bt-fade-stack`, stacked and cross-faded by the `active` class.
+ * Each panel gets `role="tabpanel"` and is tied to its tab (`aria-controls`, `aria-labelledby`);
+ * a tab or panel without an id is given one. Roles and ids already in the markup are kept.
  */
 export function tabs(tablist, panels, { onChange, initialIndex = 0 } = {}) {
 	const items = [...tablist.querySelectorAll('[role="tab"]')]
 	const list = [...panels]
+	tabsCount += 1
+	items.forEach((tab, at) => {
+		const panel = list[at]
+		if (!panel) return
+		tab.id ||= `bt-tabs-${tabsCount}-tab-${at}`
+		panel.id ||= `bt-tabs-${tabsCount}-panel-${at}`
+		if (!panel.hasAttribute('role')) panel.setAttribute('role', 'tabpanel')
+		if (!tab.hasAttribute('aria-controls')) tab.setAttribute('aria-controls', panel.id)
+		if (!panel.hasAttribute('aria-labelledby')) panel.setAttribute('aria-labelledby', tab.id)
+	})
 	let active = -1
 	function select(index) {
 		if (index === active) return
@@ -492,6 +515,55 @@ export function tabs(tablist, panels, { onChange, initialIndex = 0 } = {}) {
 			removeKeyboard()
 		},
 	}
+}
+
+/** The 5 x 10px triangle a button with a chevron carries (`.bt-button.has-chevron .chevron`). */
+export const CHEVRON_SVG =
+	'<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="5" height="10" viewBox="0 0 5 10" fill="none"><path d="M5 5L0 0V10L5 5Z" fill="currentColor"/></svg>'
+
+/**
+ * Shows that a scrolling tab bar has more tabs. `wrap` is a `.bt-tabbar-scroll` around a
+ * `.bt-tabbar`: at each end that hides tabs it gets a 36px White fade with a chevron (`.more`,
+ * `.more.back`), which scrolls the bar to that end; the fade goes when nothing is hidden there.
+ * The cue is for the pointer only (hidden from assistive technology, not in the tab order):
+ * arrow keys already reach every tab. Returns a function that removes it.
+ */
+export function scrollCue(wrap) {
+	release(wrap, '.bt-tabbar-scroll', { stop: true })
+	const bar = wrap.querySelector('.bt-tabbar')
+	if (!bar) return () => {}
+	const make = (way) => {
+		const button = h(
+			'button',
+			{ type: 'button', class: way < 0 ? 'more back' : 'more', tabindex: -1, 'aria-hidden': 'true', hidden: true },
+			svg(CHEVRON_SVG),
+		)
+		button.addEventListener('click', () =>
+			bar.scrollTo({ left: way > 0 ? bar.scrollWidth : 0, behavior: reducedMotion() ? 'auto' : 'smooth' }),
+		)
+		return button
+	}
+	const back = make(-1)
+	const more = make(1)
+	wrap.append(back, more)
+	const update = () => {
+		back.hidden = bar.scrollLeft <= 1
+		more.hidden = bar.scrollLeft + bar.clientWidth >= bar.scrollWidth - 1
+	}
+	bar.addEventListener('scroll', update, { passive: true })
+	const sizes = new ResizeObserver(update)
+	sizes.observe(bar)
+	for (const tab of bar.children) sizes.observe(tab)
+	update()
+	const stop = () => {
+		release(wrap, '.bt-tabbar-scroll', { owner: stop })
+		bar.removeEventListener('scroll', update)
+		sizes.disconnect()
+		back.remove()
+		more.remove()
+	}
+	claim(wrap, '.bt-tabbar-scroll', stop)
+	return stop
 }
 
 const PLAY_ICON =
@@ -529,7 +601,10 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 		type: 'button',
 		className: 'bt-icon-button control',
 	})
-	control.addEventListener('click', () => timer.toggle('manual'))
+	control.addEventListener('click', () => {
+		pausedForPreference = false // the pause is the reader's own from here
+		timer.toggle('manual')
+	})
 
 	const activeIndex = () => (desktop.matches ? timer.get().activeIndex : mobileIndex)
 	function render() {
@@ -545,11 +620,16 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 					index === active && desktop.matches ? `scaleX(${timer.getProgress().toFixed(4)})` : ''
 		})
 		slides.forEach((slide, index) => slide.classList.toggle('active', index === active))
-		if (seconds > 0 && desktop.matches) rows[active]?.append(control)
-		else control.remove()
+		// The button and its icon are touched only when they change: a render between a press and its release
+		// (focus arriving holds the timer) that moved or redrew what was pressed would lose the click.
+		if (!(seconds > 0 && desktop.matches)) control.remove()
+		else if (rows[active] && control.parentNode !== rows[active]) rows[active].append(control)
 		const paused = timer.isPausedBy('manual')
-		control.replaceChildren(svg(paused ? PLAY_ICON : PAUSE_ICON))
-		control.setAttribute('aria-label', paused ? 'Resume autoplay' : 'Pause autoplay')
+		if (control.dataset.paused !== String(paused)) {
+			control.dataset.paused = String(paused)
+			control.replaceChildren(svg(paused ? PLAY_ICON : PAUSE_ICON))
+			control.setAttribute('aria-label', paused ? 'Resume autoplay' : 'Pause autoplay')
+		}
 		// Hold while attention is on what is showing
 		if (hovered === active || focused === active || frameHeld) timer.pause('hover')
 		else timer.resume('hover')
@@ -638,7 +718,21 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 		render()
 	}
 	desktop.addEventListener('change', sync)
-	if (reducedMotion()) timer.pause('manual')
+	// Reduced motion pauses autoplay as the reader's own pause would (the button opts back in). The preference
+	// can change while the page is open: turned on it pauses; turned off it resumes only the pause it caused.
+	const motionPreference = window.matchMedia(REDUCED_MOTION_QUERY)
+	let pausedForPreference = false
+	const onMotionPreference = () => {
+		if (motionPreference.matches) {
+			pausedForPreference = !timer.isPausedBy('manual')
+			timer.pause('manual')
+		} else if (pausedForPreference) {
+			pausedForPreference = false
+			timer.resume('manual')
+		}
+	}
+	motionPreference.addEventListener('change', onMotionPreference)
+	onMotionPreference()
 	sync()
 
 	const controller = {
@@ -651,6 +745,7 @@ export function steps(list, { seconds = 5, frame, stack, onChange } = {}) {
 			viewport.disconnect()
 			band.disconnect()
 			desktop.removeEventListener('change', sync)
+			motionPreference.removeEventListener('change', onMotionPreference)
 			list.removeEventListener('click', onClick)
 			list.removeEventListener('pointerover', onOver)
 			list.removeEventListener('pointerleave', onLeave)
@@ -915,6 +1010,9 @@ export function navMenus(header) {
 	function toggleMobile(next = !mobileOpen) {
 		mobileOpen = next
 		menuButton?.setAttribute('aria-expanded', String(next))
+		// The name follows the state, as on the site, when the page uses those names
+		if (/^(Open|Close) menu$/.test(menuButton?.getAttribute('aria-label') ?? ''))
+			menuButton.setAttribute('aria-label', next ? 'Close menu' : 'Open menu')
 		if (sheet) {
 			sheet.style.setProperty('--menu-top', `${header.getBoundingClientRect().bottom}px`)
 			sheet.classList.toggle('open', next)
@@ -1016,7 +1114,8 @@ export function pageTransitions() {
 		)
 			return
 		const link = event.target.closest?.('a[href]')
-		if (!link || link.target === '_blank' || link.hasAttribute('download')) return
+		// HTML links only: an SVG <a> has an object for href, which would resolve to a wrong address
+		if (!(link instanceof HTMLAnchorElement) || link.target === '_blank' || link.hasAttribute('download')) return
 		const url = new URL(link.href, location.href)
 		if (
 			url.origin !== location.origin ||
@@ -1487,7 +1586,10 @@ export function initMotion(root = document) {
 		tabs(tablist, find(tablist.dataset.panels)?.children ?? []),
 	)
 	each('.bt-marquee', (element) => marquee(element))
+	each('.bt-tabbar-scroll', (wrap) => scrollCue(wrap))
 	const holes = root.querySelectorAll('.bt-logos > i.hole, [data-texture-hole]')
 	if (holes.length) stops.push(alignTexture(holes))
+	const cornerHoles = root.querySelectorAll('.bt-logos.stepped > .bt-logo-tile')
+	if (cornerHoles.length) stops.push(alignTexture(cornerHoles, undefined, { corner: true }))
 	return () => stops.forEach((stop) => stop())
 }
