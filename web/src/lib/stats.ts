@@ -1,6 +1,6 @@
 import { pct, plural, ratio } from "./format";
 import { isOpen } from "./models";
-import type { Model, Report, Summary, Task } from "./types";
+import type { Model, Report, Summary, Task, Trial } from "./types";
 
 /** 95% Wilson interval for k successes in n tries. */
 export function wilson(k: number, n: number): [number, number] | null {
@@ -48,19 +48,28 @@ export interface Paired {
   unscored: number;
 }
 
-/** Who solved what, PR by PR. A PR counts as solved when at least half its scored attempts were. */
-export function paired(report: Pick<Report, "tasks" | "trials">, open: Model, closed: Model): Paired {
-  const tally = new Map<string, [number, number]>();
-  for (const t of report.trials) {
-    if (t.outcome === "invalid" || (t.model !== open.key && t.model !== closed.key)) continue;
-    const k = `${t.model}\u0000${t.task_id}`;
-    const [solved, scored] = tally.get(k) ?? [0, 0];
-    tally.set(k, [solved + Number(t.outcome === "solved"), scored + 1]);
+/** Per model key, the PRs it has a scored attempt on and whether it solved each. A PR counts as
+ *  solved when at least half its scored attempts were. A PR a model has no entry for wasn't scored. */
+export function solvedBy(trials: Pick<Trial, "model" | "task_id" | "outcome">[]): Map<string, Map<string, boolean>> {
+  const tally = new Map<string, Map<string, [number, number]>>();
+  for (const t of trials) {
+    if (t.outcome === "invalid") continue;
+    const per = tally.get(t.model) ?? new Map<string, [number, number]>();
+    tally.set(t.model, per);
+    const [solved, scored] = per.get(t.task_id) ?? [0, 0];
+    per.set(t.task_id, [solved + Number(t.outcome === "solved"), scored + 1]);
   }
-  const solved = (m: Model, id: string) => {
-    const x = tally.get(`${m.key}\u0000${id}`);
-    return x ? x[0] * 2 >= x[1] : null;
-  };
+  const out = new Map<string, Map<string, boolean>>();
+  for (const [model, per] of tally) {
+    out.set(model, new Map([...per].map(([id, [solved, scored]]) => [id, solved * 2 >= scored])));
+  }
+  return out;
+}
+
+/** Who solved what, PR by PR, between the two models of the headline. */
+export function paired(report: Pick<Report, "tasks" | "trials">, open: Model, closed: Model): Paired {
+  const by = solvedBy(report.trials);
+  const solved = (m: Model, id: string) => by.get(m.key)?.get(id) ?? null;
   const p: Paired = { n: 0, both: [], open: [], closed: [], neither: [], unscored: 0 };
   for (const task of report.tasks) {
     const o = solved(open, task.id), c = solved(closed, task.id);
