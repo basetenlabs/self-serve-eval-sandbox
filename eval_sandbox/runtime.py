@@ -51,6 +51,9 @@ MAX_AGE = "6h"
 QUOTA_WAIT_SEC = 900
 QUOTA_FULL = re.compile(r"quota exceeded", re.I)
 ENDED = ("completed", "failed", "killed", "stopped")
+# The sandbox ends a command at its time limit itself, by its own clock. If it hasn't this long after, by
+# this machine's clock, this machine asks it to.
+KILL_GRACE_SEC = 30
 _LOCK = threading.Lock()
 _CLIENT: baseten.Client | None = None
 _SANDBOXES: dict[str, dict] = {}
@@ -278,7 +281,12 @@ def execute(name: str, script: str, *, timeout: int, env: dict | None = None,
             stdout_path: str | None = None, stderr_path: str | None = None) -> Execution:
     """Run `script` in the sandbox as the image's unprivileged user and wait for it, `timeout` seconds at
     most. Only the end of each output comes back (OUTPUT_LIMIT); a caller that names stdout_path reads that
-    file itself, with download()."""
+    file itself, with download().
+
+    The sandbox keeps the time, not this machine: it ends the command, and everything the command started,
+    `timeout` seconds after it began. So a limit is the same length whether or not the machine watching it
+    stalled, slept or was paused meanwhile, and a command cut off at its limit is never taken for one that
+    died."""
     box = get(name)
     process = "eval-" + secrets.token_hex(8)
     out = stdout_path or f"/tmp/{process}.out"
@@ -288,12 +296,11 @@ def execute(name: str, script: str, *, timeout: int, env: dict | None = None,
     try:
         client().runtime(box, "POST", "/process", body={
             "name": process, "command": command, "workingDir": "/workspace", "env": env or {},
-            "waitForCompletion": False, "keepAlive": True, "timeout": timeout + 30})
-        started, timed_out = time.monotonic(), False
+            "waitForCompletion": False, "keepAlive": True, "timeout": max(1, timeout)})
+        started = time.monotonic()
         while (state := status(box, process)).get("status") not in ENDED:
             elapsed = time.monotonic() - started
-            if elapsed > timeout:
-                timed_out = True
+            if elapsed > timeout + KILL_GRACE_SEC:
                 client().runtime(box, "DELETE", f"/process/{process}/kill", allow=(404, 409, 422))
                 ending = time.monotonic() + 30
                 while (state := status(box, process)).get("status") not in ENDED:
@@ -302,6 +309,8 @@ def execute(name: str, script: str, *, timeout: int, env: dict | None = None,
                     time.sleep(0.25)
                 break
             time.sleep(0.2 if elapsed < 3 else 0.5 if elapsed < 60 else 1)
+        # Nothing but the time limit kills a command: the sandbox at the limit, or this machine just after.
+        timed_out = state.get("status") == "killed"
         if timed_out:  # killed before it wrote its tails
             client().exec(box, tails(*wanted), timeout=60)
         read = lambda path: (client().read(box, path + ".tail") or b"").decode(errors="replace")  # noqa: E731

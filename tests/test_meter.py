@@ -105,9 +105,10 @@ class MeterTest(unittest.TestCase):
     def ledger(self, run_id: str, wait: bool = True) -> list[dict]:
         """The run's charges; the meter writes one just after the answer's last byte, so wait a moment for it."""
         path = self.jobs / run_id / rundir.SPEND_LEDGER
-        for _ in range(100 if wait else 1):
-            if path.is_file():
-                return [json.loads(line) for line in path.read_text().splitlines()]
+        for _ in range(250 if wait else 1):
+            # The file exists from the moment the meter opens it, before the charge's line is in it.
+            if path.is_file() and (text := path.read_text()).endswith("\n"):
+                return [json.loads(line) for line in text.splitlines()]
             time.sleep(0.02)
         return []
 

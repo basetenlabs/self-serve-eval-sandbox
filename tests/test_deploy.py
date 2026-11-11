@@ -142,6 +142,16 @@ class SmokeRunsPruned(unittest.TestCase):
             self.assertEqual(sorted(Path(p).name for p in listed), ["smoke-1-after", "smoke-1-before"])
 
 
+class SmokeStaysAwake(unittest.TestCase):
+    def test_the_smoke_run_keeps_its_sandbox_awake_whoever_is_watching(self):
+        """A sandbox nobody calls goes on standby, which pauses a run inside it while its attempt's sandboxes go
+        on: with the deploying machine stalled, a paused run found its agent ended and took it for a crash."""
+        import inspect
+        started = inspect.getsource(deploy.smoke)
+        self.assertIn('"keepAlive": True', started)
+        self.assertIn('"timeout": SMOKE_TIMEOUT', started)  # and bounded: awake no longer than the run may take
+
+
 class PageSandboxes(unittest.TestCase):
     def test_the_pages_runs_make_their_sandboxes_with_the_deploys_key_in_its_team(self):
         """Nobody connects a workspace of their own: every run's sandboxes are in the page's Baseten team."""

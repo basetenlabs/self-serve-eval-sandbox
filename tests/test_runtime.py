@@ -218,7 +218,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(body["env"], {"TEST_KEY": "secret-value"})
         self.assertIn("mkdir -p /logs/home && env -i ", body["command"])
         self.assertIn("HOME=/logs/home", body["command"])
-        self.assertEqual((body["keepAlive"], body["waitForCompletion"], body["timeout"]), (True, False, 40))
+        self.assertEqual((body["keepAlive"], body["waitForCompletion"], body["timeout"]), (True, False, 10))
         self.assertEqual((result.code, result.stdout, result.timed_out), (0, "hello", False))
 
     def test_a_command_gets_the_toolchains_and_what_it_is_given_and_nothing_else(self):
@@ -233,8 +233,30 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(seen["HOME"], str(Path(d) / "logs" / "home"))
         self.assertFalse({"BASETEN_API_KEY", "SOME_TOKEN"} & set(seen))
 
-    def test_process_timeout_kills_then_confirms_exit(self):
-        states, calls = iter([{"status": "running"}, {"status": "killed", "exitCode": 137}]), []
+    def test_the_sandbox_keeps_the_time_so_a_stalled_watcher_never_takes_a_time_limit_for_a_crash(self):
+        """The sandbox ends a command at its limit by its own clock. The machine watching may have slept or been
+        paused meanwhile (a laptop; the hosted page's sandbox on standby): by its clock the limit isn't up yet."""
+        states, calls = iter([{"status": "running"}, {"status": "killed", "exitCode": -1}]), []
+
+        def call(box, method, path, **kwargs):
+            calls.append((method, path.rsplit("/", 1)[-1], (kwargs.get("body") or {}).get("timeout")))
+            return next(states) if method == "GET" else {}
+        client = api(read=mock.Mock(side_effect=[b"partial", b""]))
+        client.runtime.side_effect = call
+        with using(client), mock.patch.object(runtime, "get", return_value=DEPLOYED), mock.patch.object(runtime.time, "sleep"):
+            result = runtime.execute("sb", "claude -p", timeout=1800)
+        self.assertEqual([(method, limit) for method, _, limit in calls], [("POST", 1800), ("GET", None), ("GET", None)])
+        client.exec.assert_called_once()  # ended before it kept the end of its output: kept now
+        self.assertEqual((result.timed_out, result.code, result.stdout), (True, -1, "partial"))
+        # A command that died some other way is not a time limit.
+        client = api()
+        client.runtime.side_effect = lambda box, method, path, **_: {"status": "failed", "exitCode": -1}
+        with using(client), mock.patch.object(runtime, "get", return_value=DEPLOYED):
+            result = runtime.execute("sb", "claude -p", timeout=1800)
+        self.assertEqual((result.timed_out, result.code), (False, -1))
+
+    def test_a_command_the_sandbox_did_not_end_at_its_limit_is_killed_from_here(self):
+        states, calls = iter([{"status": "running"}, {"status": "killed", "exitCode": -1}]), []
 
         def call(box, method, path, **_):
             calls.append((method, path.rsplit("/", 1)[-1]))
@@ -242,16 +264,15 @@ class RuntimeTests(unittest.TestCase):
         client = api(read=mock.Mock(side_effect=[b"partial", b""]))
         client.runtime.side_effect = call
         with using(client), mock.patch.object(runtime, "get", return_value=DEPLOYED):
-            result = runtime.execute("sb", "sleep 20", timeout=-1)
+            result = runtime.execute("sb", "sleep 20", timeout=-1 - runtime.KILL_GRACE_SEC)
         self.assertEqual([method for method, _ in calls], ["POST", "GET", "DELETE", "GET"])
         self.assertEqual(calls[2][1], "kill")
-        client.exec.assert_called_once()  # killed before it kept the end of its output: kept now
         self.assertEqual((result.timed_out, result.code, result.stdout), (True, -1, "partial"))
 
     def test_a_timed_out_command_that_never_ends_is_a_sandbox_error(self):
         client = api()
         client.runtime.side_effect = lambda box, method, path, **_: {"status": "running"}
-        clock = iter(range(0, 10_000, 20))
+        clock = iter(range(0, 10_000, 45))
         with using(client), mock.patch.object(runtime, "get", return_value=DEPLOYED), \
                 mock.patch.object(runtime.time, "monotonic", side_effect=lambda: next(clock)), \
                 mock.patch.object(runtime.time, "sleep"), \

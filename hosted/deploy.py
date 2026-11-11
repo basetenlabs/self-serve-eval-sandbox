@@ -532,6 +532,9 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
     began = time.time()
     client().runtime(sandbox, "POST", "/process", body={
         "name": name, "command": f"sh -c {shlex.quote(command)}", "waitForCompletion": False,
+        # Awake until the run ends, whoever is watching: a sandbox nobody calls goes on standby, which pauses the
+        # run while its attempt's sandboxes go on. On a new sandbox no sign-in server is there yet to hold it.
+        "keepAlive": True,
         "timeout": SMOKE_TIMEOUT, "env": page_env(keys, origin, meter, None), "workingDir": release})
     print(f"{run_id}: {task} with {SMOKE_MODEL}", flush=True)
     said = ""
