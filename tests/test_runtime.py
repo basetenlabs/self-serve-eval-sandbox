@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from eval_sandbox import baseten, meter, rundir, runner, runtime
+from eval_sandbox import baseten, causes, meter, rundir, runner, runtime
 
 DEPLOYED = {"name": "sandbox-one", "status": "DEPLOYED", "url": "https://sandbox-one.example"}
 
@@ -278,6 +278,34 @@ class RuntimeTests(unittest.TestCase):
                 mock.patch.object(runtime.time, "sleep"), \
                 self.assertRaisesRegex(runtime.RuntimeError, "didn't confirm that a timed-out command ended"):
             runtime.execute("sb", "sleep 20", timeout=10)
+
+    def test_a_sandbox_that_lost_its_command_says_what_it_knows_and_is_worth_another_sandbox(self):
+        """A sandbox that answers and no longer knows a command it was running lost it, with the relay and
+        everything else: nothing more can come of that sandbox, and another one could go differently."""
+        def call(box, method, path, **_):
+            if method == "GET":
+                raise baseten.SandboxError('GET /process/eval-1 failed (404): {"error":"process not found"}', 404)
+            return {}
+        client = api(exec=mock.Mock(return_value=(0, "up since 2026-11-12 00:02:05, commands since Thu Nov 12 00:18:07 2026\nMem: 16014 5937\n", "")))
+        client.runtime.side_effect = call
+        with using(client), mock.patch.object(runtime, "get", return_value=DEPLOYED):
+            with self.assertRaisesRegex(runtime.RuntimeError, r"^The sandbox lost the command it was running: up since "
+                                                              r"2026-11-12 00:02:05, commands since .* Mem: 16014 5937$") as lost:
+                runtime.execute("sb", "claude -p", timeout=1800)
+            self.assertTrue(causes.transient(lost.exception))
+            self.assertEqual(causes.describe(lost.exception, "agent"),
+                             "The agent's run in its sandbox broke off (the sandbox lost the command).")
+            client.exec.side_effect = baseten.SandboxError("POST /process failed (502): gone", 502)  # no answer at all now
+            with self.assertRaisesRegex(runtime.RuntimeError, r"^The sandbox lost the command it was running\.$") as lost:
+                runtime.execute("sb", "claude -p", timeout=1800)
+            self.assertTrue(causes.transient(lost.exception))
+        # Any other refusal is still a refusal: asking again would be refused again.
+        client = api()
+        client.runtime.side_effect = baseten.SandboxError("POST /process failed (400): bad command", 400)
+        with using(client), mock.patch.object(runtime, "get", return_value=DEPLOYED), \
+                self.assertRaisesRegex(runtime.RuntimeError, "process transport failed") as refused:
+            runtime.execute("sb", "true", timeout=10)
+        self.assertFalse(causes.transient(refused.exception))
 
     def test_a_dropped_command_is_a_sandbox_error_that_names_no_response(self):
         client = api()

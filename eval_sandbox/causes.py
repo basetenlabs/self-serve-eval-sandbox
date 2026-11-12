@@ -72,6 +72,8 @@ PASSING = re.compile(r"timed? ?out|timeout|connection (?:reset|refused|aborted|c
 # Our own messages for steps that fail the same way every time they're tried.
 LASTING = re.compile(r"must run non-root|can't keep a step off the network|jail or its model relay|"
                      r"Run is stopping", re.I)
+# Our own message for a sandbox that lost a running command: another sandbox would not.
+LOST = re.compile(r"sandbox lost the command", re.I)
 
 
 def http_status(exc: BaseException) -> int | None:
@@ -90,12 +92,14 @@ def chain(exc: BaseException) -> list[BaseException]:
 
 
 def transient(exc: BaseException) -> bool:
-    """Whether trying again could go differently: a timeout, a dropped connection, a server error, or
-    Baseten failing to create a sandbox. A local file that can't be read, our own guard refusing, or
-    anything else unknown fails the same way again."""
+    """Whether trying again could go differently: a timeout, a dropped connection, a server error, a
+    sandbox that lost what it was running, or Baseten failing to create one. A local file that can't be
+    read, our own guard refusing, or anything else unknown fails the same way again."""
     links = chain(exc)
     if any(LASTING.search(str(e)) for e in links):
         return False
+    if any(LOST.search(str(e)) for e in links):
+        return True
     for e in links:
         status = http_status(e)
         if isinstance(status, int) and (status >= 500 or status == 429):
@@ -113,6 +117,8 @@ def transient(exc: BaseException) -> bool:
 def plain(exc: BaseException) -> str | None:
     """What went wrong in a few plain words, where the exception says it in a way worth repeating."""
     for e in chain(exc):
+        if LOST.search(str(e)):
+            return "the sandbox lost the command"
         status = http_status(e)
         if isinstance(status, int) and status >= 500:
             return "Baseten had a server error"

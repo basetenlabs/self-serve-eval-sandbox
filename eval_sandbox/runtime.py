@@ -54,6 +54,11 @@ ENDED = ("completed", "failed", "killed", "stopped")
 # The sandbox ends a command at its time limit itself, by its own clock. If it hasn't this long after, by
 # this machine's clock, this machine asks it to.
 KILL_GRACE_SEC = 30
+LOST_COMMAND = "The sandbox lost the command it was running"
+# What a sandbox can say after that: since when it and its command service have been up, its memory, and
+# anything its kernel killed for memory.
+AFTER_LOSS = ("echo up since $(uptime -s), commands since $(ps -o lstart= -p 1); free -m | sed -n 2p; "
+              "dmesg 2>/dev/null | grep -i 'out of memory' | tail -3")
 _LOCK = threading.Lock()
 _CLIENT: baseten.Client | None = None
 _SANDBOXES: dict[str, dict] = {}
@@ -274,7 +279,19 @@ def wrapped(script: str, env: dict | None, out: str, err: str, *, replace: bool 
 
 
 def status(box: dict, process: str) -> dict:
-    return client().runtime(box, "GET", f"/process/{process}")
+    """How a command execute() started is doing. A sandbox that answers and no longer knows the command
+    lost it, with everything else it was running: the step can only be done again, in another sandbox.
+    The error carries what the sandbox knows about itself (AFTER_LOSS), for the attempt's log."""
+    try:
+        return client().runtime(box, "GET", f"/process/{process}")
+    except baseten.SandboxError as exc:
+        if exc.status != 404:
+            raise
+        try:
+            said = " ".join(client().exec(box, AFTER_LOSS, timeout=20)[1].split())[:600]
+        except Exception:  # noqa: BLE001 - it may not answer at all by now
+            said = ""
+        raise RuntimeError(LOST_COMMAND + (f": {said}" if said else ".")) from exc
 
 
 def execute(name: str, script: str, *, timeout: int, env: dict | None = None,
