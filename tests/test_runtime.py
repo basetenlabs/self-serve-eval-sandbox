@@ -329,7 +329,7 @@ class RuntimeTests(unittest.TestCase):
             box("another-run", "run-two"),
             box("same-run-id-on-another-machine", "run", origin="someone-else"),
             {"name": "unmarked-origin", "status": "DEPLOYED", "labels": {"pr-eval": "run"}},
-            box("pr-eval-host", app="pr-eval-host"), box("sales-demo", app="sales-demo"), box("no-labels")]
+            box("pr-eval-host", app="pr-eval-host"), box("another-tool", app="another-tool"), box("no-labels")]
         deleted = []
 
         def delete(name):
