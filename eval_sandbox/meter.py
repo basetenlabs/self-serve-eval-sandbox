@@ -1,10 +1,11 @@
-"""The key meter: every model call an attempt's sandbox makes, priced and added to its run's spend.
+"""The key meter: every model call an attempt makes, priced and added to its run's spend.
 
-Hosted, a trial's sandbox reaches no model provider directly. It may reach only this meter, and
-Blaxel's egress proxy, outside the sandbox, puts the attempt's meter ticket on each request to it.
-The meter checks the ticket, puts the real key on the request, forwards it to the provider, and
-writes what the answer's usage costs to the run's spend.jsonl, which the page's spending limits add
-up. So a call made by code from the repository under test counts like one made by the agent.
+Hosted, no model key reaches a trial's sandbox. The attempt's model relay, the agent's one way out
+(docker/proxy.py), calls this meter instead of the provider and puts the attempt's meter ticket on
+each request. The meter checks the ticket, puts the real key on the request, forwards it to the
+provider, and writes what the answer's usage costs to the run's spend.jsonl, which the page's
+spending limits add up. So a call made by code from the repository under test counts like one made
+by the agent.
 
 A ticket is `<run id>.<secret>`; the run's process writes `meter/<sha256 of the secret>.json` in the
 run's folder when the agent starts and deletes it when the agent stops. A call with no ticket, a
@@ -26,10 +27,10 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
-from . import runner
-from .config import BASETEN_URL, KEY_HEADERS, Model, claude_credential
+from . import runtime
+from .config import BASETEN_URL, KEY_HEADERS, Model, claude_credential, placeholder
+from .rundir import ACCESS, OVER_LIMIT, charge, read_json, write_json
 
 HEADER = "X-Pr-Eval-Meter"
 TICKETS = "meter"  # in a run's folder: one file per live ticket
@@ -40,8 +41,6 @@ PRICED = {"anthropic": {"/v1/messages": "anthropic"},
           "baseten": {"/v1/messages": "anthropic", "/v1/chat/completions": "chat", "/v1/completions": "chat"}}
 FREE = {"anthropic": {"/v1/messages/count_tokens"}, "baseten": set()}
 FREE_GET = re.compile(r"/v1/models(/[^/]+)*")
-OVER_LIMIT = "over_limit.txt"  # the page writes it when it stops a run for spending (app.OVER_LIMIT)
-ACCESS = "access.json"         # the run's owner (app.ACCESS)
 UPSTREAM_TIMEOUT = 900
 # Request headers never forwarded: the sandbox's placeholder credential, the ticket, and hop-by-hop ones.
 DROP = {"authorization", "x-api-key", HEADER.lower(), "host", "content-length", "connection", "keep-alive",
@@ -57,21 +56,19 @@ def url() -> str | None:
 
 # ---------- the run's side: a ticket for each attempt ----------
 
-def admit(model: Model, trial_dir: Path, credential: str, meter_url: str) -> tuple[dict, list[dict], Path]:
-    """A ticket for one attempt: the placeholder env its agent gets, the network rule that puts the
-    ticket on each request to the meter, and the file that makes it valid (delete it to revoke)."""
+def admit(model: Model, trial_dir: Path, credential: str) -> tuple[dict, dict, Path]:
+    """A ticket for one attempt: the placeholder env its agent gets, the header its model relay puts the
+    ticket in on each request to the meter, and the file that makes it valid (delete it to revoke)."""
     run_dir = trial_dir.parent.parent
     if trial_dir.parent.name != "trials":
-        raise runner.runtime.RuntimeError("An attempt outside a run's folder has no run to meter.")
+        raise runtime.RuntimeError("An attempt outside a run's folder has no run to meter.")
     secret = secrets.token_hex(24)
     tickets = run_dir / TICKETS
     tickets.mkdir(exist_ok=True)
     path = tickets / f"{hashlib.sha256(secret.encode()).hexdigest()}.json"
-    runner.write_json(path, {"trial": trial_dir.name, "provider": model.provider, "model": model.key,
+    write_json(path, {"trial": trial_dir.name, "provider": model.provider, "model": model.key,
                              "prices": model.prices})
-    rule = {"destinations": [urlsplit(meter_url).hostname], "headers": {HEADER: "{{SECRET:meter-ticket}}"},
-            "secrets": {"meter-ticket": f"{run_dir.name}.{secret}"}}
-    return {credential: "pr-eval-placeholder-" + secrets.token_hex(16)}, [rule], path
+    return {credential: placeholder()}, {HEADER: f"{run_dir.name}.{secret}"}, path
 
 
 def base_url(meter_url: str, provider: str) -> str:
@@ -105,14 +102,6 @@ def ticket(jobs_dir: Path, value: str | None) -> tuple[Path, dict]:
 
 def valid_run_id(run_id: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id)) and ".." not in run_id
-
-
-def read_json(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def real_key(provider: str) -> tuple[str, str]:
@@ -260,7 +249,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 counts = usage_counts(shape, usage.found)
                 if not usage.final:
                     counts = worst_case(counts if usage.found else {}, body, raw or b"")
-                runner.charge(trial_dir, "call", model_id, rates.price({model_id: counts}))
+                charge(trial_dir, "call", model_id, rates.price({model_id: counts}))
 
     def relay(self, upstream, usage: Usage) -> None:
         """Send the provider's answer on as it arrives, reading its usage on the way."""

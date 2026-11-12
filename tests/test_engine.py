@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from eval_sandbox import app, causes, config, judge, pipeline, report, runner, runtime
+from eval_sandbox import app, baseten, causes, config, judge, pipeline, report, runner, runtime
 
 MODEL = SimpleNamespace(key="model", model="model", provider="anthropic", max_concurrent=None,
                         prices={"model": {"input": 1, "output": 1}})
@@ -42,7 +42,7 @@ def creation_timed_out() -> runtime.RuntimeError:
         try:
             raise TimeoutError("timed out")
         except TimeoutError as exc:
-            raise runtime.RuntimeError("Blaxel creation failed for pr-eval-x-1234 (TimeoutError); use cleanup.") from exc
+            raise runtime.RuntimeError("Baseten creation failed for pr-eval-x-1234 (TimeoutError); use cleanup.") from exc
     except runtime.RuntimeError as exc:
         return exc
 
@@ -56,7 +56,7 @@ def sandboxes(prepare=None, create=None):
     def tests(name, *_):
         return {"passed": True, "timed_out": False, "output": "1 passed in 0.1s", "summary": "1 passed"}
 
-    def agent(name, model, secrets, path, *_):
+    def agent(name, model, placeholder_env, relay_headers, path, *_):
         path.write_text("")
         return {"subtype": "success", "timed_out": False}
     with mock.patch.object(runner, "container_name", side_effect=lambda run_id: next(names)), \
@@ -64,7 +64,6 @@ def sandboxes(prepare=None, create=None):
             mock.patch.object(runtime, "create", side_effect=create or (lambda *a, **k: None)), \
             mock.patch.object(runner, "prepare_workspace",
                               side_effect=prepare or (lambda *a: (None, {"baseline": "a" * 40}))), \
-            mock.patch.object(runner, "block_lookups"), \
             mock.patch.object(runtime, "upload"), mock.patch.object(runtime, "download"), \
             mock.patch.object(runtime, "delete"), \
             mock.patch.object(runner, "run_agent", side_effect=agent), \
@@ -78,7 +77,7 @@ def sandboxes(prepare=None, create=None):
 
 
 def run_one(d: Path, the_task=None) -> dict:
-    trial = runner.trial_runner([MODEL], runner.Settings(workspace="eval-only"), "run-one")
+    trial = runner.trial_runner([MODEL], runner.Settings(), "run-one")
     the_task = the_task or task(d)
     return trial((the_task, MODEL, 1, d / "trials" / runner.trial_name(the_task, MODEL, 1)))
 
@@ -138,11 +137,13 @@ class CauseTests(unittest.TestCase):
 
     def test_passing_and_lasting_failures_are_told_apart(self):
         self.assertTrue(causes.transient(creation_timed_out()))
-        self.assertTrue(causes.transient(runtime.RuntimeError("Blaxel process transport failed (ReadError).")))
-        self.assertTrue(causes.transient(type("ResponseError", (Exception,), {"status_code": 502})()))
+        self.assertTrue(causes.transient(runtime.RuntimeError("Baseten process transport failed (SandboxError).")))
+        self.assertTrue(causes.transient(baseten.SandboxError("POST /process failed (502): bad gateway", 502)))
+        self.assertTrue(causes.transient(baseten.SandboxError("POST /v1/sandboxes/instances failed (429): Quota exceeded: 10/10 sandboxes", 429)))
+        self.assertFalse(causes.transient(runtime.RuntimeError("The sandbox can't keep a step off the network: pr-eval jail: x")))
         self.assertTrue(causes.transient(ConnectionResetError()))
         self.assertFalse(causes.transient(no_such_device()))
-        self.assertFalse(causes.transient(runtime.RuntimeError("Trial image must run non-root and refuse in-sandbox API access.")))
+        self.assertFalse(causes.transient(runtime.RuntimeError("Trial image must run non-root, refuse in-sandbox API access and jail a command.")))
         self.assertFalse(causes.transient(runtime.RuntimeError("Could not unpack uploaded files.")))
 
 
@@ -154,7 +155,7 @@ class CauseTests(unittest.TestCase):
 
 
 class NameTests(unittest.TestCase):
-    def test_a_sandbox_name_fits_blaxels_49_characters_whatever_the_run_is_called(self):
+    def test_a_sandbox_name_stays_under_49_characters_whatever_the_run_is_called(self):
         for run_id in ("quick-20261110-220116", "a-very-long-repository-name-for-sure-20261110-220116-2", "x" * 80, "---"):
             with self.subTest(run_id=run_id):
                 name = runner.container_name(run_id)
@@ -162,9 +163,9 @@ class NameTests(unittest.TestCase):
                 self.assertRegex(name, r"^pr-eval-[a-z0-9-]*[a-z0-9]-[0-9a-f]{8}$|^pr-eval-trial-[0-9a-f]{8}$")
 
     def test_a_refused_request_is_not_tried_again(self):
-        refused = type("SandboxAPIError", (Exception,), {"status_code": 400})()
+        refused = baseten.SandboxError("POST /v1/sandboxes/instances failed (400): no such image", 400)
         try:
-            raise runtime.RuntimeError("Blaxel creation failed for pr-eval-x (SandboxAPIError)") from refused
+            raise runtime.RuntimeError("Baseten creation failed for pr-eval-x (400)") from refused
         except runtime.RuntimeError as exc:
             self.assertFalse(causes.transient(exc))
 
@@ -182,7 +183,7 @@ class RetryTests(unittest.TestCase):
             saved = json.loads((Path(d) / "trials" / result["trial"] / "result.json").read_text())
         self.assertEqual(saved["outcome"], "solved")
         self.assertEqual(saved["first_try"]["step"], "boot")
-        self.assertIn("Blaxel could not start", saved["first_try"]["cause"])
+        self.assertIn("Baseten could not start", saved["first_try"]["cause"])
 
     def test_a_passing_failure_is_tried_only_once_and_a_lasting_one_not_again(self):
         tries = {"boot": 0, "upload": 0}
@@ -236,8 +237,7 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_the_page_shows_a_halted_run_as_failed_with_the_reason(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
-                job = pipeline.new_job(pipeline.Request(task_ids=["t"]), [], None, name="r1", jobs_dir=Path(d))
+            job = pipeline.new_job(pipeline.Request(task_ids=["t"]), [], None, name="r1", jobs_dir=Path(d))
             job.meta.update(tasks=["t"], checked=True)
             seen = []
             with mock.patch.object(pipeline, "restore_tasks", return_value=[]), \
@@ -267,8 +267,7 @@ class MemoryTests(unittest.TestCase):
 
     def test_a_run_records_how_many_attempts_go_at_once(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(pipeline.runtime, "workspace", return_value="test-eval"):
-                job = pipeline.new_job(pipeline.Request(), [], None, name="r1", jobs_dir=Path(d))
+            job = pipeline.new_job(pipeline.Request(), [], None, name="r1", jobs_dir=Path(d))
             settings = runner.Settings(concurrency=20)
             with mock.patch.object(runner, "free_memory_mb", return_value=1600), contextlib.redirect_stdout(io.StringIO()):
                 pipeline.fit_memory(job, settings)
@@ -300,26 +299,26 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(most[0], 2)
 
     def test_a_command_sends_back_only_the_end_of_its_output(self):
-        sandbox = mock.Mock()
-        sandbox.process.wait.return_value = SimpleNamespace(status="completed", exit_code=0)
-        sandbox.fs.read_binary.side_effect = [b"end of output", b""]
-        with mock.patch.object(runtime, "get", return_value=sandbox):
+        api = mock.Mock()
+        api.runtime.side_effect = lambda box, method, path, **_: {"status": "completed", "exitCode": 0}
+        api.read.side_effect = [b"end of output", b""]
+        with mock.patch.object(runtime, "client", return_value=api), mock.patch.object(runtime, "get", return_value={}):
             result = runtime.execute("sb", "pip install -v .", timeout=10)
-        command = sandbox.process.exec.call_args.args[0]["command"]
+        command = api.runtime.call_args_list[0].kwargs["body"]["command"]
         self.assertIn(f"tail -c {runtime.OUTPUT_LIMIT}", command)
         self.assertTrue(command.endswith("exit $code"))
-        read = [c.args[0] for c in sandbox.fs.read_binary.call_args_list]
+        read = [c.args[1] for c in api.read.call_args_list]
         self.assertTrue(all(path.endswith(".tail") for path in read))
         self.assertEqual(result.stdout, "end of output")
 
     def test_the_agents_log_is_never_read_back_whole_with_its_command(self):
-        sandbox = mock.Mock()
-        sandbox.process.wait.return_value = SimpleNamespace(status="completed", exit_code=0)
-        sandbox.fs.read_binary.return_value = b""
-        with mock.patch.object(runtime, "get", return_value=sandbox):
+        api = mock.Mock()
+        api.runtime.side_effect = lambda box, method, path, **_: {"status": "completed", "exitCode": 0}
+        api.read.return_value = b""
+        with mock.patch.object(runtime, "client", return_value=api), mock.patch.object(runtime, "get", return_value={}):
             result = runtime.execute("sb", "claude", timeout=10, stdout_path="/logs/agent.jsonl",
                                      stderr_path="/logs/agent.stderr")
-        self.assertEqual([c.args[0] for c in sandbox.fs.read_binary.call_args_list], ["/logs/agent.stderr.tail"])
+        self.assertEqual([c.args[1] for c in api.read.call_args_list], ["/logs/agent.stderr.tail"])
         self.assertEqual(result.stdout, "")
 
     def test_the_tail_shell_keeps_the_end_and_says_how_much_it_left_out(self):

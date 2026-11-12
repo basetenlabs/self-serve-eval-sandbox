@@ -35,7 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-ROOT = Path(__file__).resolve().parents[1]
+from .config import ROOT
+
 DEFAULT_TASKS = ROOT / "tasks"
 DEFAULT_REPOS = ROOT / "data" / "repos"
 SAMPLE = ROOT / "configs" / "sample_tasks.toml"

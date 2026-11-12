@@ -23,9 +23,9 @@ export interface CatalogModel extends Model {
 }
 
 export interface Checks {
-  blaxel: boolean;
-  blaxel_problem?: string | null;
-  bl_cli: boolean;
+  /** The Baseten key can create the sandboxes attempts run in; if not, why. */
+  sandboxes: boolean;
+  sandboxes_problem?: string | null;
   gh: boolean;
   /** Whose GitHub login the `gh` CLI on this machine uses. */
   gh_login?: string | null;
