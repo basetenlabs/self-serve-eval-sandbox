@@ -323,6 +323,19 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(pipeline.Request(quick=True).describe(), "the quick sample")
         self.assertTrue(pipeline.default_name(pipeline.Request(quick=True)).startswith("quick-"))
 
+    def test_the_quick_sample_card_counts_only_the_prs_a_run_keeps(self):
+        statuses = {1: "valid", 2: "request-misses-tests", 3: "reference-fails", 4: "sandbox-error: boom", 5: None}
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(tasks, "DEFAULT_TASKS", Path(d)), \
+                mock.patch.object(tasks, "sample", return_value={"o/r": list(statuses)}):
+            for n, status in statuses.items():
+                if status:
+                    (Path(d) / f"o__r-{n}" / "validation").mkdir(parents=True)
+                    (Path(d) / f"o__r-{n}" / "validation" / "result.json").write_text(json.dumps({"status": status}))
+            quick = app.quick_sample()
+        self.assertEqual(quick["tasks"], 3)  # the screened-out and the failing ones are left out; a sandbox error runs again
+        self.assertEqual((quick["repos"], quick["names"]), (1, ["o/r"]))
+
     def test_spread_mixes_repositories(self):
         rows = [{"repo": "a", "n": i} for i in range(5)] + [{"repo": "b", "n": i} for i in range(5)]
         picked = tasks.spread(rows, 4)
