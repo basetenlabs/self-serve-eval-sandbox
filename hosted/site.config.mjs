@@ -4,7 +4,8 @@
 export default {
   // Blaxel accounts with a verified email that data/access.json allows: its admins, single invited
   // addresses and whole domains. Admins edit it on the page; the sign-in re-reads it on every change.
-  // server.mjs creates it on first start (see SEED in access.mjs).
+  // server.mjs creates it on first start (see SEED in access.mjs). Hosted, deploy.py names the one on the volume
+  // in AUTH_ACCESS_FILE instead, so the path, and with it every session, stays the same across releases.
   access: { file: '../data/access.json' },
   brand: {
     name: 'Self-Serve Model Eval Sandbox',

@@ -238,26 +238,27 @@ def credential_env(model: Model) -> dict[str, str]:
     raise SystemExit(missing_credential(model))
 
 
-# The agent's sandbox never holds a model key. It signs in with a placeholder made for the
-# attempt, and Blaxel's egress proxy, outside the sandbox, puts the real key on each request
-# to the provider. The key travels only in the sandbox's network rule, as a write-only secret.
+# The agent never holds a model key. It signs in with a placeholder made for the attempt, and the
+# model relay, a process in its sandbox that it can't see or reach but through one socket
+# (docker/proxy.py, docker/jail.py), puts the real key on each request to the provider.
 # Which header carries each credential, and how.
 KEY_HEADERS = {"BASETEN_API_KEY": ("Authorization", "Bearer {}"),
                "ANTHROPIC_API_KEY": ("X-Api-Key", "{}"),
                "CLAUDE_CODE_OAUTH_TOKEN": ("Authorization", "Bearer {}")}
-PROVIDER_DOMAINS = {"anthropic": "api.anthropic.com", "baseten": "inference.baseten.co"}
+PROVIDER_URLS = {"anthropic": "https://api.anthropic.com", "baseten": BASETEN_URL}
 
 
-def sandbox_credential(model: Model, real: dict[str, str]) -> tuple[dict[str, str], list[dict]]:
-    """For `real` ({variable: key}): the placeholder env the agent gets, and the proxy rule that adds the key."""
+def placeholder() -> str:
+    return "pr-eval-placeholder-" + secrets.token_hex(16)
+
+
+def sandbox_credential(real: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    """For `real` ({variable: key}): the placeholder env the agent gets, and the headers the relay signs with."""
     if not real:
-        return {}, []
+        return {}, {}
     (name, value), = real.items()
     header, form = KEY_HEADERS[name]
-    placeholder = "pr-eval-placeholder-" + secrets.token_hex(16)
-    rule = {"destinations": [PROVIDER_DOMAINS[model.provider]],
-            "headers": {header: form.format("{{SECRET:model-key}}")}, "secrets": {"model-key": value}}
-    return {name: placeholder}, [rule]
+    return {name: placeholder()}, {header: form.format(value)}
 
 
 SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.I)

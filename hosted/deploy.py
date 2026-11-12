@@ -7,9 +7,8 @@
     .venv/bin/python hosted/deploy.py --name pr-eval-staging    a copy beside the live page, to try a release on first
     .venv/bin/python hosted/deploy.py --renew          recreate the sandbox when Baseten's 7-day limit is near
 
-Where it runs: Baseten Sandboxes, in the team of the sandbox key below. Trials still run in the dedicated
-Blaxel trial workspace (PR_EVAL_BLAXEL_WORKSPACE, else ~/.config/pr-eval/blaxel.json); the deploy stops if
-neither is set.
+Where it runs: Baseten Sandboxes, in the team of the sandbox key below, and so do its trials: the page's
+runs create their sandboxes in the same team, with the same key.
 
     Image    pr-eval-host-<hash of hosted/Dockerfile>, built on Baseten when missing
     Sandbox  pr-eval-host. Baseten deletes every sandbox 7 days after it was created, whatever its lifecycle
@@ -17,7 +16,7 @@ neither is set.
              on the volume. A recreated sandbox can get new preview URLs: the deploy prints them.
     Preview  public HTTPS at a random Baseten host; hosted/server.mjs (@blaxel/sign-in) signs people in and
              is the only public door for people. A second public preview, "meter", is the key meter
-             (eval_sandbox/meter.py): trial sandboxes reach the models only through it, and it answers only
+             (eval_sandbox/meter.py): attempts reach the models only through it, and it answers only
              an attempt's ticket
     Volume   pr-eval-host-data at /data: the app (/data/app with its jobs/, tasks/, data/, each release in
              releases/<time>-<commit> and current -> the live one) and the sign-in state (/data/sign-in)
@@ -29,15 +28,16 @@ neither is set.
     Secrets  read on the deploying machine (macOS Keychain or environment) and handed to the page's
              process environment only; never written to the volume, the image or this repository
 
-The deploy itself manages the sandbox with BASETEN_SANDBOX_API_KEY (else the Keychain item in SANDBOX_KEY):
-a personal key or a team creator service account key, since other Baseten keys can't mint sandbox tokens.
+The deploy manages the sandbox with BASETEN_SANDBOX_API_KEY (else the Keychain item in SANDBOX_KEY): a
+personal key or a team creator service account key, since other Baseten keys can't mint sandbox tokens.
+The page gets the same key, to create and delete its runs' trial sandboxes. It can manage every sandbox in
+its team, so give the page a team of its own (BASETEN_TEAM_ID) where others share the account.
 
 Keys come from the Keychain items in SECRETS below, else from the environment. <NAME>_KEYCHAIN_ITEM names
 another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key:
     BASETEN_API_KEY         open models and the Kimi K3 judge
     ANTHROPIC_API_KEY       Claude models and the Opus judge
     OPENAI_API_KEY          the GPT-6.1 Sol judge
-    BL_API_KEY              a Blaxel service account in the trial workspace
     PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the
                             refused sign-in page offers "Request access", which emails the admins; it reaches
                             the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
@@ -71,8 +71,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from eval_sandbox import baseten, pipeline, runtime, tasks, trace  # noqa: E402
-WORKSPACE = ""  # set in main() from the same setting local runs use
+from eval_sandbox import baseten, pipeline, tasks, trace  # noqa: E402
+from eval_sandbox.config import keychain  # noqa: E402
 REGION = "us-pdx-1"
 SANDBOX = "pr-eval-host"
 VOLUME = "pr-eval-host-data"
@@ -96,6 +96,7 @@ CURRENT = f"{APP}/current"
 UNVERIFIED = f"{APP}/unverified.json"
 SHARED = ["jobs", "tasks", "data"]  # linked into each release, where its code looks for them
 KEEP_RELEASES = 3  # besides the live one and any a process still runs from
+KEEP_SMOKE_RUNS = 6  # the smoke runs of the last three deploys stay on the volume, with their logs
 # The smoke test: one real attempt end to end, on the quick sample's largest task with the cheapest default
 # model, graded by the default judges. A release must pass it before people get it and again once they have.
 SMOKE_MODEL = "deepseek-v4.1-flash-1017-fast"
@@ -108,7 +109,7 @@ LABELS = {"app": "pr-eval-host"}
 # The GitHub App's client id is public by design (device flow); it is not a secret.
 GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
 GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
-# One workspace and one set of keys serve everyone: runs going at once, in all and per person, and what runs
+# One team's sandboxes and one set of keys serve everyone: runs going at once, in all and per person, and what runs
 # spent on models in the last 24 hours, in all and per person (a quick sample is about $12 with its judges).
 LIMITS = {name: os.environ.get(name, default) for name, default in {
     "PR_EVAL_MAX_RUNS": "2", "PR_EVAL_RUNS_PER_PERSON": "1",
@@ -126,11 +127,14 @@ SEED_FILES = ["run.json", "report.json", "report.html"]
 # sandbox never needs a GitHub Packages token.
 SIGN_IN = ROOT / "hosted" / "node_modules" / "@blaxel" / "sign-in"
 AUTH = "/data/sign-in"
+# Who may sign in, on the volume beside the runs. The sign-in server gets this path, not the release's own
+# data/ link to it: @blaxel/sign-in keys its sessions to the access file's path, so a path that changed with
+# each release would sign everyone out on every deploy.
+ACCESS = f"{APP}/data/access.json"
 SECRETS = {
     "BASETEN_API_KEY": "pr-eval-host-baseten-api-key",
     "ANTHROPIC_API_KEY": "pr-eval-host-anthropic-api-key",
     "OPENAI_API_KEY": "pr-eval-host-openai-api-key",
-    "BL_API_KEY": "pr-eval-host-blaxel-api-key",
 }
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
@@ -147,14 +151,6 @@ def step(message: str) -> None:
 def item(name: str, default: str) -> str:
     """The Keychain item that holds a key: its default name, or the one <NAME>_KEYCHAIN_ITEM sets."""
     return os.environ.get(f"{name}_KEYCHAIN_ITEM") or default
-
-
-def keychain(service: str) -> str | None:
-    try:
-        p = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], capture_output=True, text=True)
-    except FileNotFoundError:  # not a Mac
-        return None
-    return p.stdout.strip() or None
 
 
 def secrets() -> dict[str, str]:
@@ -355,7 +351,9 @@ def mail_key() -> str | None:
 
 def page_env(keys: dict[str, str], origin: str, meter: str, meter_port: int | None) -> dict[str, str]:
     """The page's process environment, which its runs inherit. With `meter_port`, it also serves the key meter."""
-    env = {**keys, "BL_WORKSPACE": WORKSPACE, "PR_EVAL_BLAXEL_WORKSPACE": WORKSPACE, "BL_REGION": REGION,
+    # The key the page's runs create their trial sandboxes with: the deploy's own.
+    sandboxes = {"BASETEN_SANDBOX_API_KEY": client().key, **({"BASETEN_TEAM_ID": client().team} if client().team else {})}
+    env = {**keys, **sandboxes,
            "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
            "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin, **LIMITS, **RETENTION,
            "PR_EVAL_METER_URL": meter, "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
@@ -384,7 +382,7 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     env = page_env(keys, origin, meter, METER_PORT)
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
-                   "AUTH_STATE_DIR": AUTH, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
+                   "AUTH_STATE_DIR": AUTH, "AUTH_ACCESS_FILE": ACCESS, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
     name, service = GITHUB_TOKEN
     print(f'Public repositories without a GitHub sign-in: {"on" if name in env else "off (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
@@ -447,12 +445,32 @@ if os.path.islink(current) and app not in used and not inside(os.path.join(app, 
 """
 
 
+# Prints the deploy's own smoke runs to remove: all but the newest few. Only folders their access.json marks as a
+# smoke run, so a person's run on a repository named "smoke" is never one of them.
+OLD_SMOKE = """import json, os, sys
+jobs, keep = sys.argv[1], int(sys.argv[2])
+def smoke(path):
+    try:
+        return json.load(open(os.path.join(path, "access.json"))).get("smoke") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+runs = [p for p in (os.path.join(jobs, n) for n in os.listdir(jobs) if n.startswith("smoke-")) if smoke(p)]
+print(*sorted(runs, key=os.path.getmtime, reverse=True)[keep:])
+"""
+
+
 def prune(sandbox) -> None:
+    """After a deploy that went live: remove the release folders nothing uses any more, and the smoke runs of
+    older deploys. The page reads every run folder to list runs, and each deploy adds two."""
     unused = run(sandbox, f"/opt/venv/bin/python -c {shlex.quote(UNUSED)} {RELEASES} {CURRENT} {APP} {KEEP_RELEASES} "
                           + " ".join(RELEASE)).split()
     if unused:
         run(sandbox, "rm -rf " + " ".join(shlex.quote(p) for p in unused))
         print(f"removed {len(unused)} old release folder(s)")
+    old = run(sandbox, f"/opt/venv/bin/python -c {shlex.quote(OLD_SMOKE)} {APP}/jobs {KEEP_SMOKE_RUNS}").split()
+    if old:
+        run(sandbox, "rm -rf " + " ".join(shlex.quote(p) for p in old))
+        print(f"removed {len(old)} old smoke run(s)")
 
 
 # ---------- the smoke test ----------
@@ -507,7 +525,7 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
     the deploy owns and the page doesn't list. Raises SmokeFailed with the attempt's real cause."""
     if SMOKE_MODEL not in pipeline.DEFAULT_MODELS:
         raise SystemExit(f"SMOKE_MODEL {SMOKE_MODEL} is no longer a default model: make it the cheapest default")
-    # Short: trial sandboxes are named after the run, and Blaxel refuses a name over 49 characters.
+    # Short: trial sandboxes are named after the run, and their names stay under 49 characters.
     run_id = f"smoke-{time.strftime('%m%d%H%M%S')}-{label}"
     job = f"{APP}/jobs/{run_id}"
     trial = f"{job}/trials/{task}__{SMOKE_MODEL}__1"
@@ -520,6 +538,9 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
     began = time.time()
     client().runtime(sandbox, "POST", "/process", body={
         "name": name, "command": f"sh -c {shlex.quote(command)}", "waitForCompletion": False,
+        # Awake until the run ends, whoever is watching: a sandbox nobody calls goes on standby, which pauses the
+        # run while its attempt's sandboxes go on. On a new sandbox no sign-in server is there yet to hold it.
+        "keepAlive": True,
         "timeout": SMOKE_TIMEOUT, "env": page_env(keys, origin, meter, None), "workingDir": release})
     print(f"{run_id}: {task} with {SMOKE_MODEL}", flush=True)
     said = ""
@@ -647,15 +668,8 @@ def delete(volume: bool) -> None:
         raise SystemExit(f"could not delete volume {VOLUME}; try again in a minute")
 
 
-def workspace() -> str:
-    try:
-        return runtime.workspace()
-    except runtime.RuntimeError as exc:
-        raise SystemExit(f"{exc} Or save it in {runtime.CONFIG_PATH}.") from None
-
-
 def main() -> int:
-    global WORKSPACE, SANDBOX, VOLUME
+    global SANDBOX, VOLUME
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=Path, nargs="*", default=[], help="finished runs to show on the hosted page")
     parser.add_argument("--delete", action="store_true", help="remove the hosted sandbox")
@@ -670,12 +684,11 @@ def main() -> int:
             raise SystemExit("--name is pr-eval-<something>, in lower-case letters, digits and dashes")
         SANDBOX, VOLUME = args.name, f"{args.name}-data"
         LABELS["app"] = args.name
-    WORKSPACE = workspace()
     if args.delete:
         delete(args.volume)
         return 0
     keys = secrets()
-    step(f"Sandbox and previews on Baseten (trials in Blaxel workspace {WORKSPACE})")
+    step("Sandbox and previews on Baseten (trials run in the same team)")
     sandbox, origin, meter, created = host(renew=args.renew)
     print(origin, meter)
     verified = created or finish_unverified(sandbox, origin, meter, keys)

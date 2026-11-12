@@ -1,5 +1,6 @@
-# One image for every trial: the coding agent (Claude Code), the translating proxy's
-# Python, and the toolchains the sample repos need (Python via uv, Node + pnpm, Go).
+# One image for every trial: the coding agent (Claude Code), the model relay and the jail
+# that keeps the agent off the network (Python), and the toolchains the sample repos need
+# (Python via uv, Node + pnpm, Go).
 # Repo dependencies are installed per trial, before the agent starts, so one image
 # serves every task and every model.
 FROM golang:1.26-bookworm AS go
@@ -14,6 +15,7 @@ RUN apt-get update \
 
 COPY --from=go /usr/local/go /usr/local/go
 COPY --from=uv /uv /uvx /usr/local/bin/
+# The sandbox API server every Baseten Sandboxes image starts as its entrypoint (docs.baseten.co/sandboxes/manage-images).
 COPY --from=ghcr.io/blaxel-ai/sandbox:latest /sandbox-api /usr/local/bin/sandbox-api
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && corepack enable
@@ -22,7 +24,9 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
 RUN useradd --create-home --shell /bin/bash agent \
  && mkdir -p /workspace /logs /tests /opt/eval /opt/venv /go \
  && chown -R agent:agent /workspace /logs /tests /opt/venv /go
-COPY proxy.py /opt/eval/
+COPY proxy.py jail.py /opt/eval/
+# Read by the trial's unprivileged user and changed by nobody, whatever mode the build's upload gave them.
+RUN chmod 0644 /opt/eval/proxy.py /opt/eval/jail.py
 
 ENV PATH=/opt/venv/bin:/usr/local/go/bin:/go/bin:$PATH \
     GOPATH=/go GOTOOLCHAIN=auto \

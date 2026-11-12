@@ -25,8 +25,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config, judge, report, runner, runtime, tasks
+from .config import ROOT
+from .rundir import now, write_json
 
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JOBS = ROOT / "jobs"
 DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash-1017-fast", "glm-5.3-fast"]
 DEFAULT_LIMIT = 10
@@ -75,10 +76,6 @@ class Request:
         return list(dict.fromkeys([*self.repos, *self.pulls]))
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 class Job:
     """A run's folder under jobs/, and its run.json."""
 
@@ -91,7 +88,7 @@ class Job:
         return self.meta["run_id"]
 
     def save(self) -> None:
-        runner.write_json(self.path / "run.json", self.meta)
+        write_json(self.path / "run.json", self.meta)
 
     def status(self, phase: str, detail: str = "") -> None:
         if phase not in ACTIVE:  # while this run still reads as going, so no new run starts on files being deleted
@@ -195,20 +192,36 @@ def task_folders(repo: str, tasks_dir: Path) -> list[Path]:
             and path.name.rsplit("-", 1)[-1].isdigit() and repo_of(path.name).lower() == repo.lower()]
 
 
-def busy_repos(jobs_dir: Path, skip: Path | None = None) -> set[str]:
-    """The repositories, lowercased, of every run in jobs_dir that's still going, except `skip`'s."""
-    busy: set[str] = set()
+def going(jobs_dir: Path):
+    """The folder and run.json of every run in jobs_dir whose process is still going."""
     for path in jobs_dir.glob("*/run.json"):
-        if skip and path.parent.resolve() == skip.resolve():
-            continue
         try:
             meta = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
         status = meta.get("status") or {}
         if status.get("phase") in ACTIVE and alive(status.get("pid")):
-            busy |= {repo.lower() for repo in run_repos(meta)}
-    return busy
+            yield path.parent, meta
+
+
+def busy_repos(jobs_dir: Path, skip: Path | None = None) -> set[str]:
+    """The repositories, lowercased, of every run in jobs_dir that's still going, except `skip`'s."""
+    return {repo.lower() for folder, meta in going(jobs_dir) if not (skip and folder.resolve() == skip.resolve())
+            for repo in run_repos(meta)}
+
+
+def leftover_sandboxes(jobs_dir: Path) -> tuple[list[str], dict[str, int]]:
+    """Delete the trial sandboxes of this folder's runs that aren't going, such as ones a killed run left.
+    Returns the names removed, and how many sandboxes were left alone for each run that is going or isn't
+    in this folder: another checkout's run may be using them."""
+    busy = {folder.name for folder, _ in going(jobs_dir)}
+    removed, kept = [], {}
+    for run_id, names in runtime.trial_sandboxes().items():
+        if run_id in busy or not (jobs_dir / run_id / "run.json").is_file():
+            kept[run_id] = len(names)
+        else:
+            removed += runtime.cleanup(run_id)
+    return removed, kept
 
 
 def delete_private(found: dict[str, list[Path]], jobs_dir: Path, skip: Path | None = None) -> None:
@@ -280,17 +293,15 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
 
 def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
             name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
-            tasks_dir: Path = tasks.DEFAULT_TASKS, workspace: str | None = None,
-            region: str = "us-pdx-1") -> Job:
-    workspace = workspace or runtime.workspace()
+            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1") -> Job:
     run_id = name or default_name(request)
     path = jobs_dir / run_id
     if (path / "run.json").exists():
         raise SystemExit(f"{path} exists: pass --resume {path} to finish it, or choose another --name")
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
-    runner.write_json(path / "run.json", {
+    write_json(path / "run.json", {
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
-        "harness_version": None, "backend": "blaxel", "workspace": workspace, "image": image, "region": region,
+        "harness_version": None, "backend": "baseten", "image": image, "region": region,
         "attempts": attempts, "models": [m.as_dict() for m in models],
         "judge": judge.as_dict() if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
@@ -373,7 +384,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
         rebuild_quietly(job)  # after the status, so the report says why the run stopped
         return 1
     except KeyboardInterrupt:
-        runner.cleanup(job.id, workspace=settings.workspace)
+        runner.cleanup(job.id)
         job.status("stopped", "Stopped. Resume to finish the attempts that hadn't finished: "
                               f"pr-eval run --resume {job.path}")
         rebuild_quietly(job)
@@ -526,17 +537,14 @@ def rebuild_quietly(job: Job) -> None:
 
 
 def restore_execution(meta: dict, settings: runner.Settings) -> None:
-    """Keep resumed work in its original backend, workspace, image and sandbox size."""
-    if meta.get("backend") != "blaxel" or not meta.get("workspace") or not meta.get("image"):
-        raise SystemExit("This run predates the Blaxel backend; start a new run instead of resuming a Docker run.")
-    if settings.workspace and settings.workspace != meta["workspace"]:
-        raise SystemExit("The requested workspace differs from this run's recorded Blaxel workspace.")
-    settings.workspace = meta["workspace"]
+    """Keep resumed work on its original image, region and sandbox size."""
+    if meta.get("backend") != "baseten" or not meta.get("image"):
+        raise SystemExit("This run's sandboxes ran somewhere pr-eval no longer uses (trials run on Baseten Sandboxes "
+                         "now), so it can't be resumed: start a new run on the same pull requests instead.")
     settings.image = meta["image"]
     settings.region = meta.get("region", "us-pdx-1")
     # Disk grows with memory, so a resume never shrinks the run's sandboxes; a larger --memory raises them.
     settings.memory = meta["memory"] = max(settings.memory, meta.get("memory", 0))
-    os.environ["PR_EVAL_BLAXEL_WORKSPACE"] = settings.workspace
 
 
 def prepare_image(job: Job, image: str) -> str:
@@ -549,17 +557,17 @@ def prepare_image(job: Job, image: str) -> str:
 
 
 def ensure_image(image: str, job: Job | None = None) -> None:
-    """Check the dedicated workspace and build the trial template remotely on first use."""
+    """Check that the key can make sandboxes on Baseten, and build the trial image there on first use."""
     try:
         runtime.check_connection()
         if not runtime.image_exists(image):
-            detail = f"Building the Blaxel trial image {image} remotely (first run only, a few minutes)"
+            detail = f"Building the trial image {image} on Baseten (first run only, a few minutes)"
             if job:
                 job.status("checking", detail)
             else:
                 print(detail, flush=True)
             if runtime.build_image(image):
-                raise SystemExit("Blaxel image build failed; see the output above")
+                raise SystemExit("The trial image didn't build on Baseten; see the output above")
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
 
