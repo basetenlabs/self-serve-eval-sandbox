@@ -1,7 +1,9 @@
-"""Run Claude Code trials in dedicated Blaxel sandboxes.
+"""Run Claude Code trials in Baseten sandboxes.
 
-A trial is one (task, model, attempt). Setup installs dependencies, then a
-creation-time proxy firewall limits egress to the selected model provider.
+A trial is one (task, model, attempt). Setup installs dependencies with the
+network open. Everything after it runs in a jail with no network (docker/jail.py):
+the agent's only way out is the model relay, a process outside its jail that it
+reaches through one socket and that calls the model provider and nothing else.
 The agent's patch is saved and its entire sandbox deleted. A second sandbox,
 set up the same way while the agent works, then gets the patch and the hidden
 tests. The reference patch is used only by separate validation sandboxes and
@@ -21,20 +23,17 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from . import causes, meter, runtime
 from . import judge as judge_mod
-from .config import (BASETEN_URL, PROVIDER_DOMAINS, Model, Panel, credential_env, redact_file, redact_known,
-                     sandbox_credential)
+from .config import PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
+from .rundir import charge, now, write_json
 from .tasks import TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
 PROXY_PORT = 18787
-LABEL = "pr-eval"
 # Set when a run is interrupted: attempts cut short then are dropped, not saved as invalid,
 # so `--resume` runs them again.
 STOPPING = threading.Event()
@@ -57,25 +56,21 @@ HARNESS_ENV = {
     "IS_SANDBOX": "1",
 }
 
-# The hidden tests run in a network of their own, with only loopback: the sandbox's API holds
-# port 8080 on every interface, and tests that serve on it (gin's, for one) would fail on the
-# base and merged code alike. Offline like the agent was, and as the same unprivileged user:
-# the namespace's capabilities only bring loopback up and are gone at exec.
-VERIFIER = "own-network"
-OWN_NETWORK = """import ctypes, fcntl, os, socket, struct, sys
-uid, gid = os.getuid(), os.getgid()
-if ctypes.CDLL(None, use_errno=True).unshare(0x10000000 | 0x40000000):  # CLONE_NEWUSER | CLONE_NEWNET
-    sys.exit("pr-eval: no network of their own for the tests: " + os.strerror(ctypes.get_errno()))
-for name, text in (("uid_map", f"{uid} {uid} 1"), ("setgroups", "deny"), ("gid_map", f"{gid} {gid} 1")):
-    with open(f"/proc/self/{name}", "w") as f:
-        f.write(text)
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-flags = struct.unpack("16sh", fcntl.ioctl(s, 0x8913, struct.pack("16sh", b"lo", 0)))[1]  # SIOCGIFFLAGS
-fcntl.ioctl(s, 0x8914, struct.pack("16sh", b"lo", flags | 1))  # SIOCSIFFLAGS, IFF_UP
-os.execvp(sys.argv[1], sys.argv[1:])
-"""
+# Every command in a trial's sandbox runs in a jail (docker/jail.py, in the image): processes of its own,
+# gone when it ends, and no network, with only loopback, unless the step is installing dependencies.
+# Baseten Sandboxes can't limit a sandbox's network yet, so this is what keeps the agent, and whatever it
+# leaves in the repository, away from GitHub and the package registries. The hidden tests run the same
+# way: the sandbox's API holds port 8080 on every interface, and tests that serve on it (gin's, for one)
+# would fail on the base and merged code alike.
+VERIFIER = "jail"
+JAIL = "python3 /opt/eval/jail.py"
+JAIL_FAILED = "pr-eval jail:"  # how the jail says it couldn't be made
+# The agent's one way out: the model relay (docker/proxy.py) listens on this socket, outside the jail,
+# and the jail carries the agent's loopback port to it.
+RELAY, RELAY_SOCKET, RELAY_LOG = "model-relay", "/logs/relay.sock", "/logs/relay.log"
+RELAY_MISSING = 97  # the agent command's exit when the relay never came up
 
-# Egress is enforced by the Blaxel proxy firewall, not hostname overrides.
+# The agent has no network either way; these would only fail.
 DISALLOWED_TOOLS = "WebFetch,WebSearch"
 
 # Caches that running code leaves behind are nobody's change. A repository can keep its
@@ -88,10 +83,6 @@ PROVIDER_ERROR = re.compile(r"API Error|authentication|unauthori[sz]ed|invalid a
                             r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed", re.I)
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def stage(path: Path, name: str, **extra) -> None:
     """What an attempt or a check is doing right now, for the page's live view; result.json
     replaces it when the attempt is done. Never fails the work it describes."""
@@ -101,60 +92,48 @@ def stage(path: Path, name: str, **extra) -> None:
         pass
 
 
-def write_json(path: Path, data: dict) -> None:
-    """Write through a temporary file, so a run killed mid-write never leaves half a file."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
-
-
-# Every model call an attempt pays for, one JSON line each, in the run's folder: the hosted page's spending
-# limits add these up by when they were spent. Unlike the report, it keeps attempts that ended invalid or were
-# stopped, every judge, and attempts a resume runs again, each time they ran.
-SPEND_LEDGER = "spend.jsonl"
-_ledger_lock = threading.Lock()
-
-
-def charge(trial_dir: Path, kind: str, model: str, usd: float | None) -> None:
-    """Add one charge (`kind` "agent" or "judge") to the run's ledger; `usd` None means it ran but has no price."""
-    if trial_dir.parent.name != "trials":  # not in a run's folder (a check, or a test): no run to charge
-        return
-    line = json.dumps({"at": now(), "kind": kind, "trial": trial_dir.name, "model": model,
-                       "usd": None if usd is None else round(usd, 6)})
-    try:
-        with _ledger_lock, open(trial_dir.parent.parent / SPEND_LEDGER, "a") as ledger:
-            ledger.write(line + "\n")
-    except OSError as exc:  # the attempt's own records still hold it
-        print(f"(spend not recorded for {trial_dir.name}: {exc})", flush=True)
+DEFAULT_CONCURRENCY = 8  # attempts, checks or grades at once, unless a run asks for another number
 
 
 @dataclass
 class Settings:
     image: str = DEFAULT_IMAGE
-    concurrency: int = 8
+    concurrency: int = DEFAULT_CONCURRENCY
     memory: int = 4096                 # MB; a task that needs more says so (memory_mb)
     region: str = "us-pdx-1"
-    workspace: str | None = None
     agent_timeout: int | None = None   # overrides the task's own
     judge: Panel | None = None
     keep_sandboxes: bool = False
 
 
-def sh(container: str, script: str, *, timeout: int) -> tuple[int, str, bool]:
-    """Run through the authenticated Blaxel API as the image's unprivileged user."""
-    result = runtime.execute(container, script, timeout=timeout)
-    return result.code, result.stdout + result.stderr, result.timed_out
+def jailed(script: str, *, network: bool = False) -> str:
+    """`script` in a jail: no network unless `network`, and nothing it starts outlives it."""
+    return f"{JAIL} --net {'host' if network else 'none'} -- bash -c {shlex.quote(script)}"
+
+
+def sh(container: str, script: str, *, timeout: int, network: bool = False) -> tuple[int, str, bool]:
+    """Run in the sandbox as the image's unprivileged user, jailed: without the network unless `network`."""
+    result = runtime.execute(container, jailed(script, network=network), timeout=timeout)
+    out = result.stdout + result.stderr
+    if result.code and JAIL_FAILED in result.stderr:
+        raise runtime.RuntimeError("The sandbox can't keep a step off the network: " + result.stderr.strip()[-200:])
+    return result.code, out, result.timed_out
 
 
 def trial_name(task: Task, model: Model, attempt: int) -> str:
     return f"{task.id}__{model.key}__{attempt}"
 
 
-def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, dict[str, str]]:
-    """The shell that starts Claude Code for this model, and the non-secret env it needs. With
-    `meter_url`, its calls go to the provider through the key meter instead (see meter.py)."""
+def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, dict[str, str]]:
+    """The shell that starts the model relay, the shell that starts Claude Code for this model in its jail,
+    and the non-secret env Claude Code needs. With `meter_url`, the relay calls the provider through the key
+    meter instead (see meter.py)."""
     env = dict(HARNESS_ENV)
-    upstream = meter.base_url(meter_url, model.provider) if meter_url else None
+    upstream = meter.base_url(meter_url, model.provider) if meter_url else PROVIDER_URLS[model.provider]
+    # A model on Baseten gets the run's effort forced on every request; a Claude model's requests go as they are.
+    effort = f"--effort {shlex.quote(model.effort)} " if model.provider == "baseten" else ""
+    relay = (f"rm -f {RELAY_SOCKET}; exec python3 /opt/eval/proxy.py --upstream {shlex.quote(upstream)} {effort}"
+             f"--socket {RELAY_SOCKET} --log-file /logs/proxy.log")
     # --include-partial-messages adds raw stream events; run_agent keeps only each
     # message's start and final usage, so a run stopped at the time limit still has its
     # output token counts (see rebuild_usage).
@@ -162,39 +141,51 @@ def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, dict[
               '--include-partial-messages '
               f'--dangerously-skip-permissions --model {shlex.quote(model.model)} '
               f'--effort {shlex.quote(model.effort)} --disallowedTools {DISALLOWED_TOOLS}')
+    env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PROXY_PORT}"
+    signs_in = ""
     if model.provider == "baseten":
         # Every model id Claude Code might ask for resolves to the one under test.
         for var in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
             env[var] = model.model
-        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PROXY_PORT}"
-        script = (
-            f"python3 /opt/eval/proxy.py --upstream {shlex.quote(upstream or BASETEN_URL)} --effort {shlex.quote(model.effort)} "
-            f"--port {PROXY_PORT} --log-file /logs/proxy.log >/dev/null 2>&1 &\n"
-            f"for i in $(seq 1 100); do (echo > /dev/tcp/127.0.0.1/{PROXY_PORT}) 2>/dev/null && break; sleep 0.1; done\n"
-            'export ANTHROPIC_AUTH_TOKEN="$BASETEN_API_KEY"; unset BASETEN_API_KEY\n'
-            f"exec {claude}\n")
+        signs_in = 'export ANTHROPIC_AUTH_TOKEN="$BASETEN_API_KEY"; unset BASETEN_API_KEY\n'
     else:
         env["ANTHROPIC_MODEL"] = model.model
-        if upstream:
-            env["ANTHROPIC_BASE_URL"] = upstream
-        script = f"exec {claude}\n"
-    return script, env
+    script = (
+        f"for i in $(seq 1 100); do [ -S {RELAY_SOCKET} ] && break; sleep 0.1; done\n"
+        f"[ -S {RELAY_SOCKET} ] || {{ echo 'pr-eval: the model relay did not start' >&2; exit {RELAY_MISSING}; }}\n"
+        f"{signs_in}"
+        f"exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {claude}\n")
+    return relay, script, env
 
 
-def run_agent(container: str, model: Model, placeholder_env: dict, log_path: Path, timeout: int,
+def run_agent(container: str, model: Model, placeholder_env: dict, relay_headers: dict, log_path: Path, timeout: int,
               meter_url: str | None = None) -> dict:
     """Run Claude Code remotely and collect the durable stream log.
 
-    `placeholder_env` holds the attempt's placeholder credential, never a real key: the
-    sandbox's egress proxy adds that, or the attempt's meter ticket (see config.sandbox_credential
-    and meter.admit).
+    `placeholder_env` holds the attempt's placeholder credential, never a real key. `relay_headers` is
+    what the model relay signs each call with, the key or the attempt's meter ticket (see
+    config.sandbox_credential and meter.admit): the relay runs outside the agent's jail, and is the only
+    process in the sandbox that ever has it.
     """
-    script, env_vars = agent_script(model, meter_url)
+    relay, script, env_vars = agent_script(model, meter_url)
+    with at("network"):
+        runtime.start(container, RELAY, relay, env={"PROXY_UPSTREAM_HEADERS": json.dumps(relay_headers)},
+                      timeout=timeout + 120, log=RELAY_LOG)
     started = time.monotonic()
-    result = runtime.execute(container, script, env={**env_vars, **placeholder_env}, timeout=timeout,
-                             stdout_path="/logs/agent.jsonl", stderr_path="/logs/agent.stderr")
+    try:
+        result = runtime.execute(container, script, env={**env_vars, **placeholder_env}, timeout=timeout,
+                                 stdout_path="/logs/agent.jsonl", stderr_path="/logs/agent.stderr")
+    finally:
+        runtime.stop(container, RELAY)  # with it goes the credential, before anything else runs here
     log_path.with_suffix(".stderr").write_text(result.stderr)
+    if result.code == RELAY_MISSING or JAIL_FAILED in result.stderr:
+        why = result.stderr.strip()[-200:]
+        if result.code == RELAY_MISSING:  # what the relay said as it failed to start; it had no call to log yet
+            with contextlib.suppress(runtime.RuntimeError):
+                why += " " + redact_known(runtime.execute(container, f"tail -c 400 {RELAY_LOG}", timeout=30).stdout.strip())
+        raise StepFailed("network", "the agent's", runtime.RuntimeError(
+            "The agent's jail or its model relay did not start: " + why.strip()))
     runtime.download(container, "/logs/agent.jsonl", log_path)  # streamed: the log can be tens of MB
     for path in (log_path, log_path.with_suffix(".stderr")):
         redact_file(path)
@@ -385,13 +376,8 @@ def agent_cost(model: Model, model_usage: dict) -> tuple[float | None, str]:
     return model.price(model_usage), "price-table"
 
 
-def block_lookups(container: str, domains: list[str] | None = None, routing: list[dict] | None = None) -> None:
-    """Narrow the creation-time enforced proxy to the selected provider; `routing` adds its key on the way."""
-    runtime.restrict_network(container, domains or ["api.anthropic.com", "inference.baseten.co"], routing or [])
-
-
 def container_name(run_id: str) -> str:
-    # Blaxel refuses a name over 49 characters: "pr-eval-", the slug, "-" and 8 hex digits.
+    # Kept under 49 characters: "pr-eval-", the slug, "-" and 8 hex digits.
     slug = re.sub(r"[^a-z0-9-]", "-", run_id.lower())[:32].strip("-")
     return f"pr-eval-{slug or 'trial'}-{secrets.token_hex(4)}"
 
@@ -416,10 +402,10 @@ def at(step: str, whose: str = "the agent's"):
 
 
 def start_container(name: str, run_id: str, settings: Settings, memory: int | None = None) -> None:
-    """Create a fresh, labelled Blaxel sandbox with a six-hour TTL."""
+    """Create a fresh sandbox, labelled with its run, that deletes itself after six hours."""
     if STOPPING.is_set():
         raise runtime.RuntimeError("Run is stopping; no new sandbox is created.")
-    runtime.create(name, run_id, settings, memory)
+    runtime.create(name, run_id, settings, memory, stopping=STOPPING.is_set)
     if STOPPING.is_set():  # the stop's cleanup may have listed sandboxes before this one existed
         raise runtime.RuntimeError("Run is stopping; the caller deletes this sandbox.")
 
@@ -458,7 +444,7 @@ def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "t
     logs = []
     with at("setup", whose):
         for wait in (10, 30, None):  # a download can drop mid-file, and installing dependencies again is harmless
-            code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout)
+            code, out, timed_out = sh(container, task.meta["environment"]["setup"], timeout=timeout, network=True)
             logs.append(out)
             if code == 0 or timed_out or wait is None or not DROPPED_DOWNLOAD.search(out):
                 break
@@ -474,8 +460,6 @@ def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "t
         if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
             return "workspace-error", stats
     stats["baseline"] = out.strip()
-    with at("network", whose):
-        block_lookups(container, ["blocked.invalid"])
     return None, stats
 
 
@@ -538,10 +522,8 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
     runtime.upload(container, task.path / "tests", "/tests")
     started = time.monotonic()
     timeout = int(task.meta["verifier"].get("timeout_sec", 900))
-    code, out, timed_out = sh(container, f"python3 -c {shlex.quote(OWN_NETWORK)} bash /tests/test.sh", timeout=timeout)
+    code, out, timed_out = sh(container, "bash /tests/test.sh", timeout=timeout)
     log_path.write_text(out)
-    if code and "pr-eval: no network of their own" in out:
-        raise runtime.RuntimeError("The sandbox can't give the hidden tests a network of their own.")
     return {"exit_code": code, "passed": code == 0 and not timed_out, "timed_out": timed_out,
             "seconds": round(time.monotonic() - started, 1), "summary": test_summary(out), "output": out}
 
@@ -673,11 +655,9 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         if meter_url:
             # Hosted: the key stays on the page, and every call from the sandbox, the agent's or the
             # repository's code's, is priced into the run's spend as it happens.
-            placeholder_env, routing, ticket = meter.admit(model, trial_dir, next(iter(credential_env(model))), meter_url)
-            domains = [urlsplit(meter_url).hostname]
+            placeholder_env, relay_headers, ticket = meter.admit(model, trial_dir, next(iter(credential_env(model))))
         else:
-            placeholder_env, routing = sandbox_credential(model, credential_env(model))
-            domains = [PROVIDER_DOMAINS[model.provider]]
+            placeholder_env, relay_headers = sandbox_credential(credential_env(model))
         if ready and ready.error:
             raise ready.error
         if not ready:
@@ -691,8 +671,6 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
             reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
-        step = "network"
-        block_lookups(container, domains, routing)
         step = "upload"
         prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
         (trial_dir / "prompt.md").write_text(prompt)
@@ -702,7 +680,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         # The agent ran, so it spent: charged below, or unpriced in `finally` if this ends first. Through
         # the meter every call is in the ledger already.
         charged = ticket is not None
-        agent = run_agent(container, model, placeholder_env, trial_dir / "agent.jsonl", agent_timeout, meter_url)
+        agent = run_agent(container, model, placeholder_env, relay_headers, trial_dir / "agent.jsonl", agent_timeout,
+                          meter_url)
         if ticket:
             ticket.unlink(missing_ok=True)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
@@ -940,8 +919,7 @@ def validation_status(task: Task, settings: Settings | None = None) -> str | Non
 
 
 def environment_identity(settings: Settings) -> dict:
-    return {"backend": "blaxel", "workspace": runtime.workspace(settings.workspace),
-            "image": settings.image, "region": settings.region, "verifier": VERIFIER}
+    return {"backend": "baseten", "image": settings.image, "region": settings.region, "verifier": VERIFIER}
 
 
 def diff_stats(numstat: str) -> dict:
@@ -1259,12 +1237,13 @@ def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, 
         pool.shutdown(wait=True)
 
 
-def cleanup(run_id: str | None = None, workspace: str | None = None) -> list[str]:
-    """Delete only labelled eval sandboxes in the explicitly selected workspace."""
-    return runtime.cleanup(run_id, workspace)
+def cleanup(run_id: str) -> list[str]:
+    """Delete one run's sandboxes: only ones this tool labelled, for a run on this machine."""
+    return runtime.cleanup(run_id)
 
 
-def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = 8, force: bool = False) -> list[dict]:
+def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = DEFAULT_CONCURRENCY,
+            force: bool = False) -> list[dict]:
     """Grade finished attempts again with these judges, without re-running any agent.
 
     Skips attempts already graded by the same judges and prompt version unless

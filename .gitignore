@@ -14,3 +14,6 @@ tasks/
 build/
 # Baseten's licensed face, fetched by hosted/fonts.mjs at deploy; served only behind the hosted sign-in.
 hosted/fonts/
+
+# uv writes one when a command runs through it; installs follow pyproject.toml
+uv.lock

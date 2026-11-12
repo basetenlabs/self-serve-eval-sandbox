@@ -1,20 +1,29 @@
-"""Translating proxy: whatever shape a coding CLI speaks -> Baseten Chat Completions.
+"""The model relay: an agent's one way to its model, and the translating proxy for models on Baseten.
 
-The proxy sets reasoning effort on the Chat Completions endpoint, so every request is converted to that shape, the
-run's effort is set on it, and the answer is converted back. Every model on Baseten then runs at the same effort,
-whichever API shape the agent speaks (Anthropic Messages, OpenAI Responses or Chat Completions).
+With an effort (models on Baseten): whatever shape a coding CLI speaks -> Baseten Chat Completions. The proxy sets
+reasoning effort on the Chat Completions endpoint, so every request is converted to that shape, the run's effort
+is set on it, and the answer is converted back. Every model on Baseten then runs at the same effort, whichever API
+shape the agent speaks (Anthropic Messages, OpenAI Responses or Chat Completions).
 
-Runs inside each trial's sandbox beside the agent, for models on Baseten (the image has it at /opt/eval/proxy.py).
-Stdlib only. Flags and env vars are interchangeable.
+Without one (Claude models): every request goes to the upstream as it is, and the answer comes back as it arrives.
+
+Runs inside each trial's sandbox, outside the agent's jail (jail.py; the image has both in /opt/eval): the agent has
+no network, and reaches only this, through the Unix socket it listens on. The credential for the upstream is
+this process's alone, in PROXY_UPSTREAM_HEADERS: the agent signs in with a placeholder, and the relay puts the
+real headers on each call. Stdlib only. Flags and env vars are interchangeable.
 
     PROXY_UPSTREAM_URL=https://inference.baseten.co/v1 PROXY_EFFORT=max python3 proxy.py
     python3 proxy.py --upstream https://inference.baseten.co/v1 --effort max
+    python3 proxy.py --upstream https://api.anthropic.com --socket /logs/relay.sock
 """
 
 import argparse
+import ctypes
 import json
 import os
 import random
+import socket
+import socketserver
 import sys
 import threading
 import time
@@ -58,10 +67,13 @@ Upstream = HTTPResponse | urllib.error.HTTPError
 class Config:
     """Everything the proxy needs to run. Built once, from flags or the env."""
 
-    upstream: str  # ends in /v1, so a client path of /v1/<x> maps to upstream/<x>
-    effort: str
+    upstream: str  # ends in /v1, so a client path of /v1/<x> maps to upstream/<x>; without an effort, any base URL
+    effort: str  # empty: relay every request as it is
     port: int
     log_file: str | None
+    socket: str | None = None  # listen on this Unix socket instead of the port
+    # Headers put on every upstream call in place of the client's own credential: {name: value}.
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -106,8 +118,18 @@ def parse_config(argv: list[str] | None = None) -> Config:
                         help="Port to listen on [PROXY_PORT]")
     parser.add_argument("--log-file", default=os.environ.get("PROXY_LOG_FILE"),
                         help="Mirror the per-turn log to this file [PROXY_LOG_FILE]")
+    parser.add_argument("--socket", default=os.environ.get("PROXY_SOCKET"),
+                        help="Listen on this Unix socket instead of a port [PROXY_SOCKET]")
     args = parser.parse_args(argv)
-    return Config(upstream=args.upstream.rstrip("/"), effort=args.effort, port=args.port, log_file=args.log_file)
+    # The upstream credential comes from the env only, never a flag: a command line shows in the process list.
+    try:
+        headers = json.loads(os.environ.get("PROXY_UPSTREAM_HEADERS") or "{}")
+    except ValueError:
+        headers = None
+    if not isinstance(headers, dict) or not all(isinstance(v, str) for v in headers.values()):
+        sys.exit("PROXY_UPSTREAM_HEADERS must be a JSON object of header names and values")
+    return Config(upstream=args.upstream.rstrip("/"), effort=args.effort, port=args.port, log_file=args.log_file,
+                  socket=args.socket, headers=headers)
 
 
 # Read at import so the tests work off the env; main() replaces it with the parsed flags.
@@ -629,8 +651,7 @@ def upstream_url(path: str) -> str:
 def upstream_headers(headers: Any) -> dict[str, str]:
     """Rewrite client headers for the upstream: bearer auth from whichever header it used, plus JSON.
 
-    The proxy holds no credential of its own. The CLI already has one, so nothing lands in the proxy's env or any
-    host-side job artifact.
+    With a credential of its own (PROXY_UPSTREAM_HEADERS), that replaces whatever the client signed in with.
     """
     key = headers.get("x-api-key") or ""
     if not key and (auth := headers.get("authorization") or ""):
@@ -639,7 +660,24 @@ def upstream_headers(headers: Any) -> dict[str, str]:
     for name in ("anthropic-version", "anthropic-beta"):
         if value := headers.get(name):
             out[name] = value
-    return out
+    return with_credential(out)
+
+
+# A client's own sign-in, which the relay's credential replaces.
+CLIENT_CREDENTIAL = ("authorization", "x-api-key")
+# Headers that describe one connection, not the request: never carried from one side to the other.
+HOP_HEADERS = {"host", "content-length", "connection", "keep-alive", "proxy-authorization", "proxy-connection", "te",
+               "trailer", "transfer-encoding", "upgrade", "accept-encoding"}
+
+
+def with_credential(headers: dict[str, str]) -> dict[str, str]:
+    """`headers` signed with the relay's own credential, when it has one, instead of the client's."""
+    if not CONFIG.headers:
+        return headers
+    ours = {name.lower() for name in CONFIG.headers}
+    kept = {k: v for k, v in headers.items() if k.lower() not in ours and
+            not (k.lower() in CLIENT_CREDENTIAL and ours & set(CLIENT_CREDENTIAL))}
+    return {**kept, **CONFIG.headers}
 
 
 def text_of(content: Any) -> str:
@@ -684,15 +722,64 @@ class Proxy(BaseHTTPRequestHandler):
     def log_message(self, *args: Any) -> None:
         """Silence the stdlib access log; this proxy writes one line per turn instead."""
 
+    def _own_path(self) -> bool:
+        """Whether the request names a path, which is all the upstream's base URL may be joined with. Anything
+        else ("@other.host/x", "http://other.host/") could turn the join into a call to another host, with the
+        relay's credential on it; the agent's only way out is the one upstream."""
+        if self.path.startswith("/"):
+            return True
+        self._send(400, error_body(ValueError("the relay takes a path on its one upstream, nothing else"), "anthropic"))
+        return False
+
     def do_GET(self) -> None:
         """Forward /v1/models and friends verbatim, which is enough for a CLI's model listing."""
+        if not self._own_path():
+            return
+        if not CONFIG.effort:
+            return self._as_is(None)
         self._forward(0, self.path, None, "get")
+
+    def _as_is(self, raw: bytes | None) -> None:
+        """No effort to force: send the request on as it is, and the answer back as it arrives."""
+        started, turn = time.monotonic(), next_turn()
+        path = self.path.split("?", 1)[0]
+        headers = with_credential({k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS})
+        headers["accept-encoding"] = "identity"
+        request = urllib.request.Request(CONFIG.upstream + self.path, data=raw, headers=headers, method=self.command)
+        try:
+            try:
+                up = urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_SEC)
+            except urllib.error.HTTPError as error:
+                up = error
+        except Exception as error:  # a DNS or connection failure never reached the host
+            self._send(502, error_body(error, "anthropic"))
+            return self._record(turn, started, path, "as-is", 502, type(error).__name__)
+        self.send_response(up.status)
+        for name, value in up.headers.items():
+            if name.lower() not in HOP_HEADERS:
+                self.send_header(name, value)
+        self.send_header("connection", "close")  # one connection per turn: the end of the answer is its close
+        self.close_connection = True
+        self.end_headers()
+        try:
+            while chunk := up.read1(65536):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except OSError:
+            pass  # the client hung up, or the upstream stopped mid-answer
+        finally:
+            up.close()
+        self._record(turn, started, path, "as-is", up.status, "")
 
     def do_POST(self) -> None:
         """Route by path: Chat Completions goes verbatim, the other two wires get translated."""
         started = time.monotonic()
         turn = next_turn()
         raw = self.rfile.read(int(self.headers.get("content-length") or 0))
+        if not self._own_path():
+            return
+        if not CONFIG.effort:
+            return self._as_is(raw)
         path = self.path.split("?", 1)[0].rstrip("/")
         shape = next((s for p, s in SHAPES.items() if path.endswith(p)), None)
 
@@ -929,15 +1016,53 @@ class Proxy(BaseHTTPRequestHandler):
             f"in {time.monotonic() - started:.1f}s" + (f" {note}" if note else ""))
 
 
+class UnixServer(ThreadingHTTPServer):
+    """The same server on a Unix socket: a file is the one thing an agent with no network can reach."""
+
+    address_family = socket.AF_UNIX
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", 0
+
+
+def keep_credential_private() -> None:
+    """The credential is this process's alone: wiped from the environment it started with (what /proc shows of
+    it), out of the environment its children get, and the process itself closed to others of the same user
+    (not dumpable: its memory and /proc entries can't be read or traced)."""
+    name = "PROXY_UPSTREAM_HEADERS"
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+    except OSError:
+        libc = None
+    if libc is not None and name in os.environ:
+        try:
+            libc.getenv.restype, libc.getenv.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+            if where := libc.getenv(name.encode()):
+                ctypes.memset(where, ord("x"), len(os.environ[name].encode()))
+        except (AttributeError, ValueError):
+            pass
+    os.environ.pop(name, None)
+    try:
+        libc.prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE, off
+    except (OSError, AttributeError):
+        pass  # not Linux: nothing to close
+
+
 def main() -> None:
     """Serve until killed, on the config the flags and env resolve to."""
     global CONFIG
     CONFIG = parse_config()
+    keep_credential_private()
     if not CONFIG.upstream:
         sys.exit("no upstream: pass --upstream or set PROXY_UPSTREAM_URL")
-    if not CONFIG.effort:
-        sys.exit("no effort: pass --effort or set PROXY_EFFORT - the proxy exists to force one level")
-    log(f"proxy listening on :{CONFIG.port} -> {CONFIG.upstream} forcing reasoning_effort={CONFIG.effort}")
+    where = CONFIG.socket or f":{CONFIG.port}"
+    log(f"proxy listening on {where} -> {CONFIG.upstream} " +
+        (f"forcing reasoning_effort={CONFIG.effort}" if CONFIG.effort else "relaying every request as it is"))
+    if CONFIG.socket:
+        if os.path.exists(CONFIG.socket):
+            os.unlink(CONFIG.socket)
+        UnixServer(CONFIG.socket, Proxy).serve_forever()
     ThreadingHTTPServer(("", CONFIG.port), Proxy).serve_forever()
 
 
