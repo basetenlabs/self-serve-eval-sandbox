@@ -306,7 +306,7 @@ def rebuild_usage(stream: Path, model: Model, proxy_log: Path | None = None) -> 
             # "<synthetic>" messages are Claude Code's own (an API error shown as a reply)
             if message.get("id") and message.get("model") != "<synthetic>":
                 model_id = message.get("model") or model.model
-                # A served deployment answers with its own id (GLM-5.3 Fast: "glm-53-sgl-agg-fast"), which
+                # A served deployment may answer with its own id (one answered "glm-53-sgl-agg-fast"), which
                 # the price table doesn't name: count it as the model the attempt asked for.
                 if model.rate_for(model_id) is None:
                     model_id = model.model

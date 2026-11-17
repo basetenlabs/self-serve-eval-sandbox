@@ -86,7 +86,7 @@ export function versus(metric: LeadMetric, value: number | null | undefined, bas
 export interface Lead extends Versus {
   /** The chip: "6.2× cheaper", "38% longer", "+10 pts", "About the same". */
   chip: string;
-  /** The line under the chip: "DeepSeek V4.1 Flash 1017 Fast vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6", so a
+  /** The line under the chip: "DeepSeek V4.1 Flash 1017 vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6", so a
    *  lower cost from fewer solved PRs reads as the trade-off it is. */
   note: string;
   /** The model the chip is about, and the one it is measured against. */

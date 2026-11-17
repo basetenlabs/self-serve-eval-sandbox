@@ -29,7 +29,11 @@ from .config import ROOT
 from .rundir import now, write_json
 
 DEFAULT_JOBS = ROOT / "jobs"
-DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash-1017-fast", "glm-5.3-fast"]
+DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]
+# Models no longer offered, and the one that replaced each. A past run keeps the models it ran with (run.json
+# holds them, labels and prices included), so its report reads as before; a new run, or a resumed one, can't
+# name them, and Run again puts the replacement in the form.
+RETIRED = {"glm-5.3-fast": "glm-5.3", "deepseek-v4.1-flash-1017-fast": "deepseek-v4.1-flash"}
 DEFAULT_LIMIT = 10
 ACTIVE = ("collecting", "checking", "running")
 # An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
@@ -276,6 +280,8 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
     judges' providers again: the page checked them a moment before it started the run.
     """
     catalog, judge = config.load(models_config)
+    if retired := [k for k in model_keys if k in RETIRED and k not in catalog]:
+        raise SystemExit("; ".join(f"{k} is no longer offered: use {RETIRED[k]}" for k in retired))
     unknown = [k for k in model_keys if k not in catalog]
     if unknown:
         raise SystemExit(f"unknown model(s) {', '.join(unknown)}; {models_config.name} has: {', '.join(catalog)}")

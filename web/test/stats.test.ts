@@ -118,10 +118,10 @@ describe("stats", () => {
   });
 
   describe("every model shown", () => {
-    // The run that prompted this: GLM-5.3 Fast and Claude Opus 5.5 solved 6 of 8 PRs each, DeepSeek V4.1 Flash 1017 Fast 5.
-    // Shown as $1.38, $1.31 and $0.210 per solved task, and 9.8, 7.1 and 6.9 min per task.
-    const g = { key: "glm-5.3-fast", label: "GLM-5.3 Fast", kind: "open", provider: "baseten" } as Model;
-    const d = { key: "deepseek-v4.1-flash-1017-fast", label: "DeepSeek V4.1 Flash 1017 Fast", kind: "open", provider: "baseten" } as Model;
+    // A real run's figures: two models solved 6 of 8 PRs each and DeepSeek 5, shown as $1.38, $1.31 and $0.210 per
+    // solved task and 9.8, 7.1 and 6.9 min per task. Before, the cost chip said "About even" and the time chip "39% slower".
+    const g = { key: "glm-5.3", label: "GLM-5.3", kind: "open", provider: "baseten" } as Model;
+    const d = { key: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash 1017", kind: "open", provider: "baseten" } as Model;
     const c = { key: "claude-opus", label: "Claude Opus 5.5", kind: "closed", provider: "anthropic" } as Model;
     const S = {
       [g.key]: s(6 / 8, 6, 8, 1.38030176, 588.9), [c.key]: s(6 / 8, 6, 8, 1.3138080333, 423.25), [d.key]: s(5 / 8, 5, 8, 0.209907744, 414.7),
@@ -135,17 +135,17 @@ describe("stats", () => {
       const t = takeaway([g, d, c], S, { tasks, trials });
       expect([t.open?.key, t.closed?.key]).toEqual([g.key, c.key]); // the headline still pairs the open model that matches Claude
       expect([t.cost?.model.key, t.cost?.vs.key, t.cost?.ahead, t.cost?.chip]).toEqual([d.key, c.key, true, "6.2× cheaper"]);
-      expect(t.cost?.note).toBe("DeepSeek V4.1 Flash 1017 Fast vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6");
+      expect(t.cost?.note).toBe("DeepSeek V4.1 Flash 1017 vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6");
       expect(t.verdict).toEqual({
-        head: "GLM-5.3 Fast and Claude Opus 5.5 solved the same 6 PRs.",
-        cost: "DeepSeek V4.1 Flash 1017 Fast is 6.2× cheaper per solved task than Claude Opus 5.5. It solved 5 of 8 PRs and Claude Opus 5.5 solved 6.",
+        head: "GLM-5.3 and Claude Opus 5.5 solved the same 6 PRs.",
+        cost: "DeepSeek V4.1 Flash 1017 is 6.2× cheaper per solved task than Claude Opus 5.5. It solved 5 of 8 PRs and Claude Opus 5.5 solved 6.",
       });
     });
 
     it("says the quickest open model takes about the same time, not that the run was slower", () => {
       const t = takeaway([g, d, c], S, { tasks, trials });
       expect([t.time?.model.key, t.time?.vs.key, t.time?.ahead, t.time?.chip]).toEqual([d.key, c.key, null, "About the same"]);
-      expect(t.time?.note).toBe("DeepSeek V4.1 Flash 1017 Fast vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6");
+      expect(t.time?.note).toBe("DeepSeek V4.1 Flash 1017 vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6");
     });
 
     it("says each bar against Claude Opus 5.5, from the figures as shown", () => {
@@ -159,18 +159,18 @@ describe("stats", () => {
       const near = { [g.key]: s(6 / 8, 6, 8, 1.36, 400), [c.key]: s(6 / 8, 6, 8, 1.31, 390) };
       const t = takeaway([g, c], near);
       expect([t.cost?.ahead, t.cost?.chip, t.time?.chip, t.solve?.chip]).toEqual([null, "About the same", "About the same", "Same rate"]);
-      expect(t.cost?.note).toBe("GLM-5.3 Fast vs Claude Opus 5.5 · both solved 6 of 8 PRs");
-      expect(t.sentence).toBe("GLM-5.3 Fast solved as many tasks as Claude Opus 5.5 at about the same cost per solved task.");
+      expect(t.cost?.note).toBe("GLM-5.3 vs Claude Opus 5.5 · both solved 6 of 8 PRs");
+      expect(t.sentence).toBe("GLM-5.3 solved as many tasks as Claude Opus 5.5 at about the same cost per solved task.");
       // Three models, the cheapest open one about even with Claude: the line names them rather than saying "both".
       const three = takeaway([g, d, c], { ...near, [d.key]: s(5 / 8, 5, 8, 1.4, 300) }, { tasks, trials });
-      expect(three.verdict?.cost).toBe("GLM-5.3 Fast and Claude Opus 5.5 cost about the same per solved task.");
+      expect(three.verdict?.cost).toBe("GLM-5.3 and Claude Opus 5.5 cost about the same per solved task.");
     });
 
     it("breaks a tie on the figure as shown in favour of the model that solved more", () => {
       const tie = { ...S, [g.key]: s(6 / 8, 6, 8, 0.2104, 588.9), [d.key]: s(5 / 8, 5, 8, 0.2098, 414.7) };
       const t = takeaway([d, g, c], tie, { tasks, trials });
       expect([t.cost?.model.key, t.cost?.chip]).toEqual([g.key, "6.2× cheaper"]); // both $0.210
-      expect(t.verdict?.cost).toBe("GLM-5.3 Fast is 6.2× cheaper per solved task than Claude Opus 5.5.");
+      expect(t.verdict?.cost).toBe("GLM-5.3 is 6.2× cheaper per solved task than Claude Opus 5.5.");
     });
 
     it("leaves a model that solved none out of the cost comparison", () => {
@@ -179,7 +179,7 @@ describe("stats", () => {
       const t = takeaway([g, k, c], none);
       // No closed figure to measure against: the cheapest against the runner-up, and no bar is said against Claude.
       expect([t.cost?.model.key, t.cost?.vs.key, t.cost?.chip]).toEqual([g.key, "kimi", "2.5× cheaper"]);
-      expect(t.cost?.note).toBe("GLM-5.3 Fast vs Kimi K3 · solved 6 of 8 PRs vs 3");
+      expect(t.cost?.note).toBe("GLM-5.3 vs Kimi K3 · solved 6 of 8 PRs vs 3");
       expect(versus("cost_per_solved", 0.4, null)).toBeNull();
       expect(lead([g, c], none, "cost_per_solved")).toBeUndefined(); // one figure is no comparison
       // Time still has Claude's figure: the quickest open model against it.
@@ -189,7 +189,7 @@ describe("stats", () => {
     it("compares open models with each other when there's no closed one", () => {
       const t = takeaway([g, d], S);
       expect([t.open, t.closed]).toEqual([undefined, undefined]);
-      expect(t.sentence).toBe("GLM-5.3 Fast solved 6 PRs.");
+      expect(t.sentence).toBe("GLM-5.3 solved 6 PRs.");
       expect([t.cost?.model.key, t.cost?.vs.key, t.cost?.chip]).toEqual([d.key, g.key, "6.6× cheaper"]);
     });
   });
