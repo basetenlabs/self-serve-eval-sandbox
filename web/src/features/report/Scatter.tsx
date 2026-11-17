@@ -33,7 +33,8 @@ function useWidth(): [(el: HTMLDivElement | null) => void, number] {
 }
 
 /** Tasks solved against cost per solved task, one point per model. Top left is best; the pink chip
- *  measures how far left the open model sits from the closed comparison. */
+ *  measures how far the open model that costs least sits from the closed comparison, as the cost chip
+ *  of the side by side says it. */
 export function Scatter({ models, S, colors }: { models: Model[]; S: Record<string, Summary>; colors: Record<string, Swatch> }) {
   const [hover, setHover] = React.useState<string | null>(null);
   const [box, width] = useWidth();
@@ -63,14 +64,14 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   for (let v = 0; v <= xMax + 1e-9; v += step) xTicks.push(v);
   const at = (p: (typeof pts)[number]) => ({ cx: x(p.s.cost_per_solved!), cy: y(p.s.tasks_solved) });
 
-  // The headline trade-off, drawn: a connector from the closed model across to the open one (an elbow
-  // when they solved different counts), with the cost difference on its level run.
+  // The cost chip, drawn: a connector from the closed comparison across to the open model that costs least
+  // per solved task (an elbow when they solved different counts), with the cost difference on its level run.
   const t = takeaway(models, S);
-  const from = pts.find((p) => p.m.key === t.closed?.key), to = pts.find((p) => p.m.key === t.open?.key);
+  const from = pts.find((p) => p.m.key === t.cost?.vs.key), to = pts.find((p) => p.m.key === t.cost?.model.key);
   let gap: { d: string; head: string; chip: Box; text: string; runs: Box[] } | null = null;
   if (from && to && t.cost && t.cost.ahead !== null) {
     const a = at(from), b = at(to);
-    const w = t.cost.text.length * 7.4 + 16, h = 22, dir = Math.sign(b.cx - a.cx), drop = Math.abs(b.cy - a.cy) > 14;
+    const w = t.cost.chip.length * 7.4 + 16, h = 22, dir = Math.sign(b.cx - a.cx), drop = Math.abs(b.cy - a.cy) > 14;
     if (Math.abs(a.cx - b.cx) > w + 56) {
       const x0 = a.cx + dir * 11, end = drop ? b.cx : b.cx - dir * 11;
       const mid = (x0 + end) / 2, v = Math.sign(b.cy - a.cy), yEnd = b.cy - v * 11;
@@ -78,7 +79,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
         d: drop ? `M ${x0} ${a.cy} H ${b.cx} V ${yEnd}` : `M ${x0} ${a.cy} H ${end}`,
         head: drop ? `M ${b.cx - 6} ${yEnd - v * 6} L ${b.cx} ${yEnd} L ${b.cx + 6} ${yEnd - v * 6}`
           : `M ${end - dir * 6} ${a.cy - 6} L ${end} ${a.cy} L ${end - dir * 6} ${a.cy + 6}`,
-        text: t.cost.text,
+        text: t.cost.chip,
         chip: { x0: mid - w / 2, x1: mid + w / 2, y0: a.cy - h / 2, y1: a.cy + h / 2 },
         runs: [{ x0: Math.min(x0, b.cx) - 2, x1: Math.max(x0, b.cx) + 2, y0: a.cy - 3, y1: a.cy + 3 },
           ...(drop ? [{ x0: b.cx - 3, x1: b.cx + 3, y0: Math.min(a.cy, b.cy), y1: Math.max(a.cy, b.cy) }] : [])],

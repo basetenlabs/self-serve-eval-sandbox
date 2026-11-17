@@ -7,12 +7,18 @@ export const pct = (x: number | null | undefined, digits = 0) => (x == null ? DA
 export const usd = (x: number | null | undefined) =>
   x == null ? DASH : x >= 100 ? `$${x.toFixed(0)}` : x >= 1 ? `$${x.toFixed(2)}` : `$${x.toFixed(3)}`;
 
+/** The amount usd() shows, as a number: whole dollars from $100, cents from $1, tenths of a cent below. */
+export const usdShown = (x: number) => (x >= 100 ? Math.round(x) : x >= 1 ? Math.round(x * 100) / 100 : Math.round(x * 1000) / 1000);
+
 /** Short spend figure for running totals: $7.02, $0.43. */
 export const money = (x: number | null | undefined) => (x == null ? DASH : `$${x.toFixed(2)}`);
 
 /** A duration in seconds as 42s, 2.3 min or 1.4 h. */
 export const dur = (s: number | null | undefined) =>
   s == null ? DASH : s < 90 ? `${Math.round(s)}s` : s < 3600 ? `${(s / 60).toFixed(1)} min` : `${(s / 3600).toFixed(1)} h`;
+
+/** The seconds dur() shows: whole seconds, tenths of a minute or tenths of an hour. */
+export const durShown = (s: number) => (s < 90 ? Math.round(s) : s < 3600 ? Math.round(s / 6) * 6 : Math.round(s / 360) * 360);
 
 /** Elapsed wall clock as 1d 2h 5m, 12m, 40s. */
 export function elapsed(seconds: number | null | undefined): string {
@@ -38,6 +44,9 @@ export const compact = (n: number | null | undefined) =>
 export const ratio = (x: number) => (x >= 10 ? x.toFixed(0) : x.toFixed(1));
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** "about the same" as it opens a chip or a cell: "About the same". */
+export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function day(iso: string | null | undefined): string {
   if (!iso) return DASH;
