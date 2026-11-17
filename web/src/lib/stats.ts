@@ -1,4 +1,4 @@
-import { durShown, pct, plural, usdShown } from "./format";
+import { dur, durShown, pct, plural, usd, usdShown } from "./format";
 import { isOpen, whose } from "./models";
 import type { Model, Report, Summary, Task, Trial } from "./types";
 
@@ -45,8 +45,9 @@ export interface Lead {
   tie: boolean;
   /** The gap: percent of the other model's figure for cost and time, points of solve rate. */
   gap: number;
-  /** What the chip leaves out, for the line under it: the model it is measured against when more than two
-   *  are shown, and what each solved when that differs. Empty when it would add nothing. */
+  /** What the chip leaves out, for the line under it: on a tie both models with their figures, else the model
+   *  it is measured against when more than two are shown; then what each solved when that differs. Empty when
+   *  it would add nothing. */
   note: string;
   /** The model the chip names (on a tie, the open one), and the one it is measured against. */
   model: Model;
@@ -98,16 +99,17 @@ export function lead(models: Model[], S: Record<string, Summary | undefined>, me
   const same = a.tasks_solved === b.tasks_solved && a.tasks === b.tasks;
   const n = (k: number) => k || "none";
   const of = `${n(a.tasks_solved)} of ${plural(a.tasks, "PR")}`, theirs = `${n(b.tasks_solved)}${b.tasks === a.tasks ? "" : ` of ${b.tasks}`}`;
-  const each = `${tie ? model.label : "It"} solved ${of} and ${vs.label} solved ${theirs}.`;
-  const many = models.length > 2;
-  // A third model on the page leaves the chip's other side to say; a tie names both, unless what each solved does.
-  const against = !many ? "" : !tie ? `Compared with ${vs.label}.` : same || higher ? `${model.label} and ${vs.label}.` : "";
+  const it = `It solved ${of} and ${vs.label} solved ${theirs}.`;
+  const show = (m: Model) => ({ cost_per_solved: usd, median_seconds: dur, pass_at_1: pct })[metric](figure(S, m, metric));
+  // The chip names nobody on a tie, so the line names both with their figures; otherwise a third model on the
+  // page leaves the chip's other side to say.
+  const which = tie ? `${model.label} (${show(model)}) and ${vs.label} (${show(vs)}).` : models.length > 2 ? `Compared with ${vs.label}.` : "";
   return {
     chip: tie ? words.tie : `${whose(model)} ${words.says(gap)}`,
     text: tie ? "about the same" : words.text(gap),
     tie, gap, model, vs,
-    note: [against, same || higher ? "" : each].filter(Boolean).join(" "),
-    solved: same ? `Both solved ${of}.` : each,
+    note: [which, same || higher ? "" : it].filter(Boolean).join(" "),
+    solved: same ? `Both solved ${of}.` : tie ? `${model.label} solved ${of} and ${vs.label} solved ${theirs}.` : it,
   };
 }
 

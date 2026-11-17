@@ -149,7 +149,7 @@ describe("stats", () => {
       const t = takeaway([g, d, c], S, { tasks, trials });
       // 6.9 min against 7.1 min.
       expect([t.time?.model.key, t.time?.vs.key, t.time?.tie, t.time?.chip]).toEqual([d.key, c.key, true, "About the same time"]);
-      expect(t.time?.note).toBe("DeepSeek V4.1 Flash 1017 solved 5 of 8 PRs and Claude Opus 5.5 solved 6.");
+      expect(t.time?.note).toBe("DeepSeek V4.1 Flash 1017 (6.9 min) and Claude Opus 5.5 (7.1 min). It solved 5 of 8 PRs and Claude Opus 5.5 solved 6.");
     });
 
     it("names the better of two models and who serves it, from the figures as shown", () => {
@@ -169,11 +169,11 @@ describe("stats", () => {
       const near = { [g.key]: s(6 / 8, 6, 8, 1.36, 400), [c.key]: s(6 / 8, 6, 8, 1.31, 390) };
       const t = takeaway([g, c], near);
       expect([t.cost?.tie, t.cost?.chip, t.time?.chip, t.solve?.chip]).toEqual([true, "About the same cost", "About the same time", "Same solve rate"]);
-      expect(t.cost?.note).toBe("");
+      expect([t.cost?.note, t.time?.note]).toEqual(["GLM-5.3 ($1.36) and Claude Opus 5.5 ($1.31).", "GLM-5.3 (6.7 min) and Claude Opus 5.5 (6.5 min)."]);
       expect(t.sentence).toBe("GLM-5.3 solved as many tasks as Claude Opus 5.5 at about the same cost per solved task.");
       // Three models, the cheapest open one about even with Claude: the chip's line and the headline name them.
       const three = takeaway([g, d, c], { ...near, [d.key]: s(5 / 8, 5, 8, 1.4, 300) }, { tasks, trials });
-      expect(three.cost?.note).toBe("GLM-5.3 and Claude Opus 5.5.");
+      expect(three.cost?.note).toBe("GLM-5.3 ($1.36) and Claude Opus 5.5 ($1.31).");
       expect(three.verdict?.cost).toBe("GLM-5.3 and Claude Opus 5.5 cost about the same per solved task.");
     });
 
