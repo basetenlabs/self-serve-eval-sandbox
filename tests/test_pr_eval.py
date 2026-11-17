@@ -63,6 +63,14 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3"])
         self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3")
 
+    def test_closed_models_name_their_maker(self):
+        # The report says who serves each model it compares: Baseten for an open one, a closed one's maker.
+        models, _ = config.load()
+        self.assertEqual(models["claude-opus"].maker, "Anthropic")
+        for model in models.values():
+            if model.kind == "closed":
+                self.assertTrue(model.maker, f"{model.key} names no maker")
+
     def test_new_runs_offer_the_standard_glm_and_deepseek_not_their_fast_variants(self):
         models, _ = config.load()
         self.assertEqual(pipeline.DEFAULT_MODELS, ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"])

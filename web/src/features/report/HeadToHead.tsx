@@ -1,10 +1,10 @@
 import type * as React from "react";
 import { Column, DeltaChip } from "@/components/brand";
 import { Chevron } from "@/components/brand/icons";
-import { cap, dur, pct, plural, usd } from "@/lib/format";
+import { dur, pct, plural, usd } from "@/lib/format";
 import { isOpen, type Swatch } from "@/lib/models";
 import { Count, Scramble } from "@/lib/motion";
-import { type Lead, type Paired, solvedBy, type Takeaway, versus, wilson } from "@/lib/stats";
+import { type Lead, type Paired, solvedBy, type Takeaway, wilson } from "@/lib/stats";
 import type { Model, Summary, Task, Trial } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -20,8 +20,8 @@ type Side = { m: Model; fill: string; ink: string };
  * Every model of the run, Baseten's open models above the closed comparison, best first. First who
  * solved which of the same PRs, then one row per metric in the brand's head-to-head form: the metric
  * and its pink delta chip on the left, one bar per model on the right, scaled within the metric.
- * Each bar says how its model compares with the closed one ("6.2× cheaper", "38% longer"), and the
- * chip is the best open model on that metric against it, named under it with what each solved.
+ * The chip names the better of the best open model and the closed one, who serves it and by how much
+ * ("Baseten's DeepSeek V4.1 Flash is 71% cheaper"); the line under it says what the chip leaves out.
  */
 export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onOpen, sample }: {
   t: Takeaway; S: Record<string, Summary>; ranked: Model[]; colors: Record<string, Swatch>; trials: Trial[];
@@ -58,33 +58,23 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
         {metrics.map((metric) => {
           const values = sides.map((s) => S[s.m.key]?.[metric.key] ?? null);
           const max = metric.max ?? (Math.max(...values.map((v) => v ?? 0)) || 1);
-          // Each bar against the closed comparison, when it has this figure: its own bar is the baseline. The
-          // words get a column of their own, the same width in every metric so the bars line up.
-          const base = t.closed && sides.find((s) => s.m.key === t.closed!.key && S[s.m.key]?.[metric.key] != null);
-          const said = sides.map((s, i) => !base ? null : s === base ? "Baseline"
-            : cap(versus(metric.key, values[i], S[base.m.key][metric.key])?.text ?? ""));
           return (
             <div key={metric.key} className={ROW}>
               <div>
                 <h3 className="text-[20px] leading-7 font-normal">{metric.name}</h3>
                 <div className="label-mono mt-0.5 text-muted-foreground">{metric.units}</div>
-                {metric.delta && <DeltaChip className="mt-3">{metric.delta.chip}</DeltaChip>}
-                {metric.delta && <p className="mt-2 max-w-[34ch] text-[14px] leading-5 text-muted-foreground">{metric.delta.note}</p>}
+                {/* A full statement, so it wraps inside the column rather than run under the bars. */}
+                {metric.delta && <DeltaChip className="mt-3 max-w-full whitespace-normal text-balance">{metric.delta.chip}</DeltaChip>}
+                {metric.delta?.note && <p className="mt-2 max-w-[34ch] text-[14px] leading-5 text-muted-foreground">{metric.delta.note}</p>}
               </div>
-              <div className={cn("grid grid-cols-1 items-center gap-x-4 gap-y-1 sm:gap-y-0",
-                t.closed ? "sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)_112px]" : "sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)]")}>
+              <div className="grid grid-cols-1 items-center gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-y-0">
                 {sides.map((s, i) => {
                   const v = values[i];
                   const w = v == null ? 0 : Math.max(0.5, (v / max) * 100);
                   const inside = w >= 45; // under half the track the value sits after the bar, so it never spills onto the name
-                  const words = said[i] && <span className={cn("num text-[14px] whitespace-nowrap", s === base ? "text-muted-foreground" : "text-foreground")}>{said[i]}</span>;
                   return (
                     <div key={s.m.key} className="contents">
-                      {/* On a phone the comparison sits at the end of the name line, above the bar. */}
-                      <div className={cn("flex min-w-0 items-baseline justify-between gap-3 sm:block sm:text-right", i > 0 && "max-sm:mt-2")}>
-                        <span className="label-mono block truncate text-foreground" title={s.m.label}>{s.m.label}</span>
-                        {words && <span className="sm:hidden">{words}</span>}
-                      </div>
+                      <div className={cn("label-mono truncate text-foreground sm:text-right", i > 0 && "max-sm:mt-2")} title={s.m.label}>{s.m.label}</div>
                       <div className="relative h-10 bg-surface">
                         {v == null ? (
                           <div className="placeholder-cell flex h-full items-center px-3 label-mono text-muted-foreground">
@@ -99,7 +89,6 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
                           </div>
                         )}
                       </div>
-                      {t.closed && <div className="max-sm:hidden">{words}</div>}
                     </div>
                   );
                 })}
@@ -108,9 +97,7 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
           );
         })}
       </div>
-      <div className="label-xs border-t border-lightGrey2 pt-3 text-muted-foreground">
-        {t.closed ? `Compared with ${t.closed.label} · ` : ""}{grid ? "cost and time scaled within each metric" : "solve rate out of 100%; cost and time scaled within each metric"}
-      </div>
+      <div className="label-xs border-t border-lightGrey2 pt-3 text-muted-foreground">{grid ? "Cost and time scaled within each metric" : "Solve rate out of 100%; cost and time scaled within each metric"}</div>
     </Column>
   );
 }

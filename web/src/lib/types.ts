@@ -7,6 +7,8 @@ export interface Model {
   label: string;
   kind?: Kind | null;
   provider?: string;
+  /** Who makes a closed model, as the page says who serves it: "Anthropic". */
+  maker?: string | null;
   /** The exact id its API serves, e.g. deepseek-ai/DeepSeek-V4.1-Flash-1017. */
   model?: string | null;
 }

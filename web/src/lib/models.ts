@@ -1,3 +1,4 @@
+import { cap } from "./format";
 import type { Model } from "./types";
 
 // Green is Baseten: open models served on Baseten take Green, then Dark Green (the second member of the family).
@@ -21,6 +22,18 @@ const OPEN = [GREEN, GREEN_DARK, GREY("darkGrey1", "white"), GREY("darkGrey2", "
 const CLOSED = [BLUE, BLUE_DARK, GREY("lightGrey3", "black"), GREY("darkGrey3", "black")];
 
 export const isOpen = (m: Model) => m.kind !== "closed";
+
+/** Who serves a model, as the page says it: Baseten for an open model, its maker for a closed one (`maker`
+ *  in configs/models.toml; a run from before that field, its provider: "anthropic" reads "Anthropic"). */
+export function servedBy(m: Model): string | null {
+  return isOpen(m) ? "Baseten" : m.maker || (m.provider ? cap(m.provider) : null);
+}
+
+/** "Baseten's DeepSeek V4.1 Flash", "Anthropic's Claude Opus 5.5". */
+export function whose(m: Model): string {
+  const by = servedBy(m);
+  return by ? `${by}'s ${m.label}` : m.label;
+}
 
 /** Baseten's models first, then the comparison, each keeping the run's order. */
 export function ordered<T extends Model>(models: T[]): T[] {

@@ -18,6 +18,8 @@
 #   report's wall clock either way.
 # estimate_from (optional) lists models whose past runs estimate a new model's cost and
 #   time per attempt until it has runs of its own.
+# maker names who makes a closed model. The report says who serves each model it compares:
+#   "Baseten's GLM-5.3" for an open model, "Anthropic's Claude Opus 5.5" for a closed one.
 # The Fast variants (GLM-5.3 Fast, DeepSeek V4.1 Flash 1017 Fast) are no longer offered:
 #   pipeline.RETIRED names what replaced each. Past runs keep their own models in run.json.
 
@@ -28,6 +30,7 @@ effort = "high"
 label = "Claude Opus 5.5"
 kind = "closed"
 provider = "anthropic"
+maker = "Anthropic"
 model = "claude-opus-5-5"
 # Claude Code sends some background requests to its small model; price them too.
 # cache_write is the 5-minute cache; Claude Code mostly writes the 1-hour one, which

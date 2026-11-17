@@ -32,6 +32,7 @@ class Model:
     max_concurrent: int | None = None  # cap for providers that rate-limit a key
     # Models whose past runs estimate this one's cost and time until it has its own: the first with a run counts.
     estimate_from: list[str] = field(default_factory=list)
+    maker: str | None = None  # a closed model's maker, for the report's "Anthropic's Claude Opus 5.5"
 
     def price(self, usage: dict[str, dict]) -> float | None:
         """USD for Claude Code's per-model usage, priced from our own table.

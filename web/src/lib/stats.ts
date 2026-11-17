@@ -1,5 +1,5 @@
-import { cap, durShown, pct, plural, ratio, usdShown } from "./format";
-import { isOpen } from "./models";
+import { durShown, pct, plural, usdShown } from "./format";
+import { isOpen, whose } from "./models";
 import type { Model, Report, Summary, Task, Trial } from "./types";
 
 /** 95% Wilson interval for k successes in n tries. */
@@ -26,7 +26,7 @@ export interface Takeaway {
   pairs?: Paired;
   open?: Model;
   closed?: Model;
-  /** Per metric, the best open model against the closed comparison (see lead()). */
+  /** Per metric, the best open model and the closed comparison, said from the better one (see lead()). */
   solve?: Lead;
   cost?: Lead;
   time?: Lead;
@@ -34,24 +34,34 @@ export interface Takeaway {
 
 export type LeadMetric = "pass_at_1" | "cost_per_solved" | "median_seconds";
 
-/** One model's figure against another's, in words: "6.2× cheaper", "5% more", "38% longer", "+10 pts". */
-export interface Versus {
-  /** Lower case, to sit after a value or inside a sentence: "6.2× cheaper", "about the same". */
+/** One metric's pink chip: the better of two models on it, who serves it, and by how much. */
+export interface Lead {
+  /** A short statement: "Baseten's DeepSeek V4.1 Flash is 71% cheaper", "Anthropic's Claude Opus 5.5 took
+   *  42% less time", "Baseten's GLM-5.3 is 10 points higher"; within 5%, "About the same cost". */
+  chip: string;
+  /** The gap alone, lower case, for the chart's chip and the headline: "71% cheaper", "42% less time". */
   text: string;
-  /** Better than the figure it is measured against; null within 5%, or the same solve rate. */
-  ahead: boolean | null;
-  /** The multiple, "6.2", when the gap is 2× or more. */
-  times?: string;
-  /** The gap in percent of the other figure, when under 2×. */
-  percent?: number;
+  /** Neither is ahead: within 5% on cost or time, the same solve rate. */
+  tie: boolean;
+  /** The gap: percent of the other model's figure for cost and time, points of solve rate. */
+  gap: number;
+  /** What the chip leaves out, for the line under it: the model it is measured against when more than two
+   *  are shown, and what each solved when that differs. Empty when it would add nothing. */
+  note: string;
+  /** The model the chip names (on a tie, the open one), and the one it is measured against. */
+  model: Model;
+  vs: Model;
+  /** What each solved, for the headline: "Both solved 5 of 8 PRs." or "It solved 5 of 8 PRs and Claude Opus 5.5 solved 6." */
+  solved: string;
 }
 
-const VERSUS_WORDS: Record<"cost_per_solved" | "median_seconds", { less: string; more: string; times: string }> = {
-  cost_per_solved: { less: "cheaper", more: "more", times: "the cost" },
-  median_seconds: { less: "faster", more: "longer", times: "as long" },
+const LEAD_WORDS: Record<LeadMetric, { text: (gap: number) => string; says: (gap: number) => string; tie: string }> = {
+  cost_per_solved: { text: (g) => `${g}% cheaper`, says: (g) => `is ${g}% cheaper`, tie: "About the same cost" },
+  median_seconds: { text: (g) => `${g}% less time`, says: (g) => `took ${g}% less time`, tie: "About the same time" },
+  pass_at_1: { text: (g) => `${g} pts higher`, says: (g) => `is ${plural(g, "point")} higher`, tie: "Same solve rate" },
 };
 
-/** A figure rounded the way the page shows it, so "9.8 min" against "7.1 min" reads 38%, as a reader works it out. */
+/** A figure rounded the way the page shows it, so "$0.185" against "$0.638" reads 71%, as a reader works it out. */
 function shown(metric: LeadMetric, v: number): number {
   return metric === "pass_at_1" ? Math.round(v * 100) / 100 : metric === "cost_per_solved" ? usdShown(v) : durShown(v);
 }
@@ -63,62 +73,41 @@ function figure(S: Record<string, Summary | undefined>, m: Model, metric: LeadMe
 }
 
 /**
- * How `value` compares with `base`, both rounded as shown. Cost and time: a multiple from 2×
- * ("6.2× cheaper", "2.1× the cost", "2.1× faster", "2.1× as long"), a percent of the base below that
- * ("25% cheaper", "5% more", "38% longer"), and "about the same" under 5%. Solve rate: points.
- */
-export function versus(metric: LeadMetric, value: number | null | undefined, base: number | null | undefined): Versus | null {
-  if (value == null || base == null || !Number.isFinite(value) || !Number.isFinite(base)) return null;
-  const v = shown(metric, value), b = shown(metric, base);
-  if (metric === "pass_at_1") {
-    const points = Math.round((v - b) * 100);
-    return points ? { text: `${points > 0 ? "+" : "−"}${Math.abs(points)} pts`, ahead: points > 0 } : { text: "same rate", ahead: null };
-  }
-  if (!(v > 0 && b > 0)) return null;
-  const percent = Math.round(Math.abs(v / b - 1) * 100);
-  if (percent < 5) return { text: "about the same", ahead: null };
-  const words = VERSUS_WORDS[metric];
-  if (v < b) return b / v >= 2 ? { text: `${ratio(b / v)}× ${words.less}`, ahead: true, times: ratio(b / v) } : { text: `${percent}% ${words.less}`, ahead: true, percent };
-  return v / b >= 2 ? { text: `${ratio(v / b)}× ${words.times}`, ahead: false, times: ratio(v / b) } : { text: `${percent}% ${words.more}`, ahead: false, percent };
-}
-
-/** One metric's pink chip: the best open model on it against the closed comparison. */
-export interface Lead extends Versus {
-  /** The chip: "6.2× cheaper", "38% longer", "+10 pts", "About the same". */
-  chip: string;
-  /** The line under the chip: "DeepSeek V4.1 Flash 1017 vs Claude Opus 5.5 · solved 5 of 8 PRs vs 6", so a
-   *  lower cost from fewer solved PRs reads as the trade-off it is. */
-  note: string;
-  /** The model the chip is about, and the one it is measured against. */
-  model: Model;
-  vs: Model;
-  /** What each solved, as a sentence for the headline: "It solved 5 of 8 PRs and Claude Opus 5.5 solved 6." */
-  solved: string;
-}
-
-/**
  * The best open model on one metric against the closed comparison (the first closed model of
- * `models`). With no closed figure to measure against, or no open one, the best model shown against
- * the runner-up. A tie on the figure as shown goes to the model that solved more, then to the
- * models' order. A model without the figure takes no part. Undefined when fewer than two have it.
+ * `models`), said from the side of whichever of the two is better: "Anthropic's Claude Opus 5.5 took
+ * 42% less time". Cost and time say how much less the better one's figure is, as a percent of the other's,
+ * so it never passes 100%; under 5% is about the same. With no closed figure to measure against, or no
+ * open one, the best two models shown. A tie on the figure as shown goes to the model that solved more,
+ * then to the models' order. A model without the figure takes no part. Undefined when fewer than two have it.
  */
 export function lead(models: Model[], S: Record<string, Summary | undefined>, metric: LeadMetric): Lead | undefined {
   const has = models.filter((m) => figure(S, m, metric) != null);
   if (has.length < 2) return undefined;
   const v = (m: Model) => shown(metric, figure(S, m, metric)!);
-  const solved = (m: Model) => S[m.key]!.tasks_solved;
-  const best = (ms: Model[]) => [...ms].sort((a, b) => (metric === "pass_at_1" ? v(b) - v(a) : v(a) - v(b)) || solved(b) - solved(a));
+  const higher = metric === "pass_at_1";
+  const best = (ms: Model[]) => [...ms].sort((a, b) => (higher ? v(b) - v(a) : v(a) - v(b)) || S[b.key]!.tasks_solved - S[a.key]!.tasks_solved);
   const closed = models.find((m) => !isOpen(m));
   const opens = has.filter(isOpen);
-  const [model, vs] = closed && has.includes(closed) && opens.length ? [best(opens)[0], closed] : best(has);
-  const said = versus(metric, figure(S, model, metric), figure(S, vs, metric))!;
+  const [one, other] = closed && has.includes(closed) && opens.length ? [best(opens)[0], closed] : best(has);
+  const [hi, lo] = [Math.max(v(one), v(other)), Math.min(v(one), v(other))];
+  const gap = higher ? Math.round((hi - lo) * 100) : Math.min(99, Math.round((1 - lo / hi) * 100));
+  const tie = higher ? gap === 0 : gap < 5;
+  const [model, vs] = !tie && (higher ? v(other) > v(one) : v(other) < v(one)) ? [other, one] : [one, other];
+  const words = LEAD_WORDS[metric];
   const a = S[model.key]!, b = S[vs.key]!;
   const same = a.tasks_solved === b.tasks_solved && a.tasks === b.tasks;
-  const of = `${a.tasks_solved} of ${plural(a.tasks, "PR")}`, theirs = `${b.tasks_solved}${b.tasks === a.tasks ? "" : ` of ${b.tasks}`}`;
+  const n = (k: number) => k || "none";
+  const of = `${n(a.tasks_solved)} of ${plural(a.tasks, "PR")}`, theirs = `${n(b.tasks_solved)}${b.tasks === a.tasks ? "" : ` of ${b.tasks}`}`;
+  const each = `${tie ? model.label : "It"} solved ${of} and ${vs.label} solved ${theirs}.`;
+  const many = models.length > 2;
+  // A third model on the page leaves the chip's other side to say; a tie names both, unless what each solved does.
+  const against = !many ? "" : !tie ? `Compared with ${vs.label}.` : same || higher ? `${model.label} and ${vs.label}.` : "";
   return {
-    ...said, chip: cap(said.text), model, vs,
-    note: `${model.label} vs ${vs.label} · ${same ? `both solved ${of}` : `solved ${of} vs ${theirs}`}`,
-    solved: same ? `Both solved ${of}.` : `${said.ahead != null ? "It" : model.label} solved ${of} and ${vs.label} solved ${theirs}.`,
+    chip: tie ? words.tie : `${whose(model)} ${words.says(gap)}`,
+    text: tie ? "about the same" : words.text(gap),
+    tie, gap, model, vs,
+    note: [against, same || higher ? "" : each].filter(Boolean).join(" "),
+    solved: same ? `Both solved ${of}.` : each,
   };
 }
 
@@ -191,19 +180,12 @@ function verdict(open: Model, closed: Model, p: Paired, cost: Lead | undefined, 
   return cost ? { head, cost: costLine(cost, [open, closed], many) } : { head };
 }
 
-/** What the chip's model pays per solved task against the other, after its name: "is 6.2× cheaper per
- *  solved task than Claude Opus 5.5", "costs 5% more per solved task than …", "costs 2.1× as much per solved task as …". */
-function costs(c: Lead): string {
-  return c.ahead ? `is ${c.text} per solved task than ${c.vs.label}`
-    : c.times ? `costs ${c.times}× as much per solved task as ${c.vs.label}`
-    : `costs ${c.percent}% more per solved task than ${c.vs.label}`;
-}
-
-/** The headline's cost line, the same comparison as the cost chip: the open model that costs least per
- *  solved task against the closed one, with what each solved when the headline is about other models. */
+/** The headline's cost line, the same comparison as the cost chip, from the side of the cheaper model:
+ *  "DeepSeek V4.1 Flash is 71% cheaper per solved task than Claude Opus 5.5.", with what each solved when
+ *  the headline is about other models. */
 function costLine(c: Lead, pair: Model[], many: boolean): string {
   const inPair = [c.model, c.vs].every((m) => pair.some((x) => x.key === m.key));
-  const line = c.ahead != null ? `${c.model.label} ${costs(c)}.`
+  const line = !c.tie ? `${c.model.label} is ${c.text} per solved task than ${c.vs.label}.`
     : inPair && !many ? "Both cost about the same per solved task."
     : `${c.model.label} and ${c.vs.label} cost about the same per solved task.`;
   return inPair ? line : `${line} ${c.solved}`;
@@ -245,11 +227,11 @@ export function takeaway(models: Model[], S: Record<string, Summary | undefined>
 
   // The cost joins the sentence when it compares the same two models; another model's is its own sentence.
   const cost = leads.cost;
-  const same = cost && cost.model.key === open.key && cost.vs.key === closed.key;
+  const same = cost && [cost.model.key, cost.vs.key].sort().join() === [open.key, closed.key].sort().join();
   const tail = !cost || !same ? ""
-    : cost.ahead == null ? " at about the same cost per solved task"
-    : cost.ahead ? ` and is ${cost.text} per solved task`
-    : `, but costs ${cost.times ? `${cost.times}× as much` : `${cost.percent}% more`} per solved task`;
+    : cost.tie ? " at about the same cost per solved task"
+    : cost.model.key === open.key ? ` and is ${cost.text} per solved task`
+    : `, but ${closed.label} is ${cost.text} per solved task`;
   const after = cost && !same ? ` ${costLine(cost, [open, closed], many)}` : "";
 
   const pairs = report ? paired(report, open, closed) : undefined;
