@@ -99,7 +99,7 @@ KEEP_RELEASES = 3  # besides the live one and any a process still runs from
 KEEP_SMOKE_RUNS = 6  # the smoke runs of the last three deploys stay on the volume, with their logs
 # The smoke test: one real attempt end to end, on the quick sample's largest task with the cheapest default
 # model, graded by the default judges. A release must pass it before people get it and again once they have.
-SMOKE_MODEL = "deepseek-v4.1-flash-1017-fast"
+SMOKE_MODEL = "deepseek-v4.1-flash"
 # The agent stops after this many seconds, as at any time limit: its change so far gets the hidden tests and the
 # judges. Left to finish, it ran PostHog's tests and type checks for 21 minutes.
 SMOKE_AGENT_SECONDS = 360

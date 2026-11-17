@@ -628,6 +628,9 @@ class App:
         run = self.find(run_id, user)
         if not run or not run["resumable"]:
             return {"error": "That run can't be resumed."}
+        if gone := [m["label"] for m in run["models"] if m["key"] in pipeline.RETIRED]:
+            return {"error": f"{' and '.join(gone)} {'is' if len(gone) == 1 else 'are'} no longer offered, so this run "
+                             "can't be resumed. Run again starts it over with the models that replaced them."}
         state = self.state(user=user)
         if blocked := state["blocked"] or self.taken(self.repos_of(self.jobs_dir / run_id), run_id):
             return {"error": blocked}
@@ -825,8 +828,8 @@ def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | Non
 
 
 def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[str, dict]:
-    """A model with no runs yet (a Fast variant: the same weights on their own capacity) takes the cost and time per
-    attempt of the first of its `estimate_from` models that has them, the cost scaled by the two models' output price."""
+    """A model with no runs yet takes the cost and time per attempt of the first of its `estimate_from` models that
+    has them, the cost scaled by the two models' output price."""
     for key, m in catalog.items():
         if key in found:
             continue
@@ -884,7 +887,8 @@ def again(meta: dict) -> dict | None:
     """What Run again puts back in the form: the run's pull requests (the ones its check kept, so a
     repository's latest merges stay the same PRs), its models and its commands."""
     request = meta.get("request") or {}
-    models = [m["key"] for m in meta.get("models") or []]
+    # A model no longer offered comes back as the one that replaced it, which the form shows before Start.
+    models = list(dict.fromkeys(pipeline.RETIRED.get(m["key"], m["key"]) for m in meta.get("models") or []))
     if request.get("quick"):
         return {"quick": True, "models": models}
     pulls: dict[str, list[int]] = {}

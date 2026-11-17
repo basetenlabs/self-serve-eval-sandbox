@@ -4,11 +4,11 @@ import { Chevron } from "@/components/brand/icons";
 import { dur, pct, plural, usd } from "@/lib/format";
 import { isOpen, type Swatch } from "@/lib/models";
 import { Count, Scramble } from "@/lib/motion";
-import { type Paired, solvedBy, type Takeaway, wilson } from "@/lib/stats";
+import { type Lead, type Paired, solvedBy, type Takeaway, wilson } from "@/lib/stats";
 import type { Model, Summary, Task, Trial } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: string; units: string; format: (x: number | null) => string; delta?: string; max?: number };
+type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: string; units: string; format: (x: number | null) => string; delta?: Lead; max?: number };
 
 // The brand's head-to-head: Baseten's side is Green, the comparison Blue. Each model keeps the colour
 // it has in the table and the chart under this, so a second open model is Dark Green, not Green again.
@@ -20,32 +20,31 @@ type Side = { m: Model; fill: string; ink: string };
  * Every model of the run, Baseten's open models above the closed comparison, best first. First who
  * solved which of the same PRs, then one row per metric in the brand's head-to-head form: the metric
  * and its pink delta chip on the left, one bar per model on the right, scaled within the metric.
- * The delta chip is the headline's comparison: the open model it names against the closed one.
+ * The chip names the better of the best open model and the closed one, who serves it and by how much
+ * ("Baseten's DeepSeek V4.1 Flash is 71% cheaper"); the line under it says what the chip leaves out.
  */
 export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onOpen, sample }: {
   t: Takeaway; S: Record<string, Summary>; ranked: Model[]; colors: Record<string, Swatch>; trials: Trial[];
   judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
-  if (!t.open || !t.closed) return null;
   const grid = !!t.pairs?.n;
   const scored = ranked.filter((m) => S[m.key]?.valid);
+  if (scored.length < 2) return null;
   const sides: Side[] = [...scored.filter(isOpen), ...scored.filter((m) => !isOpen(m))]
     .map((m) => ({ m, fill: colors[m.key]?.fill ?? (isOpen(m) ? GREEN : BLUE), ink: colors[m.key]?.ink ?? BLACK }));
   const many = sides.length > 2;
-  // With more than two models the chip says which two it measures.
-  const pair = many ? `${t.open.label} vs ${t.closed.label}` : null;
   const fills = (open: boolean) => [...new Set(sides.filter((s) => isOpen(s.m) === open).map((s) => s.fill))];
   const metrics: Metric[] = [
-    ...(grid ? [] : [{ key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x: number | null) => pct(x), delta: t.solve?.text, max: 1 } as Metric]),
-    { key: "cost_per_solved", name: "Cost per solved task", units: "USD · lower is better", format: usd, delta: t.cost?.text },
-    { key: "median_seconds", name: "Time per task", units: "Median per attempt · lower is better", format: dur, delta: t.time?.text },
+    ...(grid ? [] : [{ key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x: number | null) => pct(x), delta: t.solve, max: 1 } as Metric]),
+    { key: "cost_per_solved", name: "Cost per solved task", units: "USD · lower is better", format: usd, delta: t.cost },
+    { key: "median_seconds", name: "Time per task", units: "Median per attempt · lower is better", format: dur, delta: t.time },
   ];
   return (
     <Column
       heading={many ? "Side by side" : "Head to head"}
       aside={
         <span className="label-mono flex items-center gap-4 text-muted-foreground">
-          {([["Open, on Baseten", fills(true)], ["Closed", fills(false)]] as const).map(([name, chips]) => (
+          {([["Open, on Baseten", fills(true)], ["Closed", fills(false)]] as const).filter(([, chips]) => chips.length).map(([name, chips]) => (
             <span key={name} className="inline-flex items-center gap-2">
               <span aria-hidden className="inline-flex">{chips.map((fill) => <span key={fill} className="size-2.5" style={{ background: fill }} />)}</span>
               {name}
@@ -64,8 +63,9 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
               <div>
                 <h3 className="text-[20px] leading-7 font-normal">{metric.name}</h3>
                 <div className="label-mono mt-0.5 text-muted-foreground">{metric.units}</div>
-                {metric.delta && <DeltaChip className="mt-3">{metric.delta}</DeltaChip>}
-                {metric.delta && pair && <div className="label-xs mt-2 max-w-[30ch] leading-[1.5] text-muted-foreground">{pair}</div>}
+                {/* A full statement, so it wraps inside the column rather than run under the bars. */}
+                {metric.delta && <DeltaChip className="mt-3 max-w-full whitespace-normal text-balance">{metric.delta.chip}</DeltaChip>}
+                {metric.delta?.note && <p className="mt-2 max-w-[34ch] text-[14px] leading-5 text-muted-foreground">{metric.delta.note}</p>}
               </div>
               <div className="grid grid-cols-1 items-center gap-x-4 gap-y-1 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:gap-y-0">
                 {sides.map((s, i) => {
@@ -77,7 +77,9 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
                       <div className={cn("label-mono truncate text-foreground sm:text-right", i > 0 && "max-sm:mt-2")} title={s.m.label}>{s.m.label}</div>
                       <div className="relative h-10 bg-surface">
                         {v == null ? (
-                          <div className="placeholder-cell flex h-full items-center px-3 label-mono text-muted-foreground">Not measured</div>
+                          <div className="placeholder-cell flex h-full items-center px-3 label-mono text-muted-foreground">
+                            {metric.key === "cost_per_solved" && S[s.m.key]?.solved === 0 ? "Solved none" : "Not measured"}
+                          </div>
                         ) : (
                           <div className="relative h-full origin-left animate-grow" style={{ width: `${w}%`, background: s.fill, animationDelay: `${i * 80}ms` }}>
                             <span className={cn("num absolute top-1/2 -translate-y-1/2 font-mono text-[12px] whitespace-nowrap", inside ? "right-3" : "left-full ml-2 text-foreground")}

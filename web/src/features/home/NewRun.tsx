@@ -25,7 +25,7 @@ type Pick = "latest" | "choose";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 type Commands = { setup: string; test: string };
 const LIMITS = [5, 10, 20, 40];
-const MODELS_KEY = "pr-eval-models-2"; // a new name when the default models change, so everyone starts on them once
+const MODELS_KEY = "pr-eval-models-3"; // a new name when the default models change, so everyone starts on them once
 const QUICK_MINUTES = 35; // every quick-sample attempt starts at once; the slowest attempt sets the end
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 

@@ -63,6 +63,26 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3"])
         self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3")
 
+    def test_closed_models_name_their_maker(self):
+        # The report says who serves each model it compares: Baseten for an open one, a closed one's maker.
+        models, _ = config.load()
+        self.assertEqual(models["claude-opus"].maker, "Anthropic")
+        for model in models.values():
+            if model.kind == "closed":
+                self.assertTrue(model.maker, f"{model.key} names no maker")
+
+    def test_new_runs_offer_the_standard_glm_and_deepseek_not_their_fast_variants(self):
+        models, _ = config.load()
+        self.assertEqual(pipeline.DEFAULT_MODELS, ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"])
+        self.assertTrue(set(pipeline.DEFAULT_MODELS) <= set(models))
+        self.assertEqual(models["glm-5.3"].model, "zai-org/GLM-5.3")
+        self.assertEqual(models["deepseek-v4.1-flash"].model, "deepseek-ai/DeepSeek-V4.1-Flash-1017")
+        self.assertEqual(models["deepseek-v4.1-flash"].label, "DeepSeek V4.1 Flash 1017")
+        self.assertEqual([m.key for m in models.values() if "fast" in m.key.lower() or "fast" in m.model.lower()], [])
+        for old, new in pipeline.RETIRED.items():
+            self.assertNotIn(old, models)
+            self.assertIn(new, models)
+
     def test_price_from_table(self):
         usage = {"zai-org/GLM-5.3": {"inputTokens": 1_000_000, "cacheReadInputTokens": 1_000_000, "outputTokens": 100_000}}
         self.assertAlmostEqual(baseten_model().price(usage), 1.40 + 0.14 + 0.44)
@@ -254,7 +274,7 @@ class StoppedRunTest(unittest.TestCase):
         self.assertAlmostEqual(agent["cost_usd"], (10 * 1.40 + 1000 * 0.14 + 700 * 4.40) / 1e6)
 
     def test_served_model_id_is_priced_as_the_configured_model(self):
-        # GLM-5.3 Fast answers as "glm-53-sgl-agg-fast"; the table prices "zai-org/GLM-5.3-Fast".
+        # A served deployment answered as "glm-53-sgl-agg-fast"; the table prices "zai-org/GLM-5.3".
         with tempfile.TemporaryDirectory() as d:
             path = self.write(d, [assistant("m1", model="glm-53-sgl-agg-fast", cache_creation_input_tokens=0,
                                             cache_creation={})])
@@ -741,6 +761,12 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.resumed_models(meta, ["glm-5.3", "muse-spark"]),
                          (["claude-opus", "glm-5.3", "muse-spark"], ["muse-spark"]))
 
+    def test_a_retired_model_is_refused_with_its_replacement_named(self):
+        with self.assertRaises(SystemExit) as refused:
+            pipeline.preflight(["claude-opus", "glm-5.3-fast", "deepseek-v4.1-flash-1017-fast"], "none")
+        self.assertEqual(str(refused.exception.code), "glm-5.3-fast is no longer offered: use glm-5.3; "
+                         "deepseek-v4.1-flash-1017-fast is no longer offered: use deepseek-v4.1-flash")
+
     def test_resume_keeps_the_runs_own_judge(self):
         self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "none")  # no judge key needed
         self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
@@ -1117,6 +1143,21 @@ class AppTest(unittest.TestCase):
         self.assertEqual(app.again(stopped)["pulls"], {"o/r": [5], "x/y": [2]})  # stopped while checking
         self.assertIsNone(app.again({"request": {"repos": ["o/r"]}, "models": models}))  # stopped before it found any
         self.assertIsNone(app.again({"tasks": [f"o__r-{n}" for n in range(1, app.MAX_LIMIT + 2)], "models": models}))
+
+    def test_run_again_puts_the_standard_model_in_place_of_a_retired_fast_one(self):
+        fast = [{"key": "claude-opus"}, {"key": "deepseek-v4.1-flash-1017-fast"}, {"key": "glm-5.3-fast"}, {"key": "glm-5.3"}]
+        self.assertEqual(app.again({"request": {"quick": True}, "models": fast}),
+                         {"quick": True, "models": ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]})
+
+    def test_a_run_with_a_retired_model_is_not_resumed(self):
+        page = app.App(Path("/nonexistent"))
+        run = {"resumable": True, "models": [{"key": "claude-opus", "label": "Claude Opus 5.5"},
+                                             {"key": "glm-5.3-fast", "label": "GLM-5.3 Fast"}]}
+        with mock.patch.object(page, "find", return_value=run), mock.patch.object(page, "spawn") as spawn:
+            answer = page._resume("r1")
+        self.assertEqual(answer, {"error": "GLM-5.3 Fast is no longer offered, so this run can't be resumed. "
+                                           "Run again starts it over with the models that replaced them."})
+        spawn.assert_not_called()
 
     def test_the_hosted_page_refuses_private_repositories(self):
         page = app.App(Path("/nonexistent"))
