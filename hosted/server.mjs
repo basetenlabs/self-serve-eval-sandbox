@@ -8,7 +8,7 @@
 // the admins (requests.mjs); without one it shows no button.
 import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { adminApi, seedAccess } from './access.mjs'
+import { accessHandlers, seedAccess } from './access.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests } from './requests.mjs'
 import { baseHeaders, createSiteServer, listen, loadConfig, proxySite, runMain, stopOnSignals } from '@blaxel/sign-in'
@@ -59,14 +59,16 @@ runMain(async () => {
   const app = proxySite(`http://127.0.0.1:${page}`, { websockets: false, ...config.proxy })
   // The access list lives on the volume beside the runs; admins change it from the page's Access tab.
   if (config.policy.file) await seedAccess(config.policy.file)
-  const api = config.policy.file ? adminApi({ file: config.policy.file }) : undefined
+  const access = config.policy.file && accessHandlers({ file: config.policy.file, secret: process.env.PR_EVAL_ACCESS_TOKEN })
+  delete process.env.PR_EVAL_ACCESS_TOKEN
   const key = process.env.PR_EVAL_MAIL_API_KEY
   delete process.env.PR_EVAL_MAIL_API_KEY
   const requestAccess = key && config.policy.file
     ? accessRequests({ file: config.policy.file, origin: config.origin, mailer: resendMailer({ key, from: process.env.PR_EVAL_MAIL_FROM }) })
     : undefined
-  const server = await createSiteServer({ config, app, api, requestAccess, renderLogin: page => renderLogin({ ...page, source: SOURCE }) })
+  const server = await createSiteServer({ config, app, api: access?.api, requestAccess, renderLogin: page => renderLogin({ ...page, source: SOURCE }) })
   servePublicAssets(server, await publicAssets(), baseHeaders({ https: config.origin.startsWith('https:') }))
+  access?.attach(server)
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
   if (process.env.BL_SANDBOX_API) keepAwake(process.env.BL_SANDBOX_API)

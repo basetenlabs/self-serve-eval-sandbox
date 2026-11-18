@@ -137,6 +137,7 @@ SECRETS = {
     "OPENAI_API_KEY": "pr-eval-host-openai-api-key",
 }
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
+ACCESS_TOKEN = ("PR_EVAL_ACCESS_TOKEN", "pr-eval-host-access-token")
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
 # Optional: the page's own public-only GitHub token. Without it, public repositories need a GitHub sign-in too.
 GITHUB_TOKEN = ("PR_EVAL_GITHUB_TOKEN", "pr-eval-host-github-token")
@@ -387,6 +388,9 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     print(f'Public repositories without a GitHub sign-in: {"on" if name in env else "off (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
         sign_in_env["PR_EVAL_ADMINS"] = admins
+    name, service = ACCESS_TOKEN
+    if token := keychain(item(name, service)) or os.environ.get(name):
+        sign_in_env[name] = token
     if key := mail_key():
         sign_in_env |= {MAIL_KEY[0]: key, "PR_EVAL_MAIL_FROM": MAIL_FROM}
     print(f'"Request access": {"on" if key else "off (no " + MAIL_KEY[1] + ")"}')

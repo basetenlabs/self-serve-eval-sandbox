@@ -16,11 +16,16 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   subdomain; public mail domains and wildcards are refused). The first start creates the file with
   the admins in `PR_EVAL_ADMINS` (comma-separated emails, set when deploying) and the domains
   baseten.co and blaxel.ai; `deploy.py` never overwrites it.
-  Admins change it on the page's **Access** tab, which only they see. The sign-in server answers
-  that tab (`access.mjs`): it checks the person is an admin in the file as it is now on every
-  request, checks each entry with the sign-in's own rules, never removes the last admin, writes the
-  file atomically and logs who changed what. The sign-in re-reads the file on every change, so
-  someone removed is signed out on their next request.
+  Signed-in staff at either internal domain can request access for an email or an exact domain from
+  **Access**. They give a reason and see the outcome for their own requests. Each person may submit
+  five requests per hour. Admins can revoke access and manage internal admins.
+- **Approval:** the sign-in server stores pending requests beside the lists in `data/access.json`.
+  The approval worker polls `GET /api/worker/access-requests` with a dedicated bearer token, then
+  posts `{id, status, decidedBy}` to the same path. The first decision wins. The sign-in server saves
+  the decision, approver, timestamp and any grant in one atomic replacement. Sign-in reads the new
+  list on the next request. The deploy gives only the sign-in process `PR_EVAL_ACCESS_TOKEN` from
+  the Mac Keychain item `pr-eval-host-access-token`. Without it, new submissions and worker access
+  are disabled. Slack credentials live only with the worker. Requests wait while the worker is offline.
 - **Keys:** the page's process gets the judges' and models' keys, and the Baseten key its runs
   create their sandboxes with, in its environment when it starts. They are never written to the
   volume, the image or this repository.
