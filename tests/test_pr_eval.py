@@ -1153,7 +1153,7 @@ class AppTest(unittest.TestCase):
         page = app.App(Path("/nonexistent"))
         run = {"resumable": True, "models": [{"key": "claude-opus", "label": "Claude Opus 5.5"},
                                              {"key": "glm-5.3-fast", "label": "GLM-5.3 Fast"}]}
-        with mock.patch.object(page, "find", return_value=run), mock.patch.object(page, "spawn") as spawn:
+        with mock.patch.object(page, "manageable_run", return_value=run), mock.patch.object(page, "spawn") as spawn:
             answer = page._resume("r1")
         self.assertEqual(answer, {"error": "GLM-5.3 Fast is no longer offered, so this run can't be resumed. "
                                            "Run again starts it over with the models that replaced them."})
@@ -1286,7 +1286,7 @@ class AppTest(unittest.TestCase):
         self.assertIsNone(page.token("a@x.co"))
         self.assertIn("isn't set up", page.github_device("a@x.co")["error"])  # locally: no client id, gh's login reads
 
-    def test_a_private_run_is_seen_only_by_who_started_it(self):
+    def test_a_guests_private_run_is_seen_only_by_who_started_it(self):
         with tempfile.TemporaryDirectory() as d:
             jobs = Path(d) / "jobs"
             for run_id in ("open", "mine"):
@@ -1300,13 +1300,13 @@ class AppTest(unittest.TestCase):
                 seen = {u: sorted(r["id"] for r in page.state(user=u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
             # Signed in: only their own runs; "open" has no owner recorded, so it is no one's. Locally: all but theirs.
             self.assertEqual(seen, {"a@x.co": ["mine"], "b@x.co": [], None: ["open"]})
-            self.assertIsNone(page.find("mine", "b@x.co"))
+            self.assertIsNone(page.manageable_run("mine", "b@x.co"))
             self.assertEqual(page.stop("mine", "b@x.co"), page.stop("nope", "b@x.co"))  # as if it weren't there
             (jobs / "mine" / "trials" / "t__m__1").mkdir(parents=True)
             self.assertNotIn("no trace", page.trace("mine", "t__m__1", "b@x.co")["error"])  # no such attempt, for them
             self.assertIn("no trace", page.trace("mine", "t__m__1", "a@x.co")["error"])  # there, not yet traced
 
-    def test_hosted_a_public_repository_run_is_only_its_starters(self):
+    def test_hosted_a_guests_public_repository_run_is_only_its_starters(self):
         import http.client
         with tempfile.TemporaryDirectory() as d:
             jobs = Path(d)
@@ -1315,8 +1315,8 @@ class AppTest(unittest.TestCase):
             page = app.App(jobs)
             seen = {u: sorted(r["id"] for r in self.hosted_state(page, u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
             self.assertEqual(seen, {"a@x.co": ["a-run"], "b@x.co": ["b-run"], None: ["a-run", "b-run"]})
-            self.assertIsNone(page.find("b-run", "a@x.co"))
-            self.assertEqual(page.find("a-run", "a@x.co")["id"], "a-run")
+            self.assertIsNone(page.manageable_run("b-run", "a@x.co"))
+            self.assertEqual(page.manageable_run("a-run", "a@x.co")["id"], "a-run")
             gone = page.stop("nope", "a@x.co")
             with mock.patch.object(app, "alive", return_value=True), mock.patch.object(app.os, "kill") as kill, \
                     mock.patch.object(page, "spawn") as spawn, \
@@ -1342,6 +1342,44 @@ class AppTest(unittest.TestCase):
                 self.assertEqual(get("/b-run/report.json", "b@x.co"), 200)
             finally:
                 server.shutdown()
+
+    def test_internal_run_sharing_is_read_only_and_guest_runs_stay_private(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d) / "jobs")
+            staff, teammate, guest = "one@baseten.co", "two@blaxel.ai", "guest@example.org"
+            for name, owner in [("first", staff), ("second", teammate), ("guest", guest), ("legacy", None)]:
+                self.add_run(page.jobs_dir, name, owner)
+            first = page.jobs_dir / "first"
+            (first / app.ACCESS).write_text(json.dumps({"owner": staff, "private": True}))
+            for who in (staff, teammate):
+                runs = {r["id"]: (r["owner"], r["read_only"]) for r in self.hosted_state(page, who)["runs"]}
+                self.assertEqual(runs, {"first": (staff, who != staff), "second": (teammate, who != teammate)})
+            for who in (guest, "other@example.org", "one@sub.baseten.co"):
+                runs = [r["id"] for r in self.hosted_state(page, who)["runs"]]
+                self.assertEqual(runs, ["guest"] if who == guest else [])
+            (first / "trials" / "t__m__1").mkdir(parents=True)
+            self.assertIn("no trace", page.trace("first", "t__m__1", teammate)["error"])
+            self.assertEqual(page.trace("first", "t__m__1", guest)["error"], "No such attempt.")
+            self.assertIsNone(page.manageable_run("first", teammate))
+            self.assertEqual(page.stop("first", teammate), page.stop("missing", teammate))
+            self.assertEqual(page.resume("first", teammate), page.resume("missing", teammate))
+
+            (first / "report.html").write_text("<html>Saved report</html>")
+            handler = type("H", (app.Handler,), {"app": page})
+            with app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                try:
+                    for who, expected in [(teammate, 200), (guest, 404)]:
+                        for report_file in ("report.json", "report.html"):
+                            conn = http.client.HTTPConnection(*server.server_address)
+                            try:
+                                conn.request("GET", f"/first/{report_file}", headers={app.USER_HEADER: who})
+                                self.assertEqual(conn.getresponse().status, expected)
+                            finally:
+                                conn.close()
+                finally:
+                    server.shutdown()
 
     def test_beausite_only_reaches_a_signed_in_person(self):
         import http.client
@@ -1391,7 +1429,7 @@ class AppTest(unittest.TestCase):
             self.assertEqual([r["id"] for r in a["runs"]], ["a-run"])
             self.assertNotIn("owner", a["runs"][0])
             self.assertFalse(self.hosted_state(page, None)["admin"])  # locally: no admins
-            self.assertEqual(page.find("b-run", "boss@x.co")["id"], "b-run")
+            self.assertEqual(page.manageable_run("b-run", "boss@x.co")["id"], "b-run")
             (jobs / "b-run" / "trials" / "t__m__1").mkdir(parents=True)
             self.assertNotEqual(page.trace("b-run", "t__m__1", "boss@x.co"), {"error": "No such attempt."})
             handler = type("H", (app.Handler,), {"app": page})

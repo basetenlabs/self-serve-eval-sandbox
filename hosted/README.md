@@ -48,10 +48,11 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   come back. Their token lives in the page's memory
   only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. In
   an organization, an owner installs the app, or approves the person's request to.
-- **Who sees a run:** only the person who started it, on a public repository too, and the admins,
-  who see every run, with who started it, and can open any. The page records the starter in
-  `access.json` in the run's folder, and hides a run with no owner recorded from everyone else. The
-  runs, their logs and the log lines naming who started or stopped one all stay on the volume.
+- **Who sees a run:** people signed in with a baseten.co or blaxel.ai address can open runs started
+  by anyone at either domain, including runs on private repositories. The run list names the starter.
+  Guests see only their own runs. Admins see every run, including older runs without a recorded owner.
+  Only the starter and admins can stop or resume a hosted run. The starter is recorded in the run's
+  `access.json` on the volume.
 - **Saved pull requests:** each person's stars, kept on the volume in `data/favorites.json`.
 - **Runs:** everything is on Baseten Sandboxes, in one team: the page's sandbox, and the trial
   sandboxes its runs create with the deploy's own key (`BASETEN_SANDBOX_API_KEY`, and
