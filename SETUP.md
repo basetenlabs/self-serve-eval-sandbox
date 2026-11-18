@@ -8,7 +8,7 @@ The finished setup runs the page at http://127.0.0.1:8765, where you pick merged
 
 ## What it costs and what it touches
 
-- **Model calls** go to Anthropic (the closed model, and one judge), Baseten Model APIs (the open models, and one judge) and OpenAI (one judge). The quick sample, 10 PostHog pull requests with two models, costs about $12 and takes about 35 minutes.
+- **Model calls** go to Anthropic (Claude models and one judge), Baseten Model APIs (the open models, and one judge) and OpenAI (GPT models and one judge). The quick sample, 10 PostHog pull requests with two models, costs about $12 and takes about 35 minutes.
 - **Compute** runs in Baseten Sandboxes, in the team of the Baseten key from step 4. Nothing runs in Docker on your machine.
 - **Your code**: repository clones stay on your machine, in `data/repos/`. Each attempt uploads the code from before the change to a sandbox. The README's "Where your code goes" section has the details.
 
@@ -50,7 +50,7 @@ Ask the person for these. Keep them in the environment of the shell that starts 
 | --- | --- | --- |
 | `BASETEN_API_KEY` | the sandboxes attempts run in, open models, and the Kimi K3 judge | Baseten: Settings > API keys. A personal key, or a team creator service account key |
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | Claude models, and the Claude Opus 5.5 judge | Anthropic Console, or `claude setup-token` (the person runs it) |
-| `OPENAI_API_KEY` | the GPT-6.1 Sol judge | OpenAI platform: API keys |
+| `OPENAI_API_KEY` | GPT models and the GPT-6.1 Sol judge | OpenAI platform: API keys |
 
 A model-only Baseten key can call models but can't create sandboxes. To keep one in `BASETEN_API_KEY`, put a key that can in `BASETEN_SANDBOX_API_KEY`. Set `BASETEN_TEAM_ID` to pin the team the sandboxes go in: a key that can't reach that team is then refused instead of running somewhere else. There is no workspace to make and no CLI to install.
 

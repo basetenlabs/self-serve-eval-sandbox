@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from eval_sandbox import app, meter, rundir, runner  # noqa: E402
+from eval_sandbox import app, config, meter, rundir, runner  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_pr_eval as base  # noqa: E402
 from test_pr_eval import anthropic_model, baseten_model  # noqa: E402
@@ -44,6 +44,10 @@ class FakeProvider(http.server.BaseHTTPRequestHandler):
                       {"type": "message_stop"}]
             payload = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
             kind = "text/event-stream"
+        elif self.path == "/v1/responses":
+            payload = json.dumps({"usage": {"input_tokens": 280_000, "output_tokens": 4000,
+                                            "input_tokens_details": {"cached_tokens": 200_000, "cache_write_tokens": 40_000}}}).encode()
+            kind = "application/json"
         else:
             payload = json.dumps({"choices": [], "usage": {"prompt_tokens": 2_000_000, "completion_tokens": 100_000,
                                                            "prompt_tokens_details": {"cached_tokens": 1_000_000}}}).encode()
@@ -67,8 +71,8 @@ class MeterTest(unittest.TestCase):
         self.server = meter.serve(self.jobs, 0, "127.0.0.1")
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         fake = f"http://127.0.0.1:{provider.server_address[1]}"
-        patches = [mock.patch.dict(meter.UPSTREAMS, {"anthropic": fake, "baseten": fake}),
-                   mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": REAL_KEY, "BASETEN_API_KEY": "baseten-real-key"}),
+        patches = [mock.patch.dict(meter.UPSTREAMS, {"anthropic": fake, "baseten": fake, "openai": fake}),
+                   mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": REAL_KEY, "BASETEN_API_KEY": "baseten-real-key", "OPENAI_API_KEY": "openai-test-key"}),
                    mock.patch.object(meter, "claude_credential", return_value={"ANTHROPIC_API_KEY": REAL_KEY})]
         for patch in patches:
             patch.start()
@@ -177,6 +181,21 @@ class MeterTest(unittest.TestCase):
         self.assertEqual((counts["inputTokens"], counts["outputTokens"]), (7, 1000))
         usage.feed(b'data: {"type": "message_delta", "usage": {"output_tokens": 20}}\n')
         self.assertTrue(usage.final)
+
+    def test_openai_ticket_only_buys_the_selected_models_standard_function_calls(self):
+        model = config.load()[0]["gpt-6.2-sol"]
+        token, _ = self.attempt("gpt", "me@example.org", model)
+        body = {"model": model.model, "store": False, "service_tier": "default", "input": "Hello"}
+        for edit in ({"model": "gpt-6.2-astra"}, {"model": "gpt-6.2-sol-other"}, {"service_tier": "priority"},
+                     {"tools": [{"type": "web_search"}]}, {"background": True}, {"store": True}):
+            self.assertEqual(self.call(token, "/openai/v1/responses", {**body, **edit})[0], 403)
+        self.assertFalse(FakeProvider.seen)
+        self.assertEqual(self.call(token, "/openai/v1/responses", body)[0], 200)
+        path, headers, _ = FakeProvider.seen[0]
+        self.assertEqual((path, headers["Authorization"]), ("/v1/responses", "Bearer openai-test-key"))
+        self.assertNotIn(meter.HEADER, headers)
+        [entry] = self.ledger("gpt")
+        self.assertAlmostEqual(entry["usd"], (40_000 * 4 + 200_000 * .20 + 40_000 * 5 + 4000 * 15) / 1e6)
 
     def test_the_caller_never_picks_the_host_the_key_goes_to(self):
         ticket, _ = self.attempt("mine", "a@x.co")
