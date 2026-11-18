@@ -104,7 +104,8 @@ export interface Run {
   resumable: boolean;
   /** On a private repository. */
   private?: boolean;
-  /** Who started it; sent only to admins, who see everyone's runs. */
+  read_only?: boolean;
+  /** The starter, shown to teammates and admins. */
   owner?: string | null;
   /** What Run again puts back in the form; null when it can't. */
   again?: Again | null;

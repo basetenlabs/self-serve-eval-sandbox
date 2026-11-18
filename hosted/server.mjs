@@ -6,9 +6,11 @@
 // /api/admin/access is answered here, not by the page: it edits who may sign in (access.mjs).
 // With a mail key (PR_EVAL_MAIL_API_KEY), the refused page offers "Request access", which emails
 // the admins (requests.mjs); without one it shows no button.
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adminApi, seedAccess } from './access.mjs'
+import { accessHandlers, seedAccess } from './access.mjs'
+import { visitorCounts } from './visitors.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests } from './requests.mjs'
 import { baseHeaders, createSiteServer, listen, loadConfig, proxySite, runMain, stopOnSignals } from '@blaxel/sign-in'
@@ -56,17 +58,27 @@ function keepAwake(sandboxApi) {
 runMain(async () => {
   const page = Number(process.env.PR_EVAL_PORT ?? 8765)
   const config = await loadConfig({ file: fileURLToPath(new URL('./site.config.mjs', import.meta.url)) })
-  const app = proxySite(`http://127.0.0.1:${page}`, { websockets: false, ...config.proxy })
+  const upstream = proxySite(`http://127.0.0.1:${page}`, { websockets: false, ...config.proxy })
   // The access list lives on the volume beside the runs; admins change it from the page's Access tab.
   if (config.policy.file) await seedAccess(config.policy.file)
-  const api = config.policy.file ? adminApi({ file: config.policy.file }) : undefined
+  await mkdir(config.stateDir, { recursive: true, mode: 0o700 })
+  const visitors = visitorCounts(join(config.stateDir, 'visitors.sqlite'))
+  const access = config.policy.file && accessHandlers({ file: config.policy.file, visitors, secret: process.env.PR_EVAL_ACCESS_TOKEN })
+  delete process.env.PR_EVAL_ACCESS_TOKEN
+  const app = async (req, res, ctx) => {
+    // createSiteServer calls the app only after verifying the session and checking its access.
+    visitors.record(ctx.session.user.email)
+    if (!access || await access.api(req, res, ctx) === false) await upstream(req, res, ctx)
+  }
   const key = process.env.PR_EVAL_MAIL_API_KEY
   delete process.env.PR_EVAL_MAIL_API_KEY
   const requestAccess = key && config.policy.file
     ? accessRequests({ file: config.policy.file, origin: config.origin, mailer: resendMailer({ key, from: process.env.PR_EVAL_MAIL_FROM }) })
     : undefined
-  const server = await createSiteServer({ config, app, api, requestAccess, renderLogin: page => renderLogin({ ...page, source: SOURCE }) })
+  const server = await createSiteServer({ config, app, requestAccess, renderLogin: page => renderLogin({ ...page, source: SOURCE }) })
+  server.once('close', () => visitors.close())
   servePublicAssets(server, await publicAssets(), baseHeaders({ https: config.origin.startsWith('https:') }))
+  access?.attach(server)
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
   if (process.env.BL_SANDBOX_API) keepAwake(process.env.BL_SANDBOX_API)

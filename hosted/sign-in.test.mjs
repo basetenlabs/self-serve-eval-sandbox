@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -5,8 +6,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPolicy, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
-import { adminApi, SEED, seedAccess } from './access.mjs'
+import { createPolicy, createSiteServer, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
+import { accessHandlers, SEED, seedAccess } from './access.mjs'
+import { visitorCounts } from './visitors.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests, inviteLink } from './requests.mjs'
 import config from './site.config.mjs'
@@ -21,20 +23,27 @@ const folder = t => {
 
 /** The admin API behind a plain HTTP server; the test names the signed-in person in a header. */
 async function serve(t, file) {
-  const api = adminApi({ file, log: quiet })
+  const visitors = visitorCounts(':memory:')
+  t.after(() => visitors.close())
+  const secret = randomBytes(32).toString('hex')
+  const access = accessHandlers({ file, secret, visitors, log: quiet })
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://x').pathname
-    if (await api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
+    if (await access.api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
   })
+  access.attach(server)
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(() => server.close())
-  const base = `http://127.0.0.1:${server.address().port}/api/admin/access`
+  const base = `http://127.0.0.1:${server.address().port}`
+  const call = async (path, headers, body) => {
+    const r = await fetch(base + path, { method: body ? 'POST' : 'GET', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    return { status: r.status, body: await r.json() }
+  }
   return {
-    get: async email => { const r = await fetch(base, { headers: { 'x-test-email': email } }); return { status: r.status, body: await r.json() } },
-    post: async (email, body) => {
-      const r = await fetch(base, { method: 'POST', headers: { 'x-test-email': email, 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      return { status: r.status, body: await r.json() }
-    },
+    get: email => call('/api/admin/access', { 'x-test-email': email }),
+    post: (email, body) => call('/api/admin/access', { 'x-test-email': email }, body),
+    request: (email, body) => call('/api/access-requests', { 'x-test-email': email }, body),
+    machine: (body, bearer = secret) => call('/api/worker/access-requests', { authorization: 'Bearer ' + bearer }, body),
   }
 }
 
@@ -82,28 +91,65 @@ test('who may sign in comes only from the access file, which starts with the see
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins[0], 'a@baseten.co')
 })
 
-test('an invited outside email gets in and an uninvited one does not, live from the file an admin edits', async t => {
+test('approval admits an outside email or domain and denial keeps access closed', async t => {
   const file = join(folder(t), 'access.json')
   await seedAccess(file, quiet, ADMINS)
   const policy = createPolicy({ file, log: quiet })
   const api = await serve(t, file)
   assert.equal(policy.check('lead@baseten.co'), 'allowed')
   assert.equal(policy.check('someone@blaxel.ai'), 'allowed')
-  assert.equal(policy.check('guest@partner.io'), 'refused')
+  assert.equal(policy.check('guest@example.org'), 'refused')
 
-  const added = await api.post('lead@baseten.co', { list: 'emails', value: ' Guest@Partner.io ' })
-  assert.equal(added.status, 200)
-  assert.deepEqual(added.body.emails, ['guest@partner.io'])
-  assert.equal(policy.check('guest@partner.io'), 'allowed')
-  assert.equal(policy.check('other@partner.io'), 'refused')
-
-  assert.equal((await api.post('lead@baseten.co', { list: 'domains', value: '@partner.io' })).status, 200)
-  assert.equal(policy.check('other@partner.io'), 'allowed')
-  assert.equal((await api.post('lead@blaxel.ai', { list: 'domains', value: 'partner.io', remove: true })).status, 200)
-  assert.equal((await api.post('lead@blaxel.ai', { list: 'emails', value: 'guest@partner.io', remove: true })).status, 200)
-  assert.equal(policy.check('guest@partner.io'), 'refused')
-  assert.equal(policy.check('other@partner.io'), 'refused')
+  assert.deepEqual((await api.get('lead@baseten.co')).body.visitors.counts, { 'baseten.co': 0, 'blaxel.ai': 0 })
+  const who = 'staff@baseten.co'
+  const ask = target => api.request(who, { target, reason: 'Review the eval', requestedBy: 'other@blaxel.ai', status: 'approved' })
+  const decide = (id, status) => api.machine({ id, status, decidedBy: 'U1234' })
+  const { body: email } = await ask(' Guest@Example.org ')
+  assert.equal(email.status, 'pending')
+  assert.equal(email.requestedBy, who)
+  assert.equal((await ask('guest@example.org')).status, 409)
+  assert.equal(policy.check(email.target), 'refused')
+  assert.equal((await api.request('other@blaxel.ai')).body.requests.length, 0)
+  assert.equal((await api.machine(undefined, '')).status, 401)
+  assert.equal((await api.machine(undefined, 'wrong')).status, 401)
+  assert.equal((await api.machine()).body.requests[0].id, email.id)
+  assert.equal((await decide(email.id, 'approved')).body.status, 'approved')
+  assert.equal(policy.check('guest@example.org'), 'allowed')
+  assert.equal(policy.check('other@example.org'), 'refused')
+  const { body: domain } = await ask('@example.org')
+  const decisions = await Promise.all(['approved', 'denied'].map(status => decide(domain.id, status)))
+  assert.deepEqual(decisions[0].body, decisions[1].body)
+  if (decisions[0].body.status === 'denied') {
+    const retry = await ask('example.org')
+    await decide(retry.body.id, 'approved')
+  }
+  assert.equal(policy.check('other@example.org'), 'allowed')
+  const denied = (await ask('denied.example')).body
+  await decide(denied.id, 'denied')
+  const later = await decide(denied.id, 'approved')
+  assert.equal(later.body.status, 'denied')
+  assert.equal(policy.check('staff@denied.example'), 'refused')
+  const seen = (await api.request(who)).body.requests
+  assert.ok(seen.some(r => r.id === denied.id && r.decidedAt && r.decidedBy === 'U1234' && r.status === 'denied'))
+  assert.deepEqual((await api.machine()).body.requests, [])
+  assert.equal((await api.post('lead@blaxel.ai', { list: 'domains', value: 'example.org', remove: true })).status, 200)
+  assert.equal((await api.post('lead@blaxel.ai', { list: 'emails', value: 'guest@example.org', remove: true })).status, 200)
+  await decide(email.id, 'approved') // a replay cannot restore a later revocation
+  assert.equal(policy.check('guest@example.org'), 'refused')
+  assert.equal(policy.check('other@example.org'), 'refused')
   assert.deepEqual(readdirSync(join(file, '..')), ['access.json']) // written by rename: no temporary file left
+})
+
+test('domain counts survive restart and count distinct signed-in addresses at the exact domain', t => {
+  const file = join(folder(t), 'visitors.sqlite')
+  const first = visitorCounts(file)
+  for (const address of ['one@example.org', 'two@example.org', 'one@example.org', 'one@sub.example.org']) first.record(address)
+  const before = first.forDomains(['example.org', 'other.org'])
+  assert.deepEqual(before.counts, { 'example.org': 2, 'other.org': 0 })
+  first.close()
+  const reopened = visitorCounts(file)
+  t.after(() => reopened.close())
+  assert.deepEqual(reopened.forDomains(['example.org', 'other.org']), before)
 })
 
 test('only admins read or change the list, checked against the file on every request', async t => {
@@ -136,6 +182,51 @@ test('entries follow the sign-in rules, and the last admin stays', async t => {
   assert.equal(last.status, 400)
   assert.match(last.body.error, /last admin/)
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: ['only@baseten.co'], emails: [], domains: [] })
+})
+
+test('direct outside grants and requests by prospects are refused, and submissions stay bounded across restart', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  const api = await serve(t, file)
+  const staff = 'staff@blaxel.ai'
+  const body = { target: 'person@example.com', reason: 'Review the eval' }
+  for (const email of ['guest@example.com', 'user@baseten.co.example', 'missing']) {
+    assert.equal((await api.request(email, body)).status, 403)
+    assert.equal((await api.request(email)).status, 403)
+  }
+  for (const [list, value] of [['admins', 'guest@example.com'], ['emails', 'guest@example.com'], ['domains', 'example.com']]) {
+    assert.equal((await api.post('lead@baseten.co', { list, value })).status, 403)
+  }
+  assert.equal((await api.request(staff, { ...body, reason: '  ' })).status, 400)
+  assert.equal((await api.request(staff, { ...body, target: 'gmail.com' })).status, 400)
+  assert.deepEqual(await Promise.all(Array.from({ length: 5 }, (_, i) =>
+    api.request(staff, { ...body, target: `person${i}@example.com` }).then(r => r.status))), [200, 200, 200, 200, 200])
+  const restarted = await serve(t, file)
+  assert.equal((await restarted.request(staff, body)).status, 429)
+  assert.equal((await restarted.machine()).body.requests.length, 5)
+  assert.equal((await restarted.get('lead@baseten.co')).body.requests, undefined)
+})
+
+test('the worker endpoint is the only route ahead of browser sign-in', async t => {
+  const dir = folder(t)
+  const file = join(dir, 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  const env = { AUTH_STATE_DIR: dir, AUTH_ACCESS_FILE: file }
+  const config = await loadConfig({ env, file: fileURLToPath(new URL('./site.config.mjs', import.meta.url)), log: quiet })
+  const secret = randomBytes(32).toString('hex')
+  const access = accessHandlers({ file, secret })
+  const server = await createSiteServer({ config, env, api: access.api, log: quiet, app: () => assert.fail('upstream reached'),
+    fetcher: () => assert.fail('network reached') })
+  access.attach(server)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const headers = { accept: 'application/json', authorization: 'Bearer ' + secret }
+  for (const path of ['/api/access-requests', '/api/admin/access', '/api/worker/access-requests/extra']) {
+    assert.equal((await fetch(origin + path, { headers })).status, 401)
+  }
+  assert.equal((await fetch(origin + '/api/worker/access-requests')).status, 401)
+  assert.deepEqual(await (await fetch(origin + '/api/worker/access-requests', { headers })).json(), { requests: [], next: null })
 })
 
 test('an access request emails each current admin, and only them, a link that fills in the invite', async t => {
