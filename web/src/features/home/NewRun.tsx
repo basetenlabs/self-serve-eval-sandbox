@@ -207,7 +207,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")} tag="No sign-in"
               text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
-              text="Public or private. Paste pull request links, or pick from a repository's latest merges." />
+              text="Use merged pull requests from a public or private GitHub repository." />
           </RadioGroup.Root>
           {saveProblem && <div role="alert" className="bt-notice error mt-3">{saveProblem}</div>}
 
@@ -227,14 +227,19 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                 </div>
               )}
               <div className="bt-field gap-2">
-                <Label htmlFor="pulls">Repository or pull request links</Label>
+                <Label htmlFor="pulls">GitHub repository or pull request URLs</Label>
+                <p id="pulls-help" className="ev-small">
+                  Paste a repository URL to browse recent merges, or paste individual pull request URLs to use those PRs.
+                  {" "}Each PR must be merged and include a test change.
+                  {!privateRepos && " For a private repository, choose Private repos and use a GitHub account with read access."}
+                </p>
                 <textarea
                   id="pulls" value={text} onChange={(e) => setText(e.target.value)} rows={1} autoComplete="off" spellCheck={false}
-                  placeholder="owner/repo, or paste links to pull requests"
-                  aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-status"
+                  placeholder="https://github.com/owner/repo"
+                  aria-invalid={mode === "many" || !!lookupError} aria-describedby="pulls-help pulls-status"
                   className="bt-input ev-pulls"
                 />
-                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} signIn={state.github.sign_in} publicOpen={publicOpen} privateRepos={privateRepos}
+                <SourceStatus id="pulls-status" mode={mode} info={info} looking={looking} pasted={pasted} pastedRepos={pastedRepos} publicOpen={publicOpen}
                   onSignIn={signedOut ? signIn : undefined} />
               </div>
 
@@ -390,13 +395,13 @@ function SourceTile({ value, title, figure, text, tag }: { value: Source; title:
 }
 /** What the box understood: a repository and whether it's ready, or how many pull requests. A problem is a line in
  * Black after a Dark Pink square: the page never colours its words. */
-function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, publicOpen, privateRepos, onSignIn }: {
-  id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[]; signIn: boolean;
-  publicOpen: boolean; privateRepos: boolean; onSignIn?: () => void;
+function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, publicOpen, onSignIn }: {
+  id: string; mode: string; info: RepoInfo | null; looking: boolean; pasted: ReturnType<typeof parsePasted>; pastedRepos: string[];
+  publicOpen: boolean; onSignIn?: () => void;
 }) {
   const Bad = ({ children }: { children: React.ReactNode }) => <span className="inline-flex items-baseline gap-2"><span aria-hidden className="ev-dot bad" />{children}</span>;
   const Ok = () => <span aria-hidden className="ev-dot" />;
-  let body: React.ReactNode = <span className="text-muted-foreground">A repository takes its latest merged PRs, or the ones you choose.{privateRepos && !signIn ? " Private ones work when your GitHub login can read them." : ""}</span>;
+  let body: React.ReactNode = null;
   if (mode === "many") body = <Bad>One repository at a time, or paste links to pull requests.</Bad>;
   else if (mode === "pasted") {
     const n = pullCount(pasted.pulls);
@@ -435,7 +440,7 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos, signIn, pu
       </span>
     );
   } else if (pasted.unknown.length) body = <Bad>Not a repository or pull request: {pasted.unknown[0]}</Bad>;
-  return <div id={id} className="min-h-5 text-[14px]" aria-live="polite">{body}</div>;
+  return <div id={id} className="text-[14px] empty:hidden" aria-live="polite">{body}</div>;
 }
 
 function Segmented({ label, value, onChange, options }: {
