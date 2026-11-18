@@ -40,7 +40,7 @@ export function AccessPage({ invite }: { invite?: string }) {
       <h1 className="ev-title mt-6">Who can sign in</h1>
       <p className="mt-4 max-w-[66ch] text-[16px] leading-[1.4] text-body">
         A Blaxel account with a verified email gets in when it is on one of these lists. Changes apply at once:
-        someone you remove is signed out on their next request. Everyone sees only their own runs; admins see every run.
+        someone you remove is signed out on their next request. Baseten and Blaxel teammates see each other's runs. Guests see their own runs. Admins see all runs.
       </p>
       {invite && access && !access.emails.includes(invite.toLowerCase()) && !access.admins.includes(invite.toLowerCase()) && (
         <div role="status" className="bt-notice info mt-8 block max-w-[66ch]">
