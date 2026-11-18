@@ -116,7 +116,7 @@ function decide(data, { id, status, decidedBy }, now) {
 
 const digest = value => createHash('sha256').update(value).digest()
 
-export function accessHandlers({ file, secret, now = Date.now, log = console }) {
+export function accessHandlers({ file, secret, visitors, now = Date.now, log = console }) {
   const bearer = secret && digest('Bearer ' + secret)
   let queue = Promise.resolve()
   async function handle(req, res, work, afterSave) {
@@ -164,7 +164,7 @@ export function accessHandlers({ file, secret, now = Date.now, log = console }) 
           const entry = adminChange(data, body)
           audit = `[access] ${who} ${body.remove === true ? 'removed' : 'added'} ${entry} (${body.list})`
         }
-        return { ...listsOf(data), you: who }
+        return { ...listsOf(data), you: who, visitors: visitors.forDomains(data.domains) }
       }, () => { if (audit) log.info?.(audit) })
     },
     // The sole machine endpoint, before cookie sign-in. Every other path stays with the site server.

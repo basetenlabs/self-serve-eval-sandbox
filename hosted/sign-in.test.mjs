@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPolicy, createSiteServer, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
 import { accessHandlers, SEED, seedAccess } from './access.mjs'
+import { visitorCounts } from './visitors.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests, inviteLink } from './requests.mjs'
 import config from './site.config.mjs'
@@ -22,8 +23,10 @@ const folder = t => {
 
 /** The admin API behind a plain HTTP server; the test names the signed-in person in a header. */
 async function serve(t, file) {
+  const visitors = visitorCounts(':memory:')
+  t.after(() => visitors.close())
   const secret = randomBytes(32).toString('hex')
-  const access = accessHandlers({ file, secret, log: quiet })
+  const access = accessHandlers({ file, secret, visitors, log: quiet })
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://x').pathname
     if (await access.api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
@@ -88,7 +91,7 @@ test('who may sign in comes only from the access file, which starts with the see
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins[0], 'a@baseten.co')
 })
 
-test('an invited outside email gets in and an uninvited one does not, live from the file an admin edits', async t => {
+test('approval admits an outside email or domain and denial keeps access closed', async t => {
   const file = join(folder(t), 'access.json')
   await seedAccess(file, quiet, ADMINS)
   const policy = createPolicy({ file, log: quiet })
@@ -97,6 +100,7 @@ test('an invited outside email gets in and an uninvited one does not, live from 
   assert.equal(policy.check('someone@blaxel.ai'), 'allowed')
   assert.equal(policy.check('guest@example.org'), 'refused')
 
+  assert.deepEqual((await api.get('lead@baseten.co')).body.visitors.counts, { 'baseten.co': 0, 'blaxel.ai': 0 })
   const who = 'staff@baseten.co'
   const ask = target => api.request(who, { target, reason: 'Review the eval', requestedBy: 'other@blaxel.ai', status: 'approved' })
   const decide = (id, status) => api.machine({ id, status, decidedBy: 'U1234' })
@@ -134,6 +138,18 @@ test('an invited outside email gets in and an uninvited one does not, live from 
   assert.equal(policy.check('guest@example.org'), 'refused')
   assert.equal(policy.check('other@example.org'), 'refused')
   assert.deepEqual(readdirSync(join(file, '..')), ['access.json']) // written by rename: no temporary file left
+})
+
+test('domain counts survive restart and count distinct signed-in addresses at the exact domain', t => {
+  const file = join(folder(t), 'visitors.sqlite')
+  const first = visitorCounts(file)
+  for (const address of ['one@example.org', 'two@example.org', 'one@example.org', 'one@sub.example.org']) first.record(address)
+  const before = first.forDomains(['example.org', 'other.org'])
+  assert.deepEqual(before.counts, { 'example.org': 2, 'other.org': 0 })
+  first.close()
+  const reopened = visitorCounts(file)
+  t.after(() => reopened.close())
+  assert.deepEqual(reopened.forDomains(['example.org', 'other.org']), before)
 })
 
 test('only admins read or change the list, checked against the file on every request', async t => {

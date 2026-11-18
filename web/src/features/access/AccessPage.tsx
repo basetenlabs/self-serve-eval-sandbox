@@ -1,18 +1,19 @@
 import * as React from "react";
 import { Column, Empty, Surface, Tag } from "@/components/brand";
 import { Cross } from "@/components/brand/icons";
+import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { post } from "@/lib/api";
 import { RequestAccess } from "./RequestAccess";
-import { plural } from "@/lib/format";
+import { day, plural } from "@/lib/format";
 
 // Hosted only: the sign-in server in front of the page answers /api/admin/access, checks that you are
 // an admin on every request, checks each entry with the sign-in's rules and writes the list.
 const URL = "/api/admin/access";
 
 type ListName = "admins" | "emails" | "domains";
-type Access = { admins: string[]; emails: string[]; domains: string[]; you: string; error?: string };
+type Access = { admins: string[]; emails: string[]; domains: string[]; you: string; visitors: { since: string; counts: Record<string, number> }; error?: string };
 
 const LISTS: { key: ListName; title: string; text: string; placeholder: string }[] = [
   { key: "admins", title: "Admins", text: "Internal staff who manage access and can see every run. The last admin must stay.", placeholder: "name@company.com" },
@@ -45,6 +46,7 @@ export function AccessPage({ invite, admin, canRequest }: { invite?: string; adm
       </> : canRequest === false && <p className="ev-small mt-4">Only internal staff can request access.</p>}
       {admin && <div className="mt-12">
         <h2 className="h5 mb-4">Who can sign in</h2>
+        <p className="ev-small mb-4">Baseten and Blaxel teammates see each other's runs. Guests see their own runs. Admins see all runs.</p>
         {error ? <Empty title="Not available">{error}</Empty>
           : !access ? <div className="bt-skeleton h-64" aria-busy />
             : (
@@ -55,6 +57,17 @@ export function AccessPage({ invite, admin, canRequest }: { invite?: string; adm
       </div>}
     </Surface>
   );
+}
+
+function removalDescription(list: ListName, entry: string, access: Access) {
+  if (list === "domains") {
+    const people = access.visitors.counts[entry];
+    return <>Since {day(access.visitors.since)}, {plural(people, "person", "people")} from <strong className="break-all font-medium">@{entry}</strong> {people === 1 ? "has" : "have"} signed in. People who rely on this domain lose access on their next request.</>;
+  }
+  const effect = list === "emails"
+    ? "They lose access on their next request unless another entry allows them."
+    : entry === access.you ? "You will lose access to this admin page." : "They will lose access to this admin page.";
+  return <><strong className="break-all font-medium">{entry}</strong> will be removed from {list === "emails" ? "Invited people" : "Admins"}. {effect}</>;
 }
 
 function List({ list, access, onChange }: {
@@ -111,19 +124,23 @@ function List({ list, access, onChange }: {
                   {list.key === "domains" ? `@${entry}` : entry}
                   {entry === access.you && <span className="bt-badge ml-2">You</span>}
                 </span>
-                <button
-                  type="button"
-                  className="ev-icon-button disabled:cursor-default disabled:opacity-40"
-                  disabled={busy || last}
-                  title={last ? "The last admin can't be removed" : undefined}
-                  aria-label={`Remove ${entry}`}
-                  onClick={() => {
-                    if (entry === access.you && list.key === "admins" && !confirm("Remove yourself as an admin? You'll lose this page.")) return;
-                    void change(entry, true);
-                  }}
-                >
-                  <Cross />
-                </button>
+                <Confirm
+                  title={list.key === "domains" ? "Remove this domain?" : list.key === "admins" ? "Remove this admin?" : "Remove this person?"}
+                  description={removalDescription(list.key, entry, access)}
+                  action={list.key === "domains" ? "Remove domain" : list.key === "admins" ? "Remove admin" : "Remove person"}
+                  onConfirm={() => { void change(entry, true); }}
+                  trigger={
+                    <button
+                      type="button"
+                      className="ev-icon-button disabled:cursor-default disabled:opacity-40"
+                      disabled={busy || last}
+                      title={last ? "The last admin can't be removed" : undefined}
+                      aria-label={`Remove ${entry}`}
+                    >
+                      <Cross />
+                    </button>
+                  }
+                />
               </li>
             );
           })}
