@@ -8,7 +8,8 @@ import { useMotion } from "@/lib/motion";
 import type { AppState } from "@/lib/types";
 
 /** The page frame: the app bar on the texture, the page's White surfaces, and a one-line footer. */
-export function Shell({ state, route, go, offline, children }: {
+export function Shell({ state, route, go, offline, children, canRequest }: {
+  canRequest: boolean;
   state: AppState | null;
   route: Route;
   go: (r: Route) => void;
@@ -31,8 +32,8 @@ export function Shell({ state, route, go, offline, children }: {
           {route.page === "run" && (
             <a href={href({ page: "run", id: route.id })} aria-current="page" className="crumb">{run?.title ?? route.id}</a>
           )}
-          {state?.admin && (
-            <Tip content="Who can sign in: admins, invited people and whole domains">
+          {(state?.admin || canRequest) && (
+            <Tip content="Request access for an email or domain">
               <a href={href({ page: "access" })} aria-current={route.page === "access" ? "page" : undefined}>Access</a>
             </Tip>
           )}

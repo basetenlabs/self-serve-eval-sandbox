@@ -78,12 +78,16 @@ class SignInAcrossReleases(unittest.TestCase):
         # (releases/<id>/data/access.json) changed it on each deploy and signed everyone out.
         started = []
         fake = mock.Mock(processes=lambda sandbox: [], start=lambda sandbox, name, **kw: started.append((name, kw)))
-        with mock.patch.object(deploy, "CLIENT", fake), mock.patch.object(deploy, "serving"), \
+        with mock.patch.dict(os.environ, {"PR_EVAL_ACCESS_OWNER": "owner@example.org"}), \
+                mock.patch.object(deploy, "CLIENT", fake), mock.patch.object(deploy, "serving"), \
                 mock.patch.object(deploy, "mail_key", return_value=None), mock.patch.object(deploy, "keychain", return_value=None):
             for release in [f"{deploy.RELEASES}/20261111-080000-aaaaaaa", f"{deploy.RELEASES}/20261111-081500-d131a6e"]:
                 deploy.start("box", "https://eval.example", "https://meter.example", {}, release)
         files = [kw["env"]["AUTH_ACCESS_FILE"] for name, kw in started if name.startswith("pr-eval-sign-in")]
         self.assertEqual(files, ["/data/app/data/access.json"] * 2)
+        for name, kw in started:
+            owner = kw["env"].get("PR_EVAL_ACCESS_OWNER")
+            self.assertEqual(owner, "owner@example.org" if name.startswith("pr-eval-sign-in") else None)
 
 
 class SmokeVerdict(unittest.TestCase):

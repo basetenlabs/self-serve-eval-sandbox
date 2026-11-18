@@ -1,39 +1,29 @@
-// Who may sign in, kept in a file on the volume that admins edit from the page.
-//
-// The file is `{ "admins": [], "emails": [], "domains": [] }`. @blaxel/sign-in re-reads it whenever it
-// changes and checks every request against it, so a change here takes effect at once, removals too.
-// Only the sign-in server writes it, through the admin API below, and checks each entry with the
-// sign-in's own rules first.
-import { randomBytes } from 'node:crypto'
+// The sign-in server is the only writer. A decision and its grant share one atomic file replacement.
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { checkAccessList, checkDomain, checkEmail, normalizeDomain, normalizeEmail } from '@blaxel/sign-in'
 
-/** Who gets in when there is no file yet: everyone with a baseten.co or blaxel.ai email, and the admins in PR_EVAL_ADMINS. */
-export const SEED = Object.freeze({
-  emails: [],
-  domains: ['baseten.co', 'blaxel.ai'],
-})
-
-/** The first admins: PR_EVAL_ADMINS, comma-separated emails. */
+const INTERNAL_DOMAINS = ['baseten.co', 'blaxel.ai']
+export const SEED = Object.freeze({ emails: [], domains: INTERNAL_DOMAINS })
 export const seedAdmins = (env = process.env) => (env.PR_EVAL_ADMINS || '').split(',').map(email => email.trim()).filter(Boolean)
-
-const LISTS = ['admins', 'emails', 'domains']
+const internal = email => INTERNAL_DOMAINS.includes(normalizeEmail(email)?.split('@')[1])
+const listsOf = ({ admins, emails, domains }) => ({ admins, emails, domains })
 const MAX_BODY = 4096
+const HOUR = 3_600_000
+const REQUEST_PATH = '/api/access-requests'
+const MACHINE_PATH = '/api/worker/access-requests'
 
-/** Writes `lists` to `file` all at once: a temporary file renamed over the old one. */
-async function save(file, lists) {
+async function save(file, data) {
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   try {
-    await writeFile(tmp, JSON.stringify({ admins: lists.admins, emails: lists.emails, domains: lists.domains }, null, 2) + '\n', { mode: 0o600 })
+    await writeFile(tmp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
     await rename(tmp, file)
-  } catch (error) {
+  } finally {
     await rm(tmp, { force: true })
-    throw error
   }
 }
 
-/** Creates the file with SEED when it doesn't exist yet; never touches one that does. Returns whether it wrote. */
 export async function seedAccess(file, log = console, env = process.env) {
   try {
     await readFile(file)
@@ -43,109 +33,186 @@ export async function seedAccess(file, log = console, env = process.env) {
   }
   await mkdir(dirname(file), { recursive: true })
   const admins = seedAdmins(env)
-  await save(file, checkAccessList({ ...SEED, admins }))
-  log.info?.(`[access] created ${file}: ${admins.length ? admins.join(', ') : 'no'} admins, ${SEED.domains.join(', ')} as domains`)
-  if (!admins.length) log.warn?.('[access] set PR_EVAL_ADMINS to name the first admins; until then nobody can edit the list from the page')
+  await save(file, listsOf(checkAccessList({ ...SEED, admins })))
+  if (!admins.length) log.warn?.('[access] set PR_EVAL_ADMINS to name the first admins')
   return true
-}
-
-/** The file's lists, normalized, or undefined when it can't be read or parsed right now. */
-async function current(file) {
-  try {
-    const parsed = JSON.parse(await readFile(file, 'utf8'))
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
-    return checkAccessList(parsed)
-  } catch {
-    return undefined
-  }
 }
 
 const send = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
   res.end(JSON.stringify(body))
 }
+class Refused extends Error {
+  constructor(status, message) { super(message); this.status = status }
+}
+function refuse(status, message) { throw new Refused(status, message) }
 
 async function readBody(req) {
-  let size = 0
+  if (req.headers['content-type']?.split(';')[0] !== 'application/json') refuse(415, 'Send JSON.')
   const chunks = []
+  let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > MAX_BODY) return undefined
+    if (size > MAX_BODY) refuse(413, 'The request is too long.')
     chunks.push(chunk)
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { return undefined }
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (body && typeof body === 'object' && !Array.isArray(body)) return body
+  } catch { /* invalid JSON */ }
+  refuse(400, 'Send a JSON object.')
 }
 
-/**
- * The admin API runs only for a signed-in, admitted person, and
- * a POST has already passed the exact-origin check.
- *
- *   GET  /api/admin/access  -> { admins, emails, domains, you, visitors: { since, counts } }
- *   POST /api/admin/access  { list: "admins" | "emails" | "domains", value, remove?: true } -> the same
- *
- * Every request checks again that the person is an admin in the file as it is now (403 if not). Writes
- * go one at a time, so two admins editing at once can't undo each other's change.
- */
-export function adminApi({ file, visitors, log = console }) {
-  const view = (lists, you) => ({
-    admins: lists.admins, emails: lists.emails, domains: lists.domains, you,
-    visitors: visitors.forDomains(lists.domains),
-  })
-  let queue = Promise.resolve()
-  const oneAtATime = work => {
-    const next = queue.then(work, work)
-    queue = next.catch(() => {})
-    return next
+function checkedEntry(list, value) {
+  const checked = list === 'domains' ? checkDomain(value) : checkEmail(value)
+  if (checked.error) refuse(400, checked.error)
+  return checked.domain ?? checked.email
+}
+function adminChange(data, { list, value, remove }, who, canGrantDirectly, now) {
+  if (!['admins', 'emails', 'domains'].includes(list) || typeof value !== 'string') refuse(400, 'Say which list and entry.')
+  const entry = checkedEntry(list, value)
+  if (remove === true) {
+    if (!data[list].includes(entry)) refuse(400, 'That entry is not on the list.')
+    if (list === 'admins' && data.admins.length === 1) refuse(400, 'Add another admin before removing the last admin.')
+    data[list] = data[list].filter(e => e !== entry)
+  } else if (list === 'admins') {
+    if (!internal(entry)) refuse(403, 'Only internal staff can be admins.')
+    data.admins = [...new Set([...data.admins, entry])].sort()
+  } else {
+    if (!canGrantDirectly) refuse(403, 'Request access for an outside person or domain.')
+    if (data[list].includes(entry)) return
+    grantDirectly(data, list, entry, who, now)
   }
+  return entry
+}
 
-  return async (req, res, { path, session }) => {
-    if (path !== '/api/admin/access') return false
-    if (req.method !== 'GET' && req.method !== 'POST') return send(res, 405, { error: 'Use GET or POST.' })
-    const you = normalizeEmail(session?.user?.email)
-    const isAdmin = lists => !!you && lists.admins.includes(you)
+function alreadyAllowed(data, list, target) {
+  return data[list].includes(target) || (list === 'emails' && (data.admins.includes(target) || data.domains.includes(target.split('@')[1])))
+}
 
-    if (req.method === 'GET') {
-      const lists = await current(file)
-      if (!lists) return send(res, 503, { error: 'The access list can\'t be read right now. Try again in a moment.' })
-      if (!isAdmin(lists)) return send(res, 403, { error: 'Only admins can see who has access.' })
-      return send(res, 200, view(lists, you))
-    }
+function grantDirectly(data, list, entry, who, now) {
+  if (alreadyAllowed(data, list, entry)) refuse(409, 'That email or domain already has access.')
+  const pending = data.requests.filter(r => r.status === 'pending' && r.list === list && r.target === entry)
+  const at = new Date(now).toISOString()
+  if (!pending.length) {
+    const row = { id: randomUUID(), list, target: entry }
+    data.requests.push(row)
+    pending.push(row)
+  }
+  for (const row of pending) recordDecision(data, row, 'approved', who, 'direct', at)
+}
 
-    if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'Send JSON.' })
-    const body = await readBody(req)
-    return oneAtATime(async () => {
-      const lists = await current(file)
-      if (!lists) return send(res, 503, { error: 'The access list can\'t be read right now, so nothing was changed. Try again in a moment.' })
-      if (!isAdmin(lists)) return send(res, 403, { error: 'Only admins can change who has access.' })
-      if (!body || !LISTS.includes(body.list) || typeof body.value !== 'string') {
-        return send(res, 400, { error: 'Say which list (admins, emails or domains) and the entry.' })
-      }
-      const { list } = body
-      const next = { admins: [...lists.admins], emails: [...lists.emails], domains: [...lists.domains] }
-      let entry
-      if (body.remove) {
-        entry = list === 'domains' ? normalizeDomain(body.value) : normalizeEmail(body.value)
-        if (!entry || !next[list].includes(entry)) return send(res, 400, { error: `${String(body.value).slice(0, 254)} isn't on that list.` })
-        if (list === 'admins' && next.admins.length === 1) {
-          return send(res, 400, { error: 'This is the last admin. Add another admin before removing them.' })
+function submit(data, body, who, now) {
+  if (typeof body.target !== 'string' || !body.target.trim()) refuse(400, 'Enter an email or domain.')
+  const raw = body.target.trim()
+  const list = raw.includes('@') && !raw.startsWith('@') ? 'emails' : 'domains'
+  const target = checkedEntry(list, raw)
+  const reason = typeof body.reason === 'string' && body.reason.trim()
+  if (!reason || reason.length > 500) refuse(400, 'Enter a reason of up to 500 characters.')
+  if (alreadyAllowed(data, list, target)) refuse(409, 'That email or domain already has access.')
+  const mine = data.requests.filter(r => r.requestedBy === who)
+  if (mine.some(r => r.target === target && r.status === 'pending')) refuse(409, 'You already have a pending request for this entry.')
+  if (mine.filter(r => Date.parse(r.requestedAt) > now - HOUR).length >= 5) refuse(429, 'You can submit five requests per hour. Try again later.')
+  const request = { id: randomUUID(), list, target, reason, requestedBy: who, requestedAt: new Date(now).toISOString(), status: 'pending' }
+  data.requests.push(request)
+  return request
+}
+
+function recordDecision(data, row, status, decidedBy, decisionMethod, decidedAt) {
+  if (status === 'approved') {
+    const entry = checkedEntry(row.list, row.target)
+    if (!data[row.list].includes(entry)) data[row.list] = [...data[row.list], entry].sort()
+  }
+  Object.assign(row, { status, decidedBy, decisionMethod, decidedAt })
+}
+
+function decide(data, { id, status, decidedBy }, now) {
+  if (!['approved', 'denied'].includes(status) || typeof decidedBy !== 'string' || !/^U[A-Z0-9]{2,31}$/.test(decidedBy)) refuse(400, 'Invalid decision or approver.')
+  const row = data.requests.find(r => r.id === id)
+  if (!row) refuse(404, 'Unknown request.')
+  // A retry after a lost reply returns the authoritative outcome, even if a later click differs.
+  if (row.status === 'pending') {
+    recordDecision(data, row, status, decidedBy, 'worker', new Date(now).toISOString())
+  }
+  return row
+}
+
+const digest = value => createHash('sha256').update(value).digest()
+
+export function accessHandlers({ file, secret, visitors, ownerEmail, now = Date.now, log = console }) {
+  const owner = normalizeEmail(ownerEmail)
+  const bearer = secret && digest('Bearer ' + secret)
+  let queue = Promise.resolve()
+  async function handle(req, res, work, afterSave) {
+    try {
+      const body = req.method === 'POST' ? await readBody(req) : undefined
+      // Never wait for a client's body while holding the writer queue.
+      const next = queue.then(async () => {
+        const raw = JSON.parse(await readFile(file, 'utf8'))
+        const lists = checkAccessList(raw)
+        if (lists.problems.length || (raw.requests !== undefined && !Array.isArray(raw.requests))) throw new Error('Invalid access file')
+        const data = { ...listsOf(lists), requests: raw.requests ?? [] }
+        const result = work(data, body)
+        if (req.method === 'POST') {
+          await save(file, data)
+          afterSave?.()
         }
-        next[list] = next[list].filter(e => e !== entry)
-      } else {
-        const checked = list === 'domains' ? checkDomain(body.value) : checkEmail(body.value)
-        if (checked.error) return send(res, 400, { error: checked.error })
-        entry = checked.domain ?? checked.email
-        if (!next[list].includes(entry)) next[list].push(entry)
-      }
-      const saved = checkAccessList(next)
-      if (!saved.admins.length) return send(res, 400, { error: 'The list needs at least one admin.' })
-      try {
-        await save(file, saved)
-      } catch (error) {
-        log.error?.(`[access] could not write ${file}: ${error.message}`)
-        return send(res, 503, { error: 'The access list couldn\'t be saved. Try again in a moment.' })
-      }
-      log.info?.(`[access] ${you} ${body.remove ? 'removed' : 'added'} ${entry} ${body.remove ? 'from' : 'to'} ${list}`)
-      return send(res, 200, view(saved, you))
-    })
+        return result
+      })
+      queue = next.catch(() => {})
+      send(res, 200, await next)
+    } catch (error) {
+      if (!(error instanceof Refused)) log.error?.('[access] could not read or save the access file')
+      send(res, error.status ?? 503, { error: error instanceof Refused ? error.message : 'Access is unavailable. Try again in a moment.' })
+    }
+  }
+  return {
+    // Called by sign-in after verified identity, admission and the exact-origin check for writes.
+    async api(req, res, { path, session }) {
+      if (![REQUEST_PATH, '/api/admin/access'].includes(path)) return false
+      const who = normalizeEmail(session?.user?.email)
+      if (path === REQUEST_PATH && !internal(who)) return send(res, 403, { error: 'Only internal staff can request access.' })
+      if (path === REQUEST_PATH && req.method === 'HEAD') return send(res, 204)
+      if (!['GET', 'POST'].includes(req.method)) return send(res, 405, { error: 'Use GET or POST.' })
+      let audit
+      return handle(req, res, (data, body) => {
+        if (path === REQUEST_PATH) {
+          if (body) {
+            if (!bearer) refuse(503, 'Access requests are not set up yet.')
+            return submit(data, body, who, now())
+          }
+          const requests = data.requests.filter(r => r.requestedBy === who || (r.decisionMethod === 'direct' && r.decidedBy === who))
+          return { enabled: !!bearer, requests: requests.reverse() }
+        }
+        if (!who || !data.admins.includes(who)) refuse(403, 'Only admins can manage the access list.')
+        const canGrantDirectly = who === owner
+        if (body) {
+          const entry = adminChange(data, body, who, canGrantDirectly, now())
+          if (entry) {
+            const action = body.remove === true ? 'removed' : body.list === 'admins' ? 'added' : 'granted directly to'
+            audit = `[access] ${who} ${action} ${entry} (${body.list})`
+          }
+        }
+        return { ...listsOf(data), you: who, canGrantDirectly, visitors: visitors.forDomains(data.domains) }
+      }, () => { if (audit) log.info?.(audit) })
+    },
+    // The sole machine endpoint, before cookie sign-in. Every other path stays with the site server.
+    attach(server) {
+      const [site] = server.listeners('request')
+      server.removeListener('request', site)
+      server.on('request', (req, res) => {
+        const [path, query] = req.url.split('?')
+        if (path !== MACHINE_PATH) return site(req, res)
+        if (!bearer || !timingSafeEqual(bearer, digest(req.headers.authorization ?? ''))) return send(res, 401, { error: 'Unauthorized.' })
+        if (!['GET', 'POST'].includes(req.method)) return send(res, 405, { error: 'Use GET or POST.' })
+        return handle(req, res, (data, body) => {
+          if (body) return decide(data, body, now())
+          const after = new URLSearchParams(query).get('after') ?? ''
+          const pending = data.requests.filter(r => r.status === 'pending' && r.id > after).sort((a, b) => a.id < b.id ? -1 : 1)
+          const requests = pending.slice(0, 100)
+          return { requests, next: pending.length > requests.length ? requests.at(-1).id : null }
+        })
+      })
+    },
   }
 }

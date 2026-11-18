@@ -9,7 +9,7 @@
 import { mkdir, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adminApi, seedAccess } from './access.mjs'
+import { accessHandlers, seedAccess } from './access.mjs'
 import { visitorCounts } from './visitors.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests } from './requests.mjs'
@@ -63,11 +63,14 @@ runMain(async () => {
   if (config.policy.file) await seedAccess(config.policy.file)
   await mkdir(config.stateDir, { recursive: true, mode: 0o700 })
   const visitors = visitorCounts(join(config.stateDir, 'visitors.sqlite'))
-  const access = config.policy.file ? adminApi({ file: config.policy.file, visitors }) : undefined
+  const access = config.policy.file && accessHandlers({
+    file: config.policy.file, visitors, secret: process.env.PR_EVAL_ACCESS_TOKEN, ownerEmail: process.env.PR_EVAL_ACCESS_OWNER,
+  })
+  delete process.env.PR_EVAL_ACCESS_TOKEN
   const app = async (req, res, ctx) => {
     // createSiteServer calls the app only after verifying the session and checking its access.
     visitors.record(ctx.session.user.email)
-    if (!access || await access(req, res, ctx) === false) await upstream(req, res, ctx)
+    if (!access || await access.api(req, res, ctx) === false) await upstream(req, res, ctx)
   }
   const key = process.env.PR_EVAL_MAIL_API_KEY
   delete process.env.PR_EVAL_MAIL_API_KEY
@@ -77,6 +80,7 @@ runMain(async () => {
   const server = await createSiteServer({ config, app, requestAccess, renderLogin: page => renderLogin({ ...page, source: SOURCE }) })
   server.once('close', () => visitors.close())
   servePublicAssets(server, await publicAssets(), baseHeaders({ https: config.origin.startsWith('https:') }))
+  access?.attach(server)
   await listen(server, config, ` in front of 127.0.0.1:${page}`)
   stopOnSignals(server)
   if (process.env.BL_SANDBOX_API) keepAwake(process.env.BL_SANDBOX_API)
