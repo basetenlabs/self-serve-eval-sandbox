@@ -16,6 +16,36 @@ proxy = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(proxy)
 
 
+with mock.patch.dict("sys.modules", {"proxy": proxy}):
+    from eval_sandbox import openai_relay as responses
+
+
+class ResponsesTrial(unittest.TestCase):
+    def test_tool_round_trip_without_stored_responses(self):
+        model = "gpt-6.2-sol"
+        messages = [{"role": "user", "content": "Read the test"}]
+        body = {"model": "ignored", "messages": messages,
+                "tools": [{"name": "Read", "input_schema": {"type": "object"}}]}
+        req = responses.anthropic_to_responses(body, model, "high")
+        self.assertEqual((req["model"], req["reasoning"], req["store"]), (model, {"effort": "high"}, False))
+        self.assertEqual(req["tools"][0]["type"], "function")
+        response = {"id": "resp_a", "model": model, "status": "completed",
+                    "usage": {"input_tokens": 80, "input_tokens_details": {"cached_tokens": 40, "cache_write_tokens": 20},
+                              "output_tokens": 8},
+                    "output": [{"type": "reasoning", "summary": [], "encrypted_content": "fixture"},
+                               {"type": "function_call", "call_id": "call_a", "name": "Read", "arguments": '{"file":"test"}'}]}
+        msg = responses.response_to_anthropic(response)
+        self.assertEqual((msg["stop_reason"], msg["usage"]["input_tokens"]), ("tool_use", 20))
+        messages.extend([{"role": "assistant", "content": msg["content"]}, {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "call_a", "content": "Hello"}]}])
+        continued = responses.anthropic_to_responses(body, model, "high")["input"]
+        self.assertEqual([it.get("type") for it in continued[1:]], ["reasoning", "function_call", "function_call_output"])
+        self.assertEqual(continued[-1]["call_id"], "call_a")
+        self.assertIn(b"content_block_delta", proxy.render_anthropic_sse(msg))
+        with self.assertRaises(ValueError):
+            responses.response_to_anthropic({**response, "status": "failed"})
+
+
 class ReasoningGoesBack(unittest.TestCase):
     """DeepSeek reads prior steps' reasoning from `reasoning_content`; without it every step re-reasons."""
 

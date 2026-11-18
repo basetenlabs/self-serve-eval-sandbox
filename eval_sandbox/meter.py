@@ -29,17 +29,18 @@ import urllib.request
 from pathlib import Path
 
 from . import runtime
-from .config import BASETEN_URL, KEY_HEADERS, Model, claude_credential, placeholder
+from .config import API_KEYS, PROVIDER_URLS, KEY_HEADERS, Model, claude_credential, placeholder
 from .rundir import ACCESS, OVER_LIMIT, charge, read_json, write_json
 
 HEADER = "X-Pr-Eval-Meter"
 TICKETS = "meter"  # in a run's folder: one file per live ticket
-UPSTREAMS = {"anthropic": "https://api.anthropic.com", "baseten": BASETEN_URL.removesuffix("/v1")}
+UPSTREAMS = {name: url.removesuffix("/v1") for name, url in PROVIDER_URLS.items()}
 # What each provider's calls may do, and how the meter reads their usage. Free calls are forwarded
 # without a charge; anything else is refused, so nothing reaches a provider unpriced.
-PRICED = {"anthropic": {"/v1/messages": "anthropic"},
+PRICED = {"openai": {"/v1/responses": "responses"},
+          "anthropic": {"/v1/messages": "anthropic"},
           "baseten": {"/v1/messages": "anthropic", "/v1/chat/completions": "chat", "/v1/completions": "chat"}}
-FREE = {"anthropic": {"/v1/messages/count_tokens"}, "baseten": set()}
+FREE = {"anthropic": {"/v1/messages/count_tokens"}, "baseten": set(), "openai": set()}
 FREE_GET = re.compile(r"/v1/models(/[^/]+)*")
 UPSTREAM_TIMEOUT = 900
 # Request headers never forwarded: the sandbox's placeholder credential, the ticket, and hop-by-hop ones.
@@ -73,7 +74,7 @@ def admit(model: Model, trial_dir: Path, credential: str) -> tuple[dict, dict, P
 
 def base_url(meter_url: str, provider: str) -> str:
     """Where an agent of `provider` sends its calls: the provider's path on the meter."""
-    return f"{meter_url}/{provider}" + ("/v1" if provider == "baseten" else "")
+    return f"{meter_url}/{provider}" + ("/v1" if provider in API_KEYS else "")
 
 
 # ---------- the meter's side ----------
@@ -106,8 +107,10 @@ def valid_run_id(run_id: str) -> bool:
 
 def real_key(provider: str) -> tuple[str, str]:
     """(header, value) carrying the page's own key for `provider`."""
-    found = claude_credential() if provider == "anthropic" else (
-        {"BASETEN_API_KEY": os.environ["BASETEN_API_KEY"]} if os.environ.get("BASETEN_API_KEY") else {})
+    name = API_KEYS.get(provider)
+    found = claude_credential() if provider == "anthropic" else {}
+    if name and os.environ.get(name):
+        found = {name: os.environ[name]}
     if not found:
         raise Refused(503, f"The meter has no {provider} key.")
     (name, value), = found.items()
@@ -117,6 +120,12 @@ def real_key(provider: str) -> tuple[str, str]:
 
 def usage_counts(shape: str, usage: dict) -> dict:
     """A provider's usage object as Model.price reads it (Claude Code's modelUsage counts)."""
+    if shape == "responses":
+        details = usage.get("input_tokens_details") or {}
+        cached, written = details.get("cached_tokens", 0), details.get("cache_write_tokens", 0)
+        return {"inputTokens": max(0, usage.get("input_tokens", 0) - cached - written),
+                "cacheReadInputTokens": cached, "cacheCreationInputTokens": written,
+                "outputTokens": usage.get("output_tokens", 0)}
     if shape == "anthropic":
         return {"inputTokens": int(usage.get("input_tokens") or 0),
                 "cacheReadInputTokens": int(usage.get("cache_read_input_tokens") or 0),
@@ -215,6 +224,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                               prices=entry.get("prices") or {})
                 if rates.rate_for(model_id) is None:
                     raise Refused(403, f"The meter has no price for {model_id}, so it doesn't forward the call.")
+                if shape == "responses":
+                    # The ticket pays only for inference with the standard rates in the catalog.
+                    allowed = {"model", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls",
+                               "include", "reasoning", "max_output_tokens", "store", "service_tier"}
+                    if (model_id not in rates.prices or body.keys() - allowed or body.get("store") is not False
+                            or body.get("service_tier") != "default" or not isinstance(body.get("tools", []), list)
+                            or any(not isinstance(t, dict) or t.get("type") != "function" for t in body.get("tools", []))):
+                        raise Refused(403, "This ticket covers standard Responses calls with local function tools only.")
                 if shape == "chat" and body.get("stream"):
                     # The only way a streamed Chat Completions answer reports its tokens.
                     body["stream_options"] = {**(body.get("stream_options") or {}), "include_usage": True}
@@ -249,7 +266,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 counts = usage_counts(shape, usage.found)
                 if not usage.final:
                     counts = worst_case(counts if usage.found else {}, body, raw or b"")
-                charge(trial_dir, "call", model_id, rates.price({model_id: counts}))
+                charge(trial_dir, "call", model_id, rates.price_call(model_id, counts))
 
     def relay(self, upstream, usage: Usage) -> None:
         """Send the provider's answer on as it arrives, reading its usage on the way."""
