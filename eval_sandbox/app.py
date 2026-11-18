@@ -96,6 +96,25 @@ def quick_scope() -> str:
     return ",".join(sorted(r.lower() for r in tasks.sample(True)))
 
 
+def internal(email: str | None) -> bool:
+    if not isinstance(email, str):
+        return False
+    local, _, domain = email.partition("@")
+    return bool(local) and domain.lower() in {"baseten.co", "blaxel.ai"}
+
+
+def run_permission(access: dict, user: str | None, admin: bool) -> str | None:
+    """Teammates may read an internal run. Only its starter and admins may stop or resume it."""
+    if not user:  # Local mode has no accounts and may manage public runs.
+        return None if access.get("private") else "manage"
+    owner = access.get("owner")
+    if admin or owner == user:
+        return "manage"
+    if internal(user) and internal(owner):
+        return "view"
+    return None
+
+
 class App:
     def __init__(self, jobs_dir: Path, models_config: Path = config.DEFAULT_MODELS):
         self.jobs_dir = jobs_dir
@@ -123,12 +142,17 @@ class App:
         catalog, judge = config.load(self.models_config)
         everyone = self.everyone()
         admin = self.admin(user)
-        runs = [r for d, r in everyone if admin or self.visible(d, user)]
+        runs = []
         for d, run in everyone:
             access = read_json(d / ACCESS)
+            permission = run_permission(access, user, admin)
+            if not permission:
+                continue
             run["private"] = bool(access.get("private"))
-            if admin:  # an admin sees everyone's runs, so the list says whose each one is
+            run["read_only"] = permission == "view"
+            if admin or internal(user):
                 run["owner"] = access.get("owner")
+            runs.append(run)
         runs.sort(key=lambda r: r["active_at"], reverse=True)
         for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
@@ -165,7 +189,7 @@ class App:
         elif going >= MAX_RUNS:
             blocked = f"{going} runs are going, the most at once. Start yours when one finishes." if MAX_RUNS > 1 \
                 else "A run is already going. Let it finish, or stop it, before starting another." \
-                if any(r["phase"] in pipeline.ACTIVE for r in runs) else "Someone else's run is going. Start yours when it finishes."
+                if any(r["phase"] in pipeline.ACTIVE and not r.get("read_only") for r in runs) else "Someone else's run is going. Start yours when it finishes."
         elif mine_cap and my_spent >= mine_cap:
             blocked = (f"You've reached your {usd(mine_cap)} limit: your runs spent {usd(my_spent)} in the last 24 hours. "
                        "Each attempt stops counting a day after it ran.")
@@ -468,7 +492,7 @@ class App:
         """One attempt's trace, condensed and redacted."""
         path = self.jobs_dir / run_id / "trials" / trial
         if not (RUN_ID.fullmatch(run_id) and RUN_ID.fullmatch(trial) and path.is_dir()
-                and self.visible(self.jobs_dir / run_id, user)):
+                and self.permission(self.jobs_dir / run_id, user)):
             return {"error": "No such attempt."}
         return trace.load(path) or {"error": "This attempt has no trace: its agent hasn't finished, or never ran."}
 
@@ -611,7 +635,7 @@ class App:
         return {repo: numbers for repo, numbers in pulls.items() if numbers}
 
     def stop(self, run_id: str, user: str | None = None) -> dict:
-        run = self.find(run_id, user)
+        run = self.manageable_run(run_id, user)
         if not run or run["phase"] not in pipeline.ACTIVE:
             return {"error": "That run isn't going."}
         pid = self.pid(run_id)
@@ -625,7 +649,7 @@ class App:
             return self._resume(run_id, user)
 
     def _resume(self, run_id: str, user: str | None = None) -> dict:
-        run = self.find(run_id, user)
+        run = self.manageable_run(run_id, user)
         if not run or not run["resumable"]:
             return {"error": "That run can't be resumed."}
         if gone := [m["label"] for m in run["models"] if m["key"] in pipeline.RETIRED]:
@@ -649,18 +673,14 @@ class App:
         self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.reader(user))
         return {"id": run_id}
 
-    def find(self, run_id: str, user: str | None = None) -> dict | None:
+    def manageable_run(self, run_id: str, user: str | None = None) -> dict | None:
         path = self.jobs_dir / run_id
-        return self.describe(path) if RUN_ID.fullmatch(run_id) and path.is_dir() and self.visible(path, user) else None
+        if RUN_ID.fullmatch(run_id) and path.is_dir() and self.permission(path, user) == "manage":
+            return self.describe(path)
+        return None
 
-    def visible(self, job_dir: Path, user: str | None) -> bool:
-        """Whether this person may see the run. Signed in (hosted): only a run they started, whatever its
-        repository, and an admin every run; a run with no owner recorded is no one else's. Locally (no
-        sign-in): any run, except one someone started signed in on a private repository."""
-        access = read_json(job_dir / ACCESS)
-        if user:
-            return access.get("owner") == user or self.admin(user)
-        return not access.get("private")
+    def permission(self, job_dir: Path, user: str | None) -> str | None:
+        return run_permission(read_json(job_dir / ACCESS), user, self.admin(user))
 
     def admin(self, user: str | None) -> bool:
         """Whether this signed-in person is an admin in the hosted access list right now. The sign-in
@@ -947,7 +967,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                                  query.get("q", ""), user))
         if url.path == "/api/trace":
             return self.send_json(self.app.trace(query.get("run", ""), query.get("trial", ""), user))
-        if (asked := REPORT_FILE.fullmatch(url.path)) and self.app.visible(self.app.jobs_dir / asked[1], user):
+        if (asked := REPORT_FILE.fullmatch(url.path)) and self.app.permission(self.app.jobs_dir / asked[1], user):
             if asked[2] == "html" and (file := self.app.jobs_dir / asked[1] / "report.html").is_file():
                 page = report.current_html(file.parent) or file.read_bytes()
                 return self.send_body(self.with_fonts(page), "text/html; charset=utf-8")

@@ -115,7 +115,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
       </a>
       <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
         <div className="min-w-0 max-w-[860px] lg:flex-1">
-          <Eyebrow parts={[run.tasks ? plural(run.tasks, "PR") : null, vs, run.judged === false ? "Hidden tests only" : "Hidden tests + judges", when(run.started)]} />
+          <Eyebrow parts={[run.tasks ? plural(run.tasks, "PR") : null, vs, run.judged === false ? "Hidden tests only" : "Hidden tests + judges", when(run.started), run.owner ? `By ${run.owner}` : null]} />
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <h1 className="ev-title">{run.title}</h1>
             <PhaseBadge phase={run.phase} className="mt-1" />
@@ -131,7 +131,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
           {sentence && <p className={cn("max-w-[46ch] text-[24px] leading-[1.3] tracking-[-0.01em] text-balance", active ? "mt-2" : "mt-4")}>{sentence}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {active && (
+          {active && !run.read_only && (
             <Confirm
               title="Stop this run?"
               description="Attempts in progress end and their sandboxes are deleted. Finished results stay, and Resume picks up where it left off."
@@ -141,7 +141,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
               trigger={<Button variant="danger" disabled={stopping}>{stopping ? "Stopping" : "Stop"}</Button>}
             />
           )}
-          {run.resumable && (
+          {run.resumable && !run.read_only && (
             <Button variant="outline" onClick={resume} disabled={!!state.blocked}>Resume</Button>
           )}
           {!active && run.again && (
@@ -177,8 +177,8 @@ function now(run: Run): string {
 function RunNotes({ run }: { run: Run }) {
   const p = run.progress, k = run.checking;
   let line: string | null = null;
-  if (run.phase === "stopped") line = `Stopped${p.total ? ` with ${p.done} of ${p.total} attempts finished` : ""}. Resume to carry on where it left off.`;
-  else if (run.phase === "done" && run.resumable) line = `${plural(run.lost, "attempt")} ${run.lost === 1 ? "was" : "were"} lost to sandbox, setup or provider problems, not the models. Resume runs ${run.lost === 1 ? "it" : "them"} again.`;
+  if (run.phase === "stopped") line = `Stopped${p.total ? ` with ${p.done} of ${p.total} attempts finished` : ""}.${run.read_only ? "" : " Resume to carry on where it left off."}`;
+  else if (run.phase === "done" && run.resumable) line = `${plural(run.lost, "attempt")} ${run.lost === 1 ? "was" : "were"} lost to sandbox, setup or provider problems, not the models.${run.read_only ? "" : ` Resume runs ${run.lost === 1 ? "it" : "them"} again.`}`;
   else if (run.phase === "collecting" || run.phase === "failed" || (run.phase === "checking" && !k.total)) line = run.detail;
   if (!line && !run.left_out.length && !run.note && !run.log) return null;
   return (
