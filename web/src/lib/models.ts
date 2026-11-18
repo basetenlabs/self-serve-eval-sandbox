@@ -56,6 +56,9 @@ export function initials(label: string): string {
 }
 
 export function providerLabel(m: Model & { provider?: string }): string {
-  if (!isOpen(m)) return m.provider === "anthropic" ? "Closed · Anthropic" : "Closed";
+  if (!isOpen(m)) {
+    const maker = servedBy(m);
+    return maker ? `Closed · ${maker}` : "Closed";
+  }
   return m.provider === "baseten" ? "Open · on Baseten" : "Open";
 }

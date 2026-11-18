@@ -25,7 +25,7 @@ class Model:
     key: str
     label: str
     kind: str          # "closed" or "open"
-    provider: str      # "anthropic" or "baseten"
+    provider: str      # "anthropic", "baseten" or "openai"
     model: str         # the id the provider serves
     effort: str
     prices: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -56,6 +56,13 @@ class Model:
                       + write_1h * rates.get("cache_write_1h", write)
                       + counts.get("outputTokens", 0) * rates["output"]) / 1e6
         return total
+
+    def price_call(self, model_id: str, counts: dict) -> float | None:
+        """One call can cross OpenAI's 272K input threshold even in a short run."""
+        prompt = sum(counts.get(k, 0) for k in ("inputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"))
+        if self.provider == "openai" and prompt > 272_000:
+            counts = {k: v * (1.5 if k == "outputTokens" else 2) for k, v in counts.items()}
+        return self.price({model_id: counts})
 
     def rate_for(self, model_id: str) -> dict | None:
         if model_id in self.prices:
@@ -183,6 +190,8 @@ def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Panel]:
     for key, spec in data["models"].items():
         if unknown := set(spec) - known:
             raise SystemExit(f"{path}: models.{key} has unknown setting(s) {', '.join(sorted(unknown))}")
+        prices = {**data.get("provider_prices", {}).get(spec["provider"], {}), **spec.get("prices", {})}
+        spec = {**spec, "prices": prices}
         models[key] = Model.from_dict({"label": key, "effort": default_effort, **spec, "key": key})
     return models, load_panel(data["judge"], data.get("defaults", {}).get("effort"), path)
 
@@ -232,8 +241,9 @@ def claude_credential() -> dict[str, str]:
 
 def credential_env(model: Model) -> dict[str, str]:
     """The provider credential a trial needs, from the environment. Raises SystemExit if unset."""
-    if model.provider == "baseten" and os.environ.get("BASETEN_API_KEY"):
-        return {"BASETEN_API_KEY": os.environ["BASETEN_API_KEY"]}
+    name = API_KEYS.get(model.provider)
+    if name and os.environ.get(name):
+        return {name: os.environ[name]}
     if model.provider == "anthropic" and (credential := claude_credential()):
         return credential
     raise SystemExit(missing_credential(model))
@@ -243,10 +253,13 @@ def credential_env(model: Model) -> dict[str, str]:
 # model relay, a process in its sandbox that it can't see or reach but through one socket
 # (docker/proxy.py, docker/jail.py), puts the real key on each request to the provider.
 # Which header carries each credential, and how.
-KEY_HEADERS = {"BASETEN_API_KEY": ("Authorization", "Bearer {}"),
+API_KEYS = {"baseten": "BASETEN_API_KEY", "openai": "OPENAI_API_KEY"}
+KEY_HEADERS = {"OPENAI_API_KEY": ("Authorization", "Bearer {}"),
+               "BASETEN_API_KEY": ("Authorization", "Bearer {}"),
                "ANTHROPIC_API_KEY": ("X-Api-Key", "{}"),
                "CLAUDE_CODE_OAUTH_TOKEN": ("Authorization", "Bearer {}")}
-PROVIDER_URLS = {"anthropic": "https://api.anthropic.com", "baseten": BASETEN_URL}
+PROVIDER_URLS = {"anthropic": "https://api.anthropic.com", "baseten": BASETEN_URL,
+                 "openai": "https://api.openai.com/v1"}
 
 
 def placeholder() -> str:
@@ -311,6 +324,8 @@ def redact_file(path: Path, piece: int = 1 << 20) -> None:
 
 def missing_credential(model: Model) -> str | None:
     """What to set before `model` can run, or None if its key is there."""
+    if model.provider == "openai":
+        return None if os.environ.get("OPENAI_API_KEY") else f"{model.label} needs OPENAI_API_KEY."
     if model.provider == "baseten":
         return None if os.environ.get("BASETEN_API_KEY") else f"{model.label} runs on Baseten Model APIs: set BASETEN_API_KEY."
     if model.provider == "anthropic":

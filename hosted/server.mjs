@@ -63,7 +63,9 @@ runMain(async () => {
   if (config.policy.file) await seedAccess(config.policy.file)
   await mkdir(config.stateDir, { recursive: true, mode: 0o700 })
   const visitors = visitorCounts(join(config.stateDir, 'visitors.sqlite'))
-  const access = config.policy.file && accessHandlers({ file: config.policy.file, visitors, secret: process.env.PR_EVAL_ACCESS_TOKEN })
+  const access = config.policy.file && accessHandlers({
+    file: config.policy.file, visitors, secret: process.env.PR_EVAL_ACCESS_TOKEN, ownerEmail: process.env.PR_EVAL_ACCESS_OWNER,
+  })
   delete process.env.PR_EVAL_ACCESS_TOKEN
   const app = async (req, res, ctx) => {
     // createSiteServer calls the app only after verifying the session and checking its access.

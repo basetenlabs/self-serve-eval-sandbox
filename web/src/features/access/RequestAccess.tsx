@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { post } from "@/lib/api";
 
 const URL = "/api/access-requests";
-type Request = { id: string; target: string; reason: string; requestedAt: string; decidedAt?: string; status: "pending" | "approved" | "denied" };
+type Request = { id: string; target: string; reason?: string; requestedAt?: string; decidedAt?: string; decidedBy?: string; decisionMethod?: "direct" | "worker"; status: "pending" | "approved" | "denied" };
 const statuses = { pending: ["Pending", "gold"], approved: ["Approved", "green"], denied: ["Denied", "pink"] };
 
 export function RequestAccess({ invite }: { invite?: string }) {
@@ -71,20 +71,24 @@ export function RequestAccess({ invite }: { invite?: string }) {
           {problem && <p role="alert" className="bt-notice error">{problem}</p>}
         </form>
       </Column>
-      <Column heading="Your requests">
+      <Column heading="Your access history">
         {loadError && <p role="alert" className="bt-notice error">{loadError}</p>}
         {!loaded && !loadError && <p className="ev-small">Loading requests…</p>}
-        {loaded && !requests.length && <p className="ev-small">You haven’t requested access for anyone yet.</p>}
-        <ul aria-live="polite">{requests.map(r => (
-          <li key={r.id} className="grid gap-1 border-b border-lightGrey2 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="min-w-0 break-all">{r.target}</span>
-              <span className={`bt-badge ${statuses[r.status][1]}`}>{statuses[r.status][0]}</span>
-            </div>
-            <span className="ev-small break-words">{r.reason}</span>
-            <time className="ev-small" dateTime={r.decidedAt ?? r.requestedAt}>{new Date(r.decidedAt ?? r.requestedAt).toLocaleString()}</time>
-          </li>
-        ))}</ul>
+        {loaded && !requests.length && <p className="ev-small">No access requests yet.</p>}
+        <ul aria-live="polite">{requests.map(r => {
+          const when = r.decidedAt ?? r.requestedAt;
+          return (
+            <li key={r.id} className="grid gap-1 border-b border-lightGrey2 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 break-all">{r.target}</span>
+                <span className={`bt-badge ${statuses[r.status][1]}`}>{statuses[r.status][0]}</span>
+              </div>
+              {r.reason && <span className="ev-small break-words">{r.reason}</span>}
+              {r.decidedBy && <span className="ev-small break-words">{r.decisionMethod === "direct" ? "Added directly by" : "Reviewed via the approval worker by"} {r.decidedBy}</span>}
+              {when && <time className="ev-small" dateTime={when}>{new Date(when).toLocaleString()}</time>}
+            </li>
+          );
+        })}</ul>
       </Column>
     </div>
   );

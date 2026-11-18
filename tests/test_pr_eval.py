@@ -139,6 +139,30 @@ class CostTest(unittest.TestCase):
 
 
 class AgentScriptTest(unittest.TestCase):
+    def test_gpt_uses_the_same_harness_and_only_the_relay_holds_the_key(self):
+        m = config.load()[0]["gpt-6.2-sol"]
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "unit-test-credential"}, clear=True):
+            env, auth = config.sandbox_credential(config.credential_env(m))
+        self.assertNotIn("unit-test-credential", str(env))
+        self.assertEqual(auth, {"Authorization": "Bearer unit-test-credential"})
+        relay, script, harness = runner.agent_script(m, "https://meter.example")
+        self.assertIn("--upstream https://meter.example/openai/v1", relay)
+        self.assertIn('--model gpt-6.2-sol', script)
+        self.assertIn('ANTHROPIC_AUTH_TOKEN="$OPENAI_API_KEY"', script)
+        self.assertEqual(harness["ANTHROPIC_DEFAULT_HAIKU_MODEL"], m.model)
+
+    def test_gpt_report_prices_each_call_at_its_own_context_length(self):
+        m = config.load()[0]["gpt-6.2-sol"]
+        usage = {"input_tokens": 180_000, "cache_read_input_tokens": 10_000,
+                 "cache_creation_input_tokens": 10_000, "output_tokens": 4000}
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "proxy.log"
+            line = "turn=1 /v1/messages shape=responses effort=high -> 200 in 1s usage=" + json.dumps(usage)
+            log.write_text((line + "\n") * 2)
+            result = runner.price_agent({}, m, Path(d) / "agent.jsonl", log)
+        self.assertEqual(result["tokens"]["input"], 360_000)
+        self.assertAlmostEqual(result["cost_usd"], 2 * (180_000 * 2 + 10_000 * .1 + 10_000 * 2.5 + 4000 * 10) / 1e6)
+
     def test_an_open_model_goes_through_the_relay_with_web_tools_off(self):
         relay, script, env = runner.agent_script(baseten_model())
         self.assertIn("proxy.py --upstream https://inference.baseten.co/v1 --effort high ", relay)

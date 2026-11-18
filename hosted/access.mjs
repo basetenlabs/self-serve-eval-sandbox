@@ -68,19 +68,40 @@ function checkedEntry(list, value) {
   if (checked.error) refuse(400, checked.error)
   return checked.domain ?? checked.email
 }
-function adminChange(data, { list, value, remove }) {
+function adminChange(data, { list, value, remove }, who, canGrantDirectly, now) {
   if (!['admins', 'emails', 'domains'].includes(list) || typeof value !== 'string') refuse(400, 'Say which list and entry.')
   const entry = checkedEntry(list, value)
   if (remove === true) {
     if (!data[list].includes(entry)) refuse(400, 'That entry is not on the list.')
     if (list === 'admins' && data.admins.length === 1) refuse(400, 'Add another admin before removing the last admin.')
     data[list] = data[list].filter(e => e !== entry)
-  } else {
-    if (list !== 'admins' || !internal(entry)) refuse(403, 'Request access for an outside person or domain.')
+  } else if (list === 'admins') {
+    if (!internal(entry)) refuse(403, 'Only internal staff can be admins.')
     data.admins = [...new Set([...data.admins, entry])].sort()
+  } else {
+    if (!canGrantDirectly) refuse(403, 'Request access for an outside person or domain.')
+    if (data[list].includes(entry)) return
+    grantDirectly(data, list, entry, who, now)
   }
   return entry
 }
+
+function alreadyAllowed(data, list, target) {
+  return data[list].includes(target) || (list === 'emails' && (data.admins.includes(target) || data.domains.includes(target.split('@')[1])))
+}
+
+function grantDirectly(data, list, entry, who, now) {
+  if (alreadyAllowed(data, list, entry)) refuse(409, 'That email or domain already has access.')
+  const pending = data.requests.filter(r => r.status === 'pending' && r.list === list && r.target === entry)
+  const at = new Date(now).toISOString()
+  if (!pending.length) {
+    const row = { id: randomUUID(), list, target: entry }
+    data.requests.push(row)
+    pending.push(row)
+  }
+  for (const row of pending) recordDecision(data, row, 'approved', who, 'direct', at)
+}
+
 function submit(data, body, who, now) {
   if (typeof body.target !== 'string' || !body.target.trim()) refuse(400, 'Enter an email or domain.')
   const raw = body.target.trim()
@@ -88,9 +109,7 @@ function submit(data, body, who, now) {
   const target = checkedEntry(list, raw)
   const reason = typeof body.reason === 'string' && body.reason.trim()
   if (!reason || reason.length > 500) refuse(400, 'Enter a reason of up to 500 characters.')
-  if (data[list].includes(target) || (list === 'emails' && (data.admins.includes(target) || data.domains.includes(target.split('@')[1])))) {
-    refuse(409, 'That email or domain already has access.')
-  }
+  if (alreadyAllowed(data, list, target)) refuse(409, 'That email or domain already has access.')
   const mine = data.requests.filter(r => r.requestedBy === who)
   if (mine.some(r => r.target === target && r.status === 'pending')) refuse(409, 'You already have a pending request for this entry.')
   if (mine.filter(r => Date.parse(r.requestedAt) > now - HOUR).length >= 5) refuse(429, 'You can submit five requests per hour. Try again later.')
@@ -99,24 +118,29 @@ function submit(data, body, who, now) {
   return request
 }
 
+function recordDecision(data, row, status, decidedBy, decisionMethod, decidedAt) {
+  if (status === 'approved') {
+    const entry = checkedEntry(row.list, row.target)
+    if (!data[row.list].includes(entry)) data[row.list] = [...data[row.list], entry].sort()
+  }
+  Object.assign(row, { status, decidedBy, decisionMethod, decidedAt })
+}
+
 function decide(data, { id, status, decidedBy }, now) {
   if (!['approved', 'denied'].includes(status) || typeof decidedBy !== 'string' || !/^U[A-Z0-9]{2,31}$/.test(decidedBy)) refuse(400, 'Invalid decision or approver.')
   const row = data.requests.find(r => r.id === id)
   if (!row) refuse(404, 'Unknown request.')
   // A retry after a lost reply returns the authoritative outcome, even if a later click differs.
   if (row.status === 'pending') {
-    if (status === 'approved') {
-      const entry = checkedEntry(row.list, row.target)
-      data[row.list] = [...new Set([...data[row.list], entry])].sort()
-    }
-    Object.assign(row, { status, decidedBy, decidedAt: new Date(now).toISOString() })
+    recordDecision(data, row, status, decidedBy, 'worker', new Date(now).toISOString())
   }
   return row
 }
 
 const digest = value => createHash('sha256').update(value).digest()
 
-export function accessHandlers({ file, secret, visitors, now = Date.now, log = console }) {
+export function accessHandlers({ file, secret, visitors, ownerEmail, now = Date.now, log = console }) {
+  const owner = normalizeEmail(ownerEmail)
   const bearer = secret && digest('Bearer ' + secret)
   let queue = Promise.resolve()
   async function handle(req, res, work, afterSave) {
@@ -157,14 +181,19 @@ export function accessHandlers({ file, secret, visitors, now = Date.now, log = c
             if (!bearer) refuse(503, 'Access requests are not set up yet.')
             return submit(data, body, who, now())
           }
-          return { enabled: !!bearer, requests: data.requests.filter(r => r.requestedBy === who).reverse() }
+          const requests = data.requests.filter(r => r.requestedBy === who || (r.decisionMethod === 'direct' && r.decidedBy === who))
+          return { enabled: !!bearer, requests: requests.reverse() }
         }
         if (!who || !data.admins.includes(who)) refuse(403, 'Only admins can manage the access list.')
+        const canGrantDirectly = who === owner
         if (body) {
-          const entry = adminChange(data, body)
-          audit = `[access] ${who} ${body.remove === true ? 'removed' : 'added'} ${entry} (${body.list})`
+          const entry = adminChange(data, body, who, canGrantDirectly, now())
+          if (entry) {
+            const action = body.remove === true ? 'removed' : body.list === 'admins' ? 'added' : 'granted directly to'
+            audit = `[access] ${who} ${action} ${entry} (${body.list})`
+          }
         }
-        return { ...listsOf(data), you: who, visitors: visitors.forDomains(data.domains) }
+        return { ...listsOf(data), you: who, canGrantDirectly, visitors: visitors.forDomains(data.domains) }
       }, () => { if (audit) log.info?.(audit) })
     },
     // The sole machine endpoint, before cookie sign-in. Every other path stays with the site server.

@@ -13,6 +13,7 @@ export function readiness(state: AppState): Item[] {
   const c = state.checks;
   const hosted = state.github.sign_in;
   const baseten = state.models.find((m) => m.provider === "baseten");
+  const gpt = state.models.find((m) => m.provider === "openai");
   const claude = state.models.find((m) => m.provider === "anthropic");
   const host = (local: string, problem?: string | null) =>
     hosted ? `${problem ? `${problem}. ` : ""}The page's admins need to fix this.` : problem ? `${problem}, then restart pr-eval serve` : local;
@@ -22,7 +23,7 @@ export function readiness(state: AppState): Item[] {
         fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in under New run to start a run." }
     : { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
   if (hosted) {
-    const ready = c.sandboxes && !!baseten && !baseten.missing && !!claude && !claude.missing && c.judge.ok;
+    const ready = c.sandboxes && !!baseten && !baseten.missing && !!claude && !claude.missing && !gpt?.missing && c.judge.ok;
     return [github, { ok: ready, label: ready ? "Models and judges ready" : "This page isn't ready to run", fix: "Its admins are fixing it." }];
   }
   return [
@@ -32,6 +33,7 @@ export function readiness(state: AppState): Item[] {
     { ok: c.image ? true : null, label: c.image ? "Trial image built" : "Trial image builds on the first run", fix: "A few minutes, once" },
     { ok: !!baseten && !baseten.missing, label: "Baseten key, for open models", fix: host("Set BASETEN_API_KEY, then restart pr-eval serve") },
     { ok: !!claude && !claude.missing, label: "Claude key, for Claude models", fix: host("Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve") },
+    ...(gpt ? [{ ok: !gpt.missing, label: "OpenAI key, for GPT models", fix: host("Set OPENAI_API_KEY, then restart pr-eval serve") }] : []),
     { ok: c.judge.ok, label: `${c.judge.chair ? "Judges" : "Judge"}: ${c.judge.label}${c.judge.effort ? ` at ${c.judge.effort} effort` : ""}${c.judge.chair ? `; ${c.judge.chair} gives the final verdict` : ""}`,
       fix: host("Restart pr-eval serve", c.judge.problem) },
   ];

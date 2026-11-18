@@ -43,6 +43,7 @@ another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key
                             the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
     PR_EVAL_ADMINS          optional: comma-separated emails of the first admins, used only when the volume
                             has no access list yet (the first deploy).
+    PR_EVAL_ACCESS_OWNER    optional: one existing admin email allowed to grant outside access directly.
     PR_EVAL_GITHUB_TOKEN    a fine-grained GitHub token with "Public repositories" read-only access and nothing
                             else (Keychain pr-eval-host-github-token). With it the page reads and runs public
                             repositories for everyone, no GitHub sign-in needed; without it, every run needs one.
@@ -388,6 +389,8 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     print(f'Public repositories without a GitHub sign-in: {"on" if name in env else "off (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
         sign_in_env["PR_EVAL_ADMINS"] = admins
+    if owner := os.environ.get("PR_EVAL_ACCESS_OWNER"):
+        sign_in_env["PR_EVAL_ACCESS_OWNER"] = owner
     name, service = ACCESS_TOKEN
     if token := keychain(item(name, service)) or os.environ.get(name):
         sign_in_env[name] = token

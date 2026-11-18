@@ -13,7 +13,7 @@ import { day, plural } from "@/lib/format";
 const URL = "/api/admin/access";
 
 type ListName = "admins" | "emails" | "domains";
-type Access = { admins: string[]; emails: string[]; domains: string[]; you: string; visitors: { since: string; counts: Record<string, number> }; error?: string };
+type Access = { admins: string[]; emails: string[]; domains: string[]; you: string; canGrantDirectly: boolean; visitors: { since: string; counts: Record<string, number> }; error?: string };
 
 const LISTS: { key: ListName; title: string; text: string; placeholder: string }[] = [
   { key: "admins", title: "Admins", text: "Internal staff who manage access and can see every run. The last admin must stay.", placeholder: "name@company.com" },
@@ -47,6 +47,7 @@ export function AccessPage({ invite, admin, canRequest }: { invite?: string; adm
       {admin && <div className="mt-12">
         <h2 className="h5 mb-4">Who can sign in</h2>
         <p className="ev-small mb-4">Baseten and Blaxel teammates see each other's runs. Guests see their own runs. Admins see all runs.</p>
+        {access?.canGrantDirectly && <p className="ev-small mb-4">If approvals are unavailable, you can add an email or domain directly. Access takes effect immediately.</p>}
         {error ? <Empty title="Not available">{error}</Empty>
           : !access ? <div className="bt-skeleton h-64" aria-busy />
             : (
@@ -95,7 +96,7 @@ function List({ list, access, onChange }: {
     <Column heading={list.title} aside={<span className="label-xs text-muted-foreground">{plural(entries.length, list.key === "domains" ? "domain" : "address", list.key === "domains" ? "domains" : "addresses")}</span>}>
       <div className="grid content-start gap-4">
       <p className="ev-small">{list.text}</p>
-      {list.key === "admins" && <form
+      {(list.key === "admins" || access.canGrantDirectly) && <form
         className="flex gap-3"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -111,7 +112,7 @@ function List({ list, access, onChange }: {
           autoComplete="off"
           spellCheck={false}
         />
-        <Button type="submit" variant="outline" disabled={busy || !value.trim()}>Add</Button>
+        <Button type="submit" variant="outline" disabled={busy || !value.trim()}>{list.key === "admins" ? "Add" : "Add directly"}</Button>
       </form>}
       {problem && <p role="alert" className="bt-notice error">{problem}</p>}
       {entries.length ? (
