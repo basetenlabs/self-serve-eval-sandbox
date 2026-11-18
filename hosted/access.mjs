@@ -77,16 +77,20 @@ async function readBody(req) {
 }
 
 /**
- * The admin API, for @blaxel/sign-in's `api` hook: it runs only for a signed-in, admitted person, and
+ * The admin API runs only for a signed-in, admitted person, and
  * a POST has already passed the exact-origin check.
  *
- *   GET  /api/admin/access  -> { admins, emails, domains, you }
+ *   GET  /api/admin/access  -> { admins, emails, domains, you, visitors: { since, counts } }
  *   POST /api/admin/access  { list: "admins" | "emails" | "domains", value, remove?: true } -> the same
  *
  * Every request checks again that the person is an admin in the file as it is now (403 if not). Writes
  * go one at a time, so two admins editing at once can't undo each other's change.
  */
-export function adminApi({ file, log = console }) {
+export function adminApi({ file, visitors, log = console }) {
+  const view = (lists, you) => ({
+    admins: lists.admins, emails: lists.emails, domains: lists.domains, you,
+    visitors: visitors.forDomains(lists.domains),
+  })
   let queue = Promise.resolve()
   const oneAtATime = work => {
     const next = queue.then(work, work)
@@ -104,7 +108,7 @@ export function adminApi({ file, log = console }) {
       const lists = await current(file)
       if (!lists) return send(res, 503, { error: 'The access list can\'t be read right now. Try again in a moment.' })
       if (!isAdmin(lists)) return send(res, 403, { error: 'Only admins can see who has access.' })
-      return send(res, 200, { admins: lists.admins, emails: lists.emails, domains: lists.domains, you })
+      return send(res, 200, view(lists, you))
     }
 
     if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'Send JSON.' })
@@ -141,7 +145,7 @@ export function adminApi({ file, log = console }) {
         return send(res, 503, { error: 'The access list couldn\'t be saved. Try again in a moment.' })
       }
       log.info?.(`[access] ${you} ${body.remove ? 'removed' : 'added'} ${entry} ${body.remove ? 'from' : 'to'} ${list}`)
-      return send(res, 200, { admins: saved.admins, emails: saved.emails, domains: saved.domains, you })
+      return send(res, 200, view(saved, you))
     })
   }
 }
