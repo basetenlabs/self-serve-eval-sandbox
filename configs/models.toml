@@ -5,11 +5,13 @@
 # figure, which knows the 1-hour cache writes its usage report doesn't break out; their
 # rates here price attempts stopped at the time limit, which never report a cost.
 # Check the numbers before quoting a cost:
+#   OpenAI     https://developers.openai.com/api/docs/pricing (Standard, 30-minute cache)
 #   Anthropic  https://www.anthropic.com/pricing (API list rates)
 #   Baseten    https://www.baseten.co/pricing/ (Model APIs)
 #
 # provider = "anthropic": Claude Code talks to the Anthropic API directly, authenticated
 #   by ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
+# provider = "openai": Claude Code uses the relay to call the OpenAI Responses API with OPENAI_API_KEY.
 # provider = "baseten": Claude Code talks to the translating proxy inside the trial
 #   container, which forwards to Baseten Model APIs' Chat Completions endpoint with
 #   BASETEN_API_KEY and sets the same `effort` on every request.
@@ -32,13 +34,49 @@ kind = "closed"
 provider = "anthropic"
 maker = "Anthropic"
 model = "claude-opus-5-5"
+
+[models."gpt-6.2-sol"]
+label = "GPT-6.2 Sol"
+kind = "closed"
+maker = "OpenAI"
+provider = "openai"
+model = "gpt-6.2-sol"
+prices."gpt-6.2-sol" = { input = 2.00, cached_input = 0.10, cache_write = 2.50, output = 10.00 }
+estimate_from = ["claude-opus"]
+
+[models."gpt-6.2-astra"]
+label = "GPT-6.2 Astra"
+kind = "closed"
+maker = "OpenAI"
+provider = "openai"
+model = "gpt-6.2-astra"
+prices."gpt-6.2-astra" = { input = 8.00, cached_input = 0.40, cache_write = 10.00, output = 40.00 }
+estimate_from = ["gpt-6.2-sol", "claude-opus"]
+
+[models.claude-sonnet]
+label = "Claude Sonnet 5.5"
+kind = "closed"
+maker = "Anthropic"
+provider = "anthropic"
+model = "claude-sonnet-5-5"
+estimate_from = ["claude-opus"]
+
+[models.claude-haiku]
+label = "Claude Haiku 5.5"
+kind = "closed"
+maker = "Anthropic"
+provider = "anthropic"
+model = "claude-haiku-5-5"
+estimate_from = ["claude-sonnet", "claude-opus"]
+
+[provider_prices.anthropic]
 # Claude Code sends some background requests to its small model; price them too.
 # cache_write is the 5-minute cache; Claude Code mostly writes the 1-hour one, which
 # costs twice the input rate (cache_write_1h).
-prices."claude-opus-5-5" = { input = 4.00, cache_write = 5.00, cache_write_1h = 8.00, cached_input = 0.20, output = 20.00 }
-prices."claude-haiku-4-5" = { input = 1.00, cache_write = 1.25, cache_write_1h = 2.00, cached_input = 0.10, output = 5.00 }
-prices."claude-haiku-5-5" = { input = 0.10, cache_write = 0.125, cache_write_1h = 0.20, cached_input = 0.01, output = 0.50 }
-prices."claude-sonnet-5-5" = { input = 2.00, cache_write = 2.50, cache_write_1h = 4.00, cached_input = 0.20, output = 10.00 }
+"claude-opus-5-5" = { input = 4.00, cache_write = 5.00, cache_write_1h = 8.00, cached_input = 0.20, output = 20.00 }
+"claude-haiku-4-5" = { input = 1.00, cache_write = 1.25, cache_write_1h = 2.00, cached_input = 0.10, output = 5.00 }
+"claude-haiku-5-5" = { input = 0.10, cache_write = 0.125, cache_write_1h = 0.20, cached_input = 0.01, output = 0.50 }
+"claude-sonnet-5-5" = { input = 2.00, cache_write = 2.50, cache_write_1h = 4.00, cached_input = 0.20, output = 10.00 }
 
 [models."glm-5.3"]
 label = "GLM-5.3"

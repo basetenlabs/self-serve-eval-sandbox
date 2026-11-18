@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import causes, meter, runtime
 from . import judge as judge_mod
-from .config import PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
+from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
 from .rundir import charge, now, write_json
 from .tasks import TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
@@ -130,9 +130,15 @@ def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, 
     meter instead (see meter.py)."""
     env = dict(HARNESS_ENV)
     upstream = meter.base_url(meter_url, model.provider) if meter_url else PROVIDER_URLS[model.provider]
-    # A model on Baseten gets the run's effort forced on every request; a Claude model's requests go as they are.
-    effort = f"--effort {shlex.quote(model.effort)} " if model.provider == "baseten" else ""
-    relay = (f"rm -f {RELAY_SOCKET}; exec python3 /opt/eval/proxy.py --upstream {shlex.quote(upstream)} {effort}"
+    # Translated calls use the selected effort. Native Claude requests pass through.
+    effort = f"--effort {shlex.quote(model.effort)} " if model.provider in API_KEYS else ""
+    program = "python3 /opt/eval/proxy.py"
+    if model.provider == "openai":
+        # The image (including on resume) owns proxy.py and the jail. Pass this adapter with the
+        # launch command so it also works on pinned images, without placing executable code in the checkout.
+        source = Path(__file__).with_name("openai_relay.py").read_text()
+        program = f"python3 -I -c {shlex.quote(source)} {shlex.quote(model.model)}"
+    relay = (f"rm -f {RELAY_SOCKET}; exec {program} --upstream {shlex.quote(upstream)} {effort}"
              f"--socket {RELAY_SOCKET} --log-file /logs/proxy.log")
     # --include-partial-messages adds raw stream events; run_agent keeps only each
     # message's start and final usage, so a run stopped at the time limit still has its
@@ -143,12 +149,12 @@ def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, 
               f'--effort {shlex.quote(model.effort)} --disallowedTools {DISALLOWED_TOOLS}')
     env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PROXY_PORT}"
     signs_in = ""
-    if model.provider == "baseten":
+    if key_name := API_KEYS.get(model.provider):
         # Every model id Claude Code might ask for resolves to the one under test.
         for var in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
             env[var] = model.model
-        signs_in = 'export ANTHROPIC_AUTH_TOKEN="$BASETEN_API_KEY"; unset BASETEN_API_KEY\n'
+        signs_in = f'export ANTHROPIC_AUTH_TOKEN="${key_name}"; unset {key_name}\n'
     else:
         env["ANTHROPIC_MODEL"] = model.model
     script = (
@@ -342,6 +348,25 @@ def rebuild_usage(stream: Path, model: Model, proxy_log: Path | None = None) -> 
 
 def price_agent(agent: dict, model: Model, stream: Path, proxy_log: Path | None = None) -> dict:
     """Fill in an agent run's tokens and cost, rebuilding them if the run was stopped."""
+    if model.provider == "openai" and proxy_log and proxy_log.is_file():
+        counts, total, complete = {}, 0.0, True
+        with proxy_log.open(errors="replace") as lines:
+            for line in lines:
+                if " shape=responses " not in line or " -> 200 " not in line or " usage=" not in line:
+                    continue
+                try:
+                    call = meter.usage_counts("anthropic", json.loads(line.partition(" usage=")[2]))
+                except ValueError:
+                    complete = False  # the relay may have stopped in the middle of its last line
+                    continue
+                for key, value in call.items():
+                    counts[key] = counts.get(key, 0) + value
+                cost = model.price_call(model.model, call)
+                total = total + cost if total is not None and cost is not None else None
+        if counts:
+            usage = {model.model: counts}
+            return {**agent, "model_usage": usage, "tokens": token_totals(usage), "cost_usd": total,
+                    "cost_source": "none" if total is None else "price-table" if complete else "rebuilt-partial"}
     usage = agent.get("model_usage") or {}
     if usage:
         agent["cost_usd"], agent["cost_source"] = agent_cost(model, usage)

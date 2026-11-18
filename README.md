@@ -1,6 +1,6 @@
 # Self-Serve Model Eval Sandbox
 
-Can an open model do your team's real coding work? `pr-eval` takes pull requests your team already merged and hands each one to Claude Code twice: once with a closed model, once with an open model. It grades both and reports how many tasks each model solves and what each solved task costs.
+Can an open model do your team's real coding work? `pr-eval` takes pull requests your team already merged and asks Claude Code to solve each one with the models you select. It grades their changes and reports how many tasks each model solves and what each solved task costs.
 
 The command-line tool and the local page are both called `pr-eval`. Status: v0. Claude Code is the only harness. MIT licensed.
 
@@ -18,7 +18,7 @@ Setting it up with a coding agent? Give it this repository's link and [SETUP.md]
 | --- | --- |
 | `BASETEN_API_KEY` | the sandboxes attempts run in, open models on Baseten Model APIs, and the Kimi K3 judge |
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Claude models, and the Claude Opus 5.5 judge (install `claude` too) |
-| `OPENAI_API_KEY` | the GPT-6.1 Sol judge |
+| `OPENAI_API_KEY` | GPT models and the GPT-6.1 Sol judge |
 
 The Baseten key has to be one that can create sandboxes: a personal key, or a team creator service account key. To keep a model-only key in `BASETEN_API_KEY`, put the other in `BASETEN_SANDBOX_API_KEY`. `BASETEN_TEAM_ID` pins the team the sandboxes go in: with it set, a key that can't reach that team is refused instead of running somewhere else. There is no other account to make, no CLI to install and no local Docker.
 
@@ -98,7 +98,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Models
 
-`configs/models.toml` lists the models and their prices: `claude-opus`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. To add one, copy an entry and set its Baseten model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
+`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic API. GPT models use OpenAI Responses for tool calls through the same Claude Code harness. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
 
 ## Development
 

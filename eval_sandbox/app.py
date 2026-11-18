@@ -134,7 +134,7 @@ class App:
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
                 run["board"] = self.board(run)
         estimates = borrowed(self.estimates(runs), catalog)
-        models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "model": m.model,
+        models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "maker": m.maker, "model": m.model,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
