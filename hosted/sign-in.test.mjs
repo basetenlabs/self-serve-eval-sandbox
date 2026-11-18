@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPolicy, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
 import { adminApi, SEED, seedAccess } from './access.mjs'
+import { visitorCounts } from './visitors.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests, inviteLink } from './requests.mjs'
 import config from './site.config.mjs'
@@ -21,7 +22,9 @@ const folder = t => {
 
 /** The admin API behind a plain HTTP server; the test names the signed-in person in a header. */
 async function serve(t, file) {
-  const api = adminApi({ file, log: quiet })
+  const visitors = visitorCounts(':memory:')
+  t.after(() => visitors.close())
+  const api = adminApi({ file, visitors, log: quiet })
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://x').pathname
     if (await api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
@@ -93,6 +96,7 @@ test('an invited outside email gets in and an uninvited one does not, live from 
 
   const added = await api.post('lead@baseten.co', { list: 'emails', value: ' Guest@Partner.io ' })
   assert.equal(added.status, 200)
+  assert.deepEqual(added.body.visitors.counts, { 'baseten.co': 0, 'blaxel.ai': 0 })
   assert.deepEqual(added.body.emails, ['guest@partner.io'])
   assert.equal(policy.check('guest@partner.io'), 'allowed')
   assert.equal(policy.check('other@partner.io'), 'refused')
@@ -104,6 +108,18 @@ test('an invited outside email gets in and an uninvited one does not, live from 
   assert.equal(policy.check('guest@partner.io'), 'refused')
   assert.equal(policy.check('other@partner.io'), 'refused')
   assert.deepEqual(readdirSync(join(file, '..')), ['access.json']) // written by rename: no temporary file left
+})
+
+test('domain counts survive restart and count distinct signed-in addresses at the exact domain', t => {
+  const file = join(folder(t), 'visitors.sqlite')
+  const first = visitorCounts(file)
+  for (const address of ['one@example.org', 'two@example.org', 'one@example.org', 'one@sub.example.org']) first.record(address)
+  const before = first.forDomains(['example.org', 'other.org'])
+  assert.deepEqual(before.counts, { 'example.org': 2, 'other.org': 0 })
+  first.close()
+  const reopened = visitorCounts(file)
+  t.after(() => reopened.close())
+  assert.deepEqual(reopened.forDomains(['example.org', 'other.org']), before)
 })
 
 test('only admins read or change the list, checked against the file on every request', async t => {

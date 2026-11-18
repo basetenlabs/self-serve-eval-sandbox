@@ -16,6 +16,10 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   subdomain; public mail domains and wildcards are refused). The first start creates the file with
   the admins in `PR_EVAL_ADMINS` (comma-separated emails, set when deploying) and the domains
   baseten.co and blaxel.ai; `deploy.py` never overwrites it.
+  Removing an entry asks for confirmation. For a domain, the dialog counts distinct signed-in
+  addresses seen on the page since tracking began. The sign-in server keeps the domain and an
+  address digest in `AUTH_STATE_DIR/visitors.sqlite`. Admins receive only the domain totals.
+
   Admins change it on the page's **Access** tab, which only they see. The sign-in server answers
   that tab (`access.mjs`): it checks the person is an admin in the file as it is now on every
   request, checks each entry with the sign-in's own rules, never removes the last admin, writes the
