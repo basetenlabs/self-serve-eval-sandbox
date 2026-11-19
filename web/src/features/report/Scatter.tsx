@@ -132,8 +132,11 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
             <g aria-hidden>
               <path d={gap.d} fill="none" stroke="var(--color-darkGrey2)" />
               <path d={gap.head} fill="none" stroke="var(--color-darkGrey2)" />
-              <rect x={gap.chip.x0} y={gap.chip.y0} width={gap.chip.x1 - gap.chip.x0} height={gap.chip.y1 - gap.chip.y0} fill="var(--color-pink)" />
-              <text x={(gap.chip.x0 + gap.chip.x1) / 2} y={gap.chip.y0 + 16} textAnchor="middle" className="fill-black font-sans text-[14px]">{gap.text}</text>
+              {/* The pink chip keeps its Black text in the dark theme: light inside, like the delta chip. */}
+              <g className="scheme-light">
+                <rect x={gap.chip.x0} y={gap.chip.y0} width={gap.chip.x1 - gap.chip.x0} height={gap.chip.y1 - gap.chip.y0} fill="var(--color-pink)" />
+                <text x={(gap.chip.x0 + gap.chip.x1) / 2} y={gap.chip.y0 + 16} textAnchor="middle" className="fill-black font-sans text-[14px]">{gap.text}</text>
+              </g>
             </g>
           )}
           {pts.map((p, i) => {

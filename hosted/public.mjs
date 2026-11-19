@@ -1,9 +1,10 @@
 // The few files the public pages need before anyone signs in: the sign-in page's stylesheet, the brand stylesheet
-// it imports and the page texture (web/src/styles' baseten.css and texture.png, the /baseten-design skill's files,
-// read in place so the sign-in pages always take the stylesheet the app builds with; hosted/deploy.py ships both).
+// it imports, the page texture, light and dark, and the external-link arrow baseten.css draws (web/src/styles'
+// baseten.css, texture.png, texture-dark.png and icons/external-link.svg, the /baseten-design skill's files,
+// read in place so the sign-in pages always take the stylesheet the app builds with; hosted/deploy.py ships them).
 // Everything else, the page included, stays behind sign-in.
-// /auth/login.css replaces @blaxel/sign-in's own, so its error pages (renderMessage) take the same look as our
-// sign-in page.
+// /auth/login.css and /auth/theme.js replace @blaxel/sign-in's own, so its error pages (renderMessage) take the same
+// look as our sign-in page, dark included.
 // Beausite is never served here: before sign-in the pages set in Geist, which the sign-in package serves.
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -14,6 +15,9 @@ const FILES = {
   '/auth/login.css': ['login-page.css', 'text/css; charset=utf-8'],
   '/auth/baseten.css': ['../web/src/styles/baseten.css', 'text/css; charset=utf-8'],
   '/auth/texture.png': ['../web/src/styles/texture.png', 'image/png'],
+  '/auth/texture-dark.png': ['../web/src/styles/texture-dark.png', 'image/png'],
+  '/auth/icons/external-link.svg': ['../web/src/styles/icons/external-link.svg', 'image/svg+xml'],
+  '/auth/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
 }
 
 /** path -> { type, body }, read once at startup. */

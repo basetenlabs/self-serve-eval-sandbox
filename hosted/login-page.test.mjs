@@ -13,6 +13,13 @@ test('the sign-in page shows only the site name and one button', () => {
   assert.match(html, /href="\/auth\/start\?next=%2Fx"/)
 })
 
+test('the sign-in page follows the system\'s light or dark setting, with the logo to match', () => {
+  const html = renderLogin({ brand })
+  assert.match(html, /<html lang="en" data-theme="auto">/)
+  assert.match(html, /<meta name="color-scheme" content="light dark">/)
+  assert.match(html, /<source srcset="\/auth\/brand\/logo-dark" media="\(prefers-color-scheme: dark\)">/)
+})
+
 test('link previews carry the name, the description and the public card', () => {
   const html = renderLogin({ brand: { ...brand, card: { type: 'image/png' } }, origin: 'https://site.example' })
   assert.match(html, /<meta property="og:title" content="Some Site">/)
@@ -40,16 +47,19 @@ test('signed-out and failed sign-ins add at most one short line', () => {
   assert.doesNotMatch(refused, /baseten\.co|a@b\.co/)
 })
 
-test('the public pages take the site stylesheet and texture the app builds with, and never Beausite', async () => {
+test('the public pages take the site stylesheet and textures the app builds with, and never Beausite', async () => {
   const { readFile } = await import('node:fs/promises')
   const here = new URL('.', import.meta.url)
   const { publicAssets } = await import('./public.mjs')
   const assets = await publicAssets()
   const release = await readFile(new URL('deploy.py', here), 'utf8')
-  for (const [path, source] of [['/auth/baseten.css', 'web/src/styles/baseten.css'], ['/auth/texture.png', 'web/src/styles/texture.png']]) {
+  for (const [path, source] of [['/auth/baseten.css', 'web/src/styles/baseten.css'], ['/auth/texture.png', 'web/src/styles/texture.png'], ['/auth/texture-dark.png', 'web/src/styles/texture-dark.png'], ['/auth/icons/external-link.svg', 'web/src/styles/icons/external-link.svg']]) {
     assert.deepEqual(assets.get(path).body, await readFile(new URL(`../${source}`, here)), `${path} is not ${source}`)
     assert.match(release, new RegExp(`^RELEASE = [^\\]]*"${source}"`, 'm'), `hosted/deploy.py doesn't ship ${source}`)
   }
+  // The error pages' theme script, so they follow the system's light or dark setting too.
+  assert.deepEqual(assets.get('/auth/theme.js').body, await readFile(new URL('theme.js', here)))
+  assert.equal(assets.get('/auth/theme.js').type, 'text/javascript; charset=utf-8')
   const css = await readFile(new URL('login-page.css', here), 'utf8')
   assert.doesNotMatch(css + renderLogin({ brand }), /url\([^)]*beausite/i)
 })

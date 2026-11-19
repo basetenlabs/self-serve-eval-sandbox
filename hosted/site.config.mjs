@@ -12,8 +12,8 @@ export default {
     askForAccess: 'Ask an Eval Sandbox admin to add you.',
     company: 'Baseten',
     tagline: 'Run coding models on real pull requests and compare what they solve and what it costs.',
-    // The /baseten-design skill's assets/logo files, unchanged: /auth/brand/logo-light and /auth/brand/mark serve them.
-    logo: 'brand/baseten-logo.svg',
+    // The /baseten-design skill's assets/logo files, unchanged: /auth/brand/logo-light, /logo-dark and /mark serve them.
+    logo: { light: 'brand/baseten-logo.svg', dark: 'brand/baseten-logo-white.svg' },
     mark: 'brand/favicon.png',
     // Link previews (Slack, X, iMessage): 2400 x 1260 (1200 x 630 at 2x), public, since crawlers never sign in.
     card: 'card.png',

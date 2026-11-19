@@ -117,9 +117,10 @@ LIMITS = {name: os.environ.get(name, default) for name, default in {
 # Days a run on a private repository keeps its transcripts after it ends; unset keeps them.
 RETENTION = {name: os.environ[name] for name in ["PR_EVAL_PRIVATE_RETENTION_DAYS"] if os.environ.get(name)}
 # The release: everything the page and its runs read from the repository.
-# The sign-in server (hosted/public.mjs) serves the app's own stylesheet and texture before sign-in.
+# The sign-in server (hosted/public.mjs) serves the app's own stylesheet, textures and arrow icon before sign-in.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml",
-           "web/src/styles/baseten.css", "web/src/styles/texture.png"]
+           "web/src/styles/baseten.css", "web/src/styles/texture.png", "web/src/styles/texture-dark.png",
+           "web/src/styles/icons/external-link.svg"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
 # no raw transcripts or logs.
 SEED_FILES = ["run.json", "report.json", "report.html"]

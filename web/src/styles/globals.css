@@ -1,7 +1,8 @@
 /* The look is Baseten's site design system. baseten.css is the /baseten-design skill's stylesheet, copied unchanged:
    it holds every colour, type size and component (bt-*). Tailwind supplies layout utilities only, and its theme is
    locked to those same tokens, so no other colour, radius or shadow can be written. eval.css builds this page's own
-   parts (ev-*) from the system's pieces. Light only. */
+   parts (ev-*) from the system's pieces. Light or dark with the system: data-theme="auto" on <html> turns on the skill's
+   dark theme, which flips every --color-* token, so CSS here that uses only the tokens needs no dark rule of its own. */
 @import "tailwindcss";
 @import "./baseten.css" layer(components);
 @import "./eval.css" layer(components);
@@ -113,7 +114,7 @@
 }
 
 @layer base {
-  html { -webkit-text-size-adjust: 100%; color-scheme: light; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
     background: var(--background-texture);
     color: var(--color-black);
@@ -121,7 +122,8 @@
     letter-spacing: .01em;
     -webkit-font-smoothing: antialiased;
   }
-  ::selection { background: var(--color-pink); color: var(--color-black); }
+  /* Black on the Pink base; in the dark theme White on Dark Pink, the base being too light under White text. */
+  ::selection { background: light-dark(var(--color-pink), var(--color-darkPink)); color: var(--color-black); }
   :focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
   [hidden] { display: none !important; }
   b, strong { font-weight: 500; }

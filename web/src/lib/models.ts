@@ -11,10 +11,15 @@ export interface Swatch {
 }
 
 const c = (name: string) => `var(--color-${name})`;
-const GREEN = { fill: c("green"), ink: c("black"), tint: c("lightGreen") };
-const GREEN_DARK = { fill: c("darkGreen"), ink: c("white"), tint: c("lightGreen") };
-const BLUE = { fill: c("blue"), ink: c("black"), tint: c("lightBlue") };
-const BLUE_DARK = { fill: c("darkBlue"), ink: c("white"), tint: c("lightBlue") };
+// Base and Dark steps keep their colour in the skill's dark theme, so the text on them must keep its colour too.
+// That theme trades White and Black, so each of these inks names the token that holds its colour in the theme in use.
+// The greys flip with the theme, fill and ink together, so their inks are the plain tokens.
+export const INK_BLACK = `light-dark(${c("black")}, ${c("white")})`;
+export const INK_WHITE = `light-dark(${c("white")}, ${c("black")})`;
+const GREEN = { fill: c("green"), ink: INK_BLACK, tint: c("lightGreen") };
+const GREEN_DARK = { fill: c("darkGreen"), ink: INK_WHITE, tint: c("lightGreen") };
+const BLUE = { fill: c("blue"), ink: INK_BLACK, tint: c("lightBlue") };
+const BLUE_DARK = { fill: c("darkBlue"), ink: INK_WHITE, tint: c("lightBlue") };
 const GREY = (step: string, ink: string) => ({ fill: c(step), ink: c(ink), tint: c("lightGrey2") });
 
 // Open models take the dark greys first and closed ones the light greys, so leftovers stay apart.
