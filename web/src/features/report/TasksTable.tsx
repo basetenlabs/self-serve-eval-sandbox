@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Tip } from "@/components/ui/tooltip";
-import type { Swatch as SwatchT } from "@/lib/models";
+import { INK_BLACK, type Swatch as SwatchT } from "@/lib/models";
 import type { Model, Report, Task, Trial } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { TaskSheet } from "./TaskSheet";
@@ -184,7 +184,7 @@ export function Pip({ outcome, fill, ink, small }: { outcome?: keyof typeof GLYP
         outcome === "failed" && "bg-node text-muted-foreground",
         outcome === "invalid" && "bg-lightGold text-black",
       )}
-      style={outcome === "solved" ? { background: fill ?? "var(--color-green)", color: ink ?? "var(--color-black)" } : undefined}
+      style={outcome === "solved" ? { background: fill ?? "var(--color-green)", color: ink ?? INK_BLACK } : undefined}
     >
       {outcome ? GLYPH[outcome] : ""}
     </span>

@@ -2,7 +2,7 @@ import type * as React from "react";
 import { Column, DeltaChip } from "@/components/brand";
 import { Chevron } from "@/components/brand/icons";
 import { dur, pct, plural, usd } from "@/lib/format";
-import { isOpen, type Swatch } from "@/lib/models";
+import { INK_BLACK, isOpen, type Swatch } from "@/lib/models";
 import { Count, Scramble } from "@/lib/motion";
 import { type Lead, type Paired, solvedBy, type Takeaway, wilson } from "@/lib/stats";
 import type { Model, Summary, Task, Trial } from "@/lib/types";
@@ -12,7 +12,7 @@ type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: s
 
 // The brand's head-to-head: Baseten's side is Green, the comparison Blue. Each model keeps the colour
 // it has in the table and the chart under this, so a second open model is Dark Green, not Green again.
-const GREEN = "var(--color-green)", BLUE = "var(--color-blue)", BLACK = "var(--color-black)";
+const GREEN = "var(--color-green)", BLUE = "var(--color-blue)";
 
 type Side = { m: Model; fill: string; ink: string };
 
@@ -31,7 +31,7 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
   const scored = ranked.filter((m) => S[m.key]?.valid);
   if (scored.length < 2) return null;
   const sides: Side[] = [...scored.filter(isOpen), ...scored.filter((m) => !isOpen(m))]
-    .map((m) => ({ m, fill: colors[m.key]?.fill ?? (isOpen(m) ? GREEN : BLUE), ink: colors[m.key]?.ink ?? BLACK }));
+    .map((m) => ({ m, fill: colors[m.key]?.fill ?? (isOpen(m) ? GREEN : BLUE), ink: colors[m.key]?.ink ?? INK_BLACK }));
   const many = sides.length > 2;
   const fills = (open: boolean) => [...new Set(sides.filter((s) => isOpen(s.m) === open).map((s) => s.fill))];
   const metrics: Metric[] = [

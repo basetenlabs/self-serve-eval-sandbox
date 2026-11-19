@@ -3,7 +3,7 @@ import { Swatch } from "@/components/brand";
 import { External } from "@/components/brand/icons";
 import { Tip } from "@/components/ui/tooltip";
 import { clock, secondsSince, usd } from "@/lib/format";
-import type { Swatch as SwatchT } from "@/lib/models";
+import { INK_BLACK, type Swatch as SwatchT } from "@/lib/models";
 import { CHECK, failReason, isFinal, isLive, STAGE, STEPS, stepIndex, type Tone } from "@/lib/stages";
 import type { BoardRow, Cell, Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -172,7 +172,7 @@ export function BoardLegend({ judged }: { judged: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2" aria-label="Each attempt's steps">
       {items.map(([tone, label], i) => {
-        const { className, style } = toneStyle(tone, { fill: "var(--color-green)", ink: "var(--color-black)", tint: "var(--color-lightGreen)" });
+        const { className, style } = toneStyle(tone, { fill: "var(--color-green)", ink: INK_BLACK, tint: "var(--color-lightGreen)" });
         return (
           <span key={tone} className="inline-flex items-center gap-2 text-[12px] text-muted-foreground">
             <span className={cn("size-3.5", className)} style={style} />

@@ -1328,3 +1328,64 @@ html.lenis, html.lenis body { block-size: auto; }
 .bt-cta-visual > .scene { position: absolute; inset: 0; pointer-events: none; }
 @media (min-width: 801px) { .bt-cta-visual > .scene canvas { -webkit-mask-image: linear-gradient(to right, transparent 5%, #000 20%); mask-image: linear-gradient(to right, transparent 5%, #000 20%); } }
 @media (max-width: 800.98px) { .bt-cta-visual > .scene { inset-block: -16.5% 16.5%; inset-inline: calc(-1 * (var(--grid-gutter) + var(--section-inset))); } }
+
+/* ---------- Dark theme: apps only, when the owner asks for one ----------
+ * baseten.co is light only, and a page without the attribute below stays exactly as above. An app whose owner
+ * asks for a dark theme sets it on <html>: data-theme="auto" follows the system setting, "dark" or "light" forces
+ * one (a toggle, if the app has one, writes this attribute), and the page adds <meta name="color-scheme"
+ * content="light dark"> so the browser paints a dark canvas before the CSS arrives. The recipe
+ * (references/site.md, "Web apps"): Black ground, White text, tinted blocks at 4 to 12% White or the ramp's
+ * Black step, rules in Dark Grey 1, primary button White with Black text.
+ * It works by token: every --color-* above resolves with light-dark(), so an app's own CSS that uses the tokens
+ * follows without a dark rule of its own. White and Black trade places; the light greys become tinted blocks
+ * and rules; the dark greys become light text; each ramp's Light step becomes its Black step and its Black step
+ * its Light step (badges, notices and tiles invert); White steps become a faint tint; Base and Dark steps stay.
+ * A block filled with a Base colour (active chip, Green panel, regular badge, banner), the footer, the logo
+ * wall and the fixed canvases stay light inside (color-scheme: light), so their Black text stays Black.
+ * Texture: texture-dark.png beside this file, or set --bt-texture-dark-url. */
+:root[data-theme="auto"] { color-scheme: light dark; }
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme] {
+  --color-white: light-dark(#FFFFFF, #000000);
+  --color-black: light-dark(#000000, #FFFFFF);
+  --color-lightGrey1: light-dark(#F1F5F0, #141714);
+  --color-lightGrey2: light-dark(#E3EAE1, #323432);
+  --color-lightGrey3: light-dark(#C7D4C4, #464B45);
+  --color-darkGrey3: light-dark(#A2AE9D, #788274);
+  --color-darkGrey2: light-dark(#575D56, #A2AE9D);
+  --color-darkGrey1: light-dark(#323432, #C7D4C4);
+  --color-whiteGreen: light-dark(#ECF6EA, #101813);  --color-lightGreen: light-dark(#D7FACE, #213026);  --color-blackGreen: light-dark(#213026, #D7FACE);
+  --color-whitePink: light-dark(#F8F2F8, #181018);   --color-lightPink: light-dark(#F4E7F2, #302130);   --color-blackPink: light-dark(#302130, #F4E7F2);
+  --color-whiteGold: light-dark(#F9F8F4, #17130F);   --color-lightGold: light-dark(#FFEDC4, #2E261E);   --color-blackGold: light-dark(#2E261E, #FFEDC4);
+  --color-whiteBlue: light-dark(#F4F7F9, #101518);   --color-lightBlue: light-dark(#D4EBFF, #212A30);   --color-blackBlue: light-dark(#212A30, #D4EBFF);
+  --color-whitePurple: light-dark(#F7F2FD, #0D0316); --color-lightPurple: light-dark(#D6B7F5, #1A062D); --color-blackPurple: light-dark(#1A062D, #D6B7F5);
+  --color-dotBackgroundSecondary: light-dark(#F1F7EF, #0C0E0C);
+  --color-black-10: light-dark(rgb(0 0 0 / 10%), rgb(255 255 255 / 12%));
+  --color-black-50: light-dark(rgb(0 0 0 / 50%), rgb(255 255 255 / 55%));
+  --bt-texture-dark-url: url("texture-dark.png");
+}
+:root[data-theme="dark"] { --background-texture: var(--bt-texture-dark-url) 0 0 / 60px 60px repeat, var(--color-white); }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] { --background-texture: var(--bt-texture-dark-url) 0 0 / 60px 60px repeat, var(--color-white); }
+}
+/* Light inside: Base fills, Dark-step badges, the footer, the logo wall, the quote mark and the fixed canvases.
+ * The second rule has no specificity, so it gives these blocks Black text only where their own rules set none. */
+:root[data-theme] :is(.bt-chip.active, .bt-eyebrow.green, .bt-panel.green, .bt-badge.regular, .bt-badge.dark, .bt-banner, .bt-product-hero > .visual > .metric,
+  .bt-media > .plate.words > span, .bt-steps .media, .bt-features > .frame, .bt-footer, .bt-logos, .bt-logo-tile, .bt-quote-mark, .bt-slide, .bt-canvas) { color-scheme: light; }
+:where(:root[data-theme]) :where(.bt-chip.active, .bt-eyebrow.green, .bt-panel.green, .bt-badge.regular, .bt-badge.dark, .bt-banner, .bt-product-hero > .visual > .metric,
+  .bt-media > .plate.words > span, .bt-steps .media, .bt-features > .frame, .bt-footer, .bt-logos, .bt-logo-tile, .bt-quote-mark, .bt-slide, .bt-canvas) { color: var(--color-black); }
+/* Code is a tinted block on the Black ground, not a White one. */
+:root[data-theme] .bt-code { background: light-dark(var(--color-black), var(--color-lightGrey1)); color: light-dark(var(--color-white), var(--color-black)); }
+/* The few values above that are not tokens. */
+:root[data-theme] .bt-button.tertiary > span { border-color: light-dark(#0000001a, rgb(255 255 255 / 16%)); }
+:root[data-theme] .bt-button:not(.secondary):not(.tertiary):is(:hover, :focus-visible):not(:disabled, [aria-disabled=true]) { --button-hover-background: light-dark(#242424, #E3EAE1); }
+:root[data-theme] .bt-input::placeholder { color: light-dark(#0000008c, rgb(255 255 255 / 55%)); }
+:root[data-theme] .bt-product-hero > .visual { background: #F1F5F0; }   /* the product scene paints a light ground; Light Grey 1 under it until it loads */
+:root[data-theme] .bt-info.dark { background: light-dark(var(--color-darkGrey1), var(--color-lightGrey2)); color: light-dark(var(--color-lightGrey3), var(--color-darkGrey1)); }   /* made for Black grounds: keeps its look */
+:root[data-theme] .bt-info.dark:is(:hover, :focus-visible, [aria-expanded=true]) { background: light-dark(var(--color-white), var(--color-black)); color: light-dark(var(--color-black), var(--color-white)); }
+:root[data-theme] .bt-external .arrow { background: var(--color-black); -webkit-mask: url("icons/external-link.svg") -.35px -.5px / 6.85px 6.85px no-repeat; mask: url("icons/external-link.svg") -.35px -.5px / 6.85px 6.85px no-repeat; }
+:root[data-theme] .bt-link:focus-visible { box-shadow: 0 0 0 2px var(--color-white), 0 0 0 4px var(--color-black); }
+:root[data-theme] :is(.bt-scrim, .bt-nav-overlay) { background: light-dark(#00000054, rgb(0 0 0 / 60%)); }
+/* A dialog on the scrim needs an edge when both are dark, as a menu has one. */
+:root[data-theme] .bt-dialog { outline: 1px solid light-dark(transparent, var(--color-lightGrey3)); }
