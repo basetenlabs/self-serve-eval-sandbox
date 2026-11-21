@@ -6,27 +6,12 @@ import { Tip } from "@/components/ui/tooltip";
 import { plural } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import type { AppState, Run } from "@/lib/types";
-import { useProductHero } from "@/lib/scene";
-// The still Model APIs scene (scripts/make_cube.py --family pink --scene --inline): what shows until the live scene
-// has rendered, and instead of it without WebGL. The phone gets a squarer crop with the cube centred.
-import scene from "@/assets/hero.svg?raw";
-import scenePhone from "@/assets/hero-phone.svg?raw";
 import { fillAgain, NewRun } from "./NewRun";
 import { RunsList } from "./RunsList";
-
-const STEPS = [
-  { n: "01", title: "Pick PRs", text: "Merged pull requests that came with tests." },
-  { n: "02", title: "Check", text: "A PR's tests must fail before its change and pass after." },
-  { n: "03", title: "Models code", text: "Each model gets only the request, in its own sandbox." },
-  { n: "04", title: "Grade", text: "Hidden tests in a fresh sandbox, then AI judges." },
-];
 
 // Back from adding repositories to the GitHub App, in a tab GitHub opened: install, update, or request
 // (an organization's owner has to approve it).
 const fromGitHub = new URLSearchParams(location.search).get("setup_action");
-
-// What the terminal on the hero cube's face types, over and over.
-const FACE = ["$ pr-eval run", "replay merged PRs", "open vs closed", "hidden tests", "judges: solved"];
 
 export function HomePage({ state, error, go, hurry }: {
   state: AppState | null; error: string | null; go: (r: Route) => void; hurry: () => void;
@@ -38,50 +23,18 @@ export function HomePage({ state, error, go, hurry }: {
   React.useEffect(() => {
     if (fromGitHub) history.replaceState(null, "", location.pathname + location.hash); // a reload doesn't say it again
   }, []);
-  const visual = React.useRef<HTMLDivElement>(null);
-  useProductHero(visual, "model-apis", FACE);
-  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // No hero: the page opens on the form, under a one-line title (the /baseten-design skill's "Open on the content").
   return (
     <>
       {installed && <InstalledNote action={installed} onClose={() => setInstalled(null)} />}
-      <Surface className="ev-hero">
-        <h1 className="ev-hero-title">{"Find the open model that\ndoes your team's coding work"}</h1>
-        <div className="ev-scene">
-          <div className="visual" ref={visual}>
-            <div className="still max-sm:hidden" dangerouslySetInnerHTML={{ __html: scene }} />
-            <div className="still sm:hidden" dangerouslySetInnerHTML={{ __html: scenePhone }} />
-            <div className="scene bt-webgl" aria-hidden="true" />
-          </div>
-          <div className="corner">
-            <p>
-              Replay your team's merged pull requests with open models on Baseten and a closed model, side by side, each
-              attempt in its own sandbox. See what each one solves, what it costs and how long it takes.
-            </p>
-            <div className="ctas">
-              <Button chevron onClick={() => jump("new-run")}>Start a run</Button>
-              <Button variant="outline" chevron onClick={() => jump("runs")}>See past runs</Button>
-            </div>
-          </div>
-        </div>
-        <ol className="ev-steps" aria-label="How a run works">
-          {STEPS.map((s) => (
-            <li key={s.n}>
-              <span className="bt-numeral">{s.n}</span>
-              <h2>{s.title}</h2>
-              <p>{s.text}</p>
-            </li>
-          ))}
-        </ol>
-      </Surface>
+      {live && <><LiveBanner run={live} /><Spacer /></>}
 
-      {live && <><Spacer /><LiveBanner run={live} /></>}
-
-      <Spacer />
       <Surface id="new-run" aria-labelledby="new-run-heading" className="scroll-mt-3">
         <div className="ev-head">
           <div>
             <Tag>New run</Tag>
-            <h2 id="new-run-heading">Pick the PRs and the models</h2>
+            <h1 id="new-run-heading">Pick the PRs and the models</h1>
+            <p>Open models on Baseten and a closed model replay your team's merged pull requests, each in its own sandbox. See what each one solves, what it costs and how long it takes.</p>
           </div>
           {last?.again && (
             <Tip content={`The pull requests and models of ${last.title}. Add a new model, then start.`}>
