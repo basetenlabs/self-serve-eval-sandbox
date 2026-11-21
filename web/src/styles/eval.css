@@ -105,32 +105,6 @@
 a.bt-badge { text-decoration: none; transition: background-color .3s; }
 a.bt-badge.green:hover { --badge-background: var(--color-green); }
 
-/* ---------- Home: hero title over the Model APIs scene, its intro in a White block cut into the corner ---------- */
-.ev-hero { display: flex; flex-direction: column; gap: 24px; padding-block: 24px; }
-.ev-hero-title { margin: 0; font: 400 40px/1.1 var(--beausite); letter-spacing: -.01em; white-space: pre-line; text-wrap: balance; }
-@media (min-width: 801px) { .ev-hero-title { font-size: 56px; letter-spacing: -.02em; } }
-.ev-scene { position: relative; display: flex; flex-direction: column-reverse; }
-/* The scene is an illustration: it keeps its Light Pink ground in the dark theme. */
-.ev-scene > .visual { position: relative; aspect-ratio: 339 / 424; overflow: clip; background: var(--color-lightPink); color-scheme: light; }
-.ev-scene > .visual > .still > svg, .ev-scene > .visual > .scene { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
-.ev-scene > .visual > .scene { pointer-events: none; }   /* the scene reads the pointer from the window */
-.ev-scene > .corner { display: flex; flex-direction: column; gap: 24px; padding-bottom: 24px; background: var(--color-white); }
-.ev-scene > .corner > p { margin: 0; font: 350 16px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey1); }
-.ev-scene .ctas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.ev-scene .ctas .bt-button { inline-size: 100%; }
-.ev-scene .ctas .bt-button > span { inline-size: 100%; }
-@media (min-width: 801px) {
-  .ev-scene { display: block; }
-  .ev-scene > .visual { aspect-ratio: 1368 / 440; }
-  .ev-scene > .corner { position: absolute; top: 0; left: 0; inline-size: calc((100% - 11 * var(--grid-gap)) / 3 + 2 * var(--grid-gap) + 12px); padding: 0 12px 24px 0; }
-  .ev-scene .ctas .bt-button.has-chevron .label { min-inline-size: 0; }
-}
-.ev-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px var(--grid-gap); margin: 0; padding: 0; list-style: none; }
-@media (min-width: 1025px) { .ev-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.ev-steps > li { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--color-lightGrey2); }
-.ev-steps h2 { margin: 8px 0 0; font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; }
-.ev-steps p { margin: 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
-
 /* A run is going: a Light Green strip (something Baseten runs, live) with a 2px progress line. */
 .ev-live { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding: 16px; background: var(--color-lightGreen); color: var(--color-black); text-decoration: none; transition: background-color .3s; }
 .ev-live .title { font: 400 20px/1.3 var(--beausite); letter-spacing: -.01em; }
@@ -138,7 +112,6 @@ a.bt-badge.green:hover { --badge-background: var(--color-green); }
 .ev-live .watch { display: inline-flex; align-items: center; gap: 8px; margin-inline-start: auto; font: 400 14px/1.4 var(--beausite); }
 .ev-live .meter { position: absolute; inset: auto 0 0; block-size: 2px; background: var(--color-black-10); }
 .ev-live .meter > i { display: block; block-size: 100%; background: var(--color-black); transform-origin: 0 0; transition: transform .4s var(--ease); }
-.ev-scene text { font-family: var(--geist-mono); }
 
 /* ---------- New run ---------- */
 .ev-small { margin: 0; font: 350 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-darkGrey2); }
