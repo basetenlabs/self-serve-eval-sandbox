@@ -45,7 +45,9 @@ QUICK = ROOT / "configs" / "quick_tasks.toml"
 # A PR makes a good task when it changes code and tests together and is a reviewable size.
 # Scans of recent PRs take only those up to DEFAULT_MAX_LINES; bigger ones cost a lot per
 # attempt and tell little. PRs asked for by number may go up to MAX_LINES.
-MAX_FILES, MAX_LINES, DEFAULT_MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 40, 1600, 400, 400_000, 80
+MAX_FILES, MAX_LINES, DEFAULT_MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 80, 3000, 1000, 1_000_000, 80
+# An attempt's time limit: an hour, so the agent has room to work through a larger pull request.
+AGENT_SECONDS = 3600
 # Test files, and what only tests read (Go testdata, snapshots): all of it is hidden from the agent.
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|__snapshots__|testing|testdata|fixtures)(/|$)"
                        r"|(?:_test\.go|[._](?:test|spec)\.[cm]?[jt]sx?|^test_[^/]+\.py|/test_[^/]+\.py|\.snap)$", re.I)
@@ -515,7 +517,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
                  "reference_sha": reference, "instruction_source": source},
         "environment": {"setup": commands["setup"], "setup_timeout_sec": commands["setup_timeout"],
                         **({"memory_mb": commands["memory"]} if commands["memory"] else {})},
-        "agent": {"timeout_sec": 1800},
+        "agent": {"timeout_sec": AGENT_SECONDS},
         "verifier": {"test": commands["test"], "test_template": template, "scope": commands["scope"], "timeout_sec": 900,
                      "test_files": test_paths, "deleted_test_files": deleted},
     })
