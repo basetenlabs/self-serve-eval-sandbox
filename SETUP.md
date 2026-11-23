@@ -8,7 +8,7 @@ The finished setup runs the page at http://127.0.0.1:8765, where you pick merged
 
 ## What it costs and what it touches
 
-- **Model calls** go to Anthropic (Claude models), Baseten Model APIs (the open models) and OpenAI (GPT models). A run with `--judge` also asks one judge at each. The quick sample, 10 PostHog pull requests with two models, costs about $12 and takes about 35 minutes, longer when a model needs a second or third try.
+- **Model calls** go to Anthropic (Claude models), Baseten Model APIs (the open models) and OpenAI (GPT models). A run with `--judge` also asks one judge at each. The quick sample, 10 PostHog pull requests with the three default models, costs about $11 and takes about 35 minutes, longer when a model needs a second or third try.
 - **Compute** runs in Baseten Sandboxes, in the team of the Baseten key from step 4. Nothing runs in Docker on your machine.
 - **Your code**: repository clones stay on your machine, in `data/repos/`. Each attempt uploads the code from before the change to a sandbox. The README's "Where your code goes" section has the details.
 
@@ -61,7 +61,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://api.baseten.co/v1/token
   -H "Authorization: Bearer ${BASETEN_SANDBOX_API_KEY:-$BASETEN_API_KEY}" -H 'Content-Type: application/json' -d '{"scopes":["sandboxes"]}'
 ```
 
-An attempt uses two sandboxes at once, one for the agent and one for grading. Baseten runs 10 sandboxes at once for an organization until you ask for more ([Manage sandboxes](https://docs.baseten.co/sandboxes/manage)). The quick sample starts all 20 of its attempts together and other runs up to 8; when the count is full, a new sandbox waits for one to finish. Until the limit is raised, run from a terminal with `--concurrency` set to a quarter of it (step 6).
+An attempt uses two sandboxes at once, one for the agent and one for grading. Baseten runs 10 sandboxes at once for an organization until you ask for more ([Manage sandboxes](https://docs.baseten.co/sandboxes/manage)). The quick sample runs up to 20 attempts together and other runs up to 8; when the count is full, a new sandbox waits for one to finish. Until the limit is raised, run from a terminal with `--concurrency` set to a quarter of it (step 6).
 
 For runs with `--judge`, the Claude judge runs through Claude Code on this machine, so install it too: `curl -fsSL https://claude.ai/install.sh | bash` (no Node needed), or `npm install -g @anthropic-ai/claude-code`. Check: `claude --version` prints a version. On a Mac, the Claude token can live in the Keychain instead of the environment: `security add-generic-password -a "$USER" -s pr-eval-claude-code-oauth-token -w`.
 
@@ -79,16 +79,17 @@ print("GitHub:", c["gh"], c["gh_login"] or "", "| trial image built:", c["image"
 print("Models missing a key:", [m["key"] for m in s["models"] if m["missing"]] or "none")'
 ```
 
-Check: every line says `True`, except "trial image built", which turns `True` after the first run builds the image (a few minutes, once). `pr-eval build-image` builds it ahead of time. Each problem line says what is missing.
+Check: the first two lines say `True`, except "trial image built", which turns `True` after the first run builds the image (a few minutes, once). `pr-eval build-image` builds it ahead of time. The last line names only models whose key you don't have: the default models need `BASETEN_API_KEY` and the Claude key, so without `OPENAI_API_KEY` it names the GPT models. Each problem line says what is missing.
 
 Then open http://127.0.0.1:8765. The checklist on the right of the page shows the same things.
 
 ## 6. First run
 
-Ask the person before starting a run, since it spends money. On the page, choose **Quick sample**, keep the two default models and press **Start run**. From a terminal, this does the same:
+Ask the person before starting a run, since it spends money. On the page, choose **Quick sample**, keep the three default models and press **Start run**. From a terminal, this does the same:
 
 ```bash
-.venv/bin/pr-eval run --quick --concurrency 20    # every attempt at once, as the page does
+.venv/bin/pr-eval run --quick --concurrency 20    # as the page does, for a limit of 80 sandboxes or more
+.venv/bin/pr-eval run --quick --concurrency 2     # at the starting limit of 10 sandboxes (step 4)
 ```
 
 Check: the run ends with `Finished. Report: jobs/<run>/report.html`. On the page, **Open report** shows solve rate, cost per solved task and time for each model.
