@@ -5,11 +5,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ReportHeader, Results, Tasks } from "@/features/report/ReportView";
 import { useMotion } from "@/lib/motion";
 import type { Report } from "@/lib/types";
+import { useReportView } from "@/lib/view";
 
 /** A run's report as one shareable page: it works from disk, offline, with the data inside it. */
 export function ReportApp({ report }: { report: Report }) {
   // A PR opened from the head-to-head and one opened in the tasks table share one sheet.
   const [taskId, setTaskId] = React.useState<string | null>(null);
+  // Simple by default; ?view=detail in a shared link opens the detailed view.
+  const [view, setView] = useReportView();
   const served = location.protocol.startsWith("http"); // opened through pr-eval serve, not from disk
   const page = React.useRef<HTMLDivElement>(null);
   useMotion(page); // the skill's markup hooks
@@ -36,12 +39,17 @@ export function ReportApp({ report }: { report: Report }) {
             </Surface>
             <Spacer />
             <Surface>
-              <Results report={report} onOpen={setTaskId} />
+              <Results report={report} onOpen={setTaskId} view={view} onView={setView} />
             </Surface>
-            <Spacer />
-            <Surface>
-              <Tasks report={report} openId={taskId} onOpen={setTaskId} />
-            </Surface>
+            {/* The PR table, traces and diffs are the detailed view's. */}
+            {view === "detail" && (
+              <>
+                <Spacer />
+                <Surface>
+                  <Tasks report={report} openId={taskId} onOpen={setTaskId} />
+                </Surface>
+              </>
+            )}
           </main>
           <footer className="bt-footnote ev-foot">
             <span>Self-Serve Model Eval Sandbox</span>

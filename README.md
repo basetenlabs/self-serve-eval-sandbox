@@ -16,7 +16,7 @@ Setting it up with a coding agent? Give it this repository's link and [SETUP.md]
 
 | Variable | For |
 | --- | --- |
-| `BASETEN_API_KEY` | the sandboxes attempts run in, open models on Baseten Model APIs, and the Kimi K3 judge |
+| `BASETEN_API_KEY` | the sandboxes attempts run in, open models on Baseten Model APIs, and the Kimi K3.1 Pro judge |
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Claude models, and the Claude Opus 5.5 judge (install `claude` too) |
 | `OPENAI_API_KEY` | GPT models and the GPT-6.1 Sol judge |
 
@@ -40,7 +40,7 @@ It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then
 
 1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes, or up to three times that when a model needs every try) or **Your pull requests**: paste links, or type a repository and pick from its merges.
 2. Choose the models to compare (Claude Opus 5.5, DeepSeek V4.1 Flash 1017 and GLM-5.3 to start).
-3. Press **Start run**. When it finishes, **Open report** shows solve rate, cost per solved task and time per task, with every attempt's diff, trace, test output and the judges' verdicts.
+3. Press **Start run**. When it finishes, **Open report** opens on the **Simple** view: PRs solved, cost per solved task and time per task for each model, and a chart of share solved against cost. **Detailed** adds every attempt's diff, trace, test output and the judges' verdicts. The page remembers your choice; add `?view=detail` or `?view=simple` to a report's link to open it on that view.
 
 The first run builds the trial image on Baseten, which takes a few minutes once. Private repositories work through your `gh` login.
 
@@ -58,7 +58,7 @@ pr-eval run https://github.com/o/a/pull/12 x/b#9    # or links, from any number 
 pr-eval run your-org/your-repo --tries 1           # one try per attempt, no second (default 3)
 ```
 
-Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finished run, add `--attempts 3` for more attempts or `--models kimi-k3` to add a model. `pr-eval <command> --help` lists the options.
+Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finished run, add `--attempts 3` for more attempts or `--models kimi-k3.1-pro` to add a model. `pr-eval <command> --help` lists the options.
 
 | Command | Does |
 | --- | --- |
@@ -87,7 +87,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request. The merged diff and the PR's tests are kept aside as the answer. Before any model runs, the PR's tests must fail without the change and pass with it, and the chair judge checks that the request says enough to pass them (the text is often written before the PR's final code); PRs that fail either check are left out. If the judge can't be reached, the task goes ahead on its tests alone. A test that can't import a name the request never gives makes the attempt not scored, not a model failure.
 2. **Run.** Claude Code works on the request with the model under test. Its calls go through a small relay in the sandbox; for open models on Baseten, the relay also sets the same reasoning effort on every request.
-3. **Grade.** The PR's hidden tests run against the agent's code. Then three LLM judges (Claude Opus 5.5, GPT-6.1 Sol and Kimi K3) each compare its diff with the merged one, and Kimi K3 writes the final verdict. Solved means the tests pass and the final verdict is a pass. If the chair can't answer, a unanimous panel decides.
+3. **Grade.** The PR's hidden tests run against the agent's code. Then three LLM judges (Claude Opus 5.5, GPT-6.1 Sol and Kimi K3.1 Pro) each compare its diff with the merged one, and Kimi K3.1 Pro writes the final verdict. Solved means the tests pass and the final verdict is a pass. If the chair can't answer, a unanimous panel decides.
 4. **Report.** One HTML page per run, plus `report.json`.
 
 ## What the numbers mean
@@ -100,7 +100,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Models
 
-`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic API. GPT models use OpenAI Responses for tool calls through the same Claude Code harness. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
+`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic API. GPT models use OpenAI Responses for tool calls through the same Claude Code harness. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) and `kimi-k3` are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
 
 ## Development
 

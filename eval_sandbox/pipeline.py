@@ -33,7 +33,7 @@ DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]
 # Models no longer offered, and the one that replaced each. A past run keeps the models it ran with (run.json
 # holds them, labels and prices included), so its report reads as before; a new run, or a resumed one, can't
 # name them, and Run again puts the replacement in the form.
-RETIRED = {"glm-5.3-fast": "glm-5.3", "deepseek-v4.1-flash-1017-fast": "deepseek-v4.1-flash"}
+RETIRED = {"glm-5.3-fast": "glm-5.3", "deepseek-v4.1-flash-1017-fast": "deepseek-v4.1-flash", "kimi-k3": "kimi-k3.1-pro"}
 DEFAULT_LIMIT = 10
 # Tries per attempt: a try the model fails is run again from scratch, up to this many in all, and the attempt is
 # solved if any try solves it. Every model gets the same. Runs from before tries were recorded had one.

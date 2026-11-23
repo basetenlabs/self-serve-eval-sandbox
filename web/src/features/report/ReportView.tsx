@@ -4,9 +4,12 @@ import { day, plural } from "@/lib/format";
 import { ordered, palette } from "@/lib/models";
 import { rank, takeaway } from "@/lib/stats";
 import type { Report } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import type { ReportView } from "@/lib/view";
 import { HeadToHead } from "./HeadToHead";
 import { Leaderboard } from "./Leaderboard";
 import { Scatter } from "./Scatter";
+import { Simple } from "./Simple";
 import { TaskSheet } from "./TaskSheet";
 import { TasksTable, useTrialsFor } from "./TasksTable";
 
@@ -48,8 +51,9 @@ export function smallSample(tasks: number, pointer = true): string | null {
     : `${plural(tasks, "task")}, so each one moves a solve rate by about ${Math.round(100 / tasks)} points.${pointer ? " Open a model's row for its 95% range." : ""}`;
 }
 
-/** Notes that change how to read the run. `sample: false` leaves the small-sample note to the head-to-head's details. */
-export function Banners({ report, sample = true }: { report: Report; sample?: boolean }) {
+/** Notes that change how to read the run. `sample: false` leaves the small-sample note to the head-to-head's details;
+ *  `pointer: false` drops its pointer to the table's rows, for a view without them. */
+export function Banners({ report, sample = true, pointer = true }: { report: Report; sample?: boolean; pointer?: boolean }) {
   const { run, tasks, trials } = report;
   const expected = (run.tasks ?? []).length * report.models.length * (run.attempts || 1);
   const items: [string, string][] = [];
@@ -61,7 +65,7 @@ export function Banners({ report, sample = true }: { report: Report; sample?: bo
   }
   if (run.note) items.push(["Note", run.note]);
   if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed."]);
-  const small = sample ? smallSample(tasks.length) : null;
+  const small = sample ? smallSample(tasks.length, pointer) : null;
   if (small) items.push(["Small sample", small]);
   if (!items.length) return null;
   return (
@@ -76,25 +80,63 @@ export function Banners({ report, sample = true }: { report: Report; sample?: bo
   );
 }
 
-/** Results: every model side by side, the table of them, and quality against cost.
- *  `onOpen` opens a PR's attempts from the head-to-head. */
-export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: string) => void }) {
+const VIEWS: [ReportView, string, string][] = [
+  ["simple", "Simple", "What each model solved and cost, on one screen"],
+  ["detail", "Detailed", "Every PR, attempt, trace and diff"],
+];
+
+/** Simple or Detailed, as chips like the page's other choices. */
+export function ViewSwitch({ view, onView }: { view: ReportView; onView: (v: ReportView) => void }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="label-xs text-muted-foreground">View</span>
+      <div className="bt-toolbar ev-chips" role="radiogroup" aria-label="View">
+        {VIEWS.map(([v, label, title]) => (
+          <button key={v} type="button" role="radio" aria-checked={view === v} title={title}
+            className={cn("bt-chip", view === v && "active")} onClick={() => onView(v)}>{label}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Results, in the view chosen: Simple (per model what it solved and cost, and quality against cost) or Detailed
+ *  (every model side by side, the table of them, and quality against cost). `onOpen` opens a PR's attempts
+ *  from the head-to-head. */
+export function Results({ report, onOpen, view, onView }: {
+  report: Report; onOpen?: (taskId: string) => void; view: ReportView; onView: (v: ReportView) => void;
+}) {
   const { S, colors, ranked, t } = useReportModel(report);
-  // Nothing to compare until an attempt finishes, e.g. a run where no PR passed the check.
-  if (!report.trials.length) {
-    return report.complete
-      ? <Empty title="No attempts ran">No model attempted a task in this run, so there's nothing to compare.</Empty>
-      : <Empty title="No results yet">Results appear here as attempts finish.</Empty>;
-  }
   // With a head-to-head, the small-sample note sits in its details, next to the solve rates it qualifies.
   const inDetails = !!t.pairs?.n;
+  let body: React.ReactNode;
+  // Nothing to compare until an attempt finishes, e.g. a run where no PR passed the check.
+  if (!report.trials.length) {
+    body = report.complete
+      ? <Empty title="No attempts ran">No model attempted a task in this run, so there's nothing to compare.</Empty>
+      : <Empty title="No results yet">Results appear here as attempts finish.</Empty>;
+  } else if (view === "simple") {
+    body = (
+      <div className="grid gap-14">
+        <Banners report={report} pointer={false} />
+        <Simple report={report} ranked={ranked} colors={colors} t={t} />
+      </div>
+    );
+  } else {
+    body = (
+      <div className="grid gap-14">
+        <Banners report={report} sample={!inDetails} />
+        <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
+          sample={inDetails ? smallSample(report.tasks.length, false) : null} />
+        <Leaderboard report={report} ranked={ranked} colors={colors} />
+        <Scatter models={ranked} S={S} colors={colors} />
+      </div>
+    );
+  }
   return (
-    <div className="grid gap-14">
-      <Banners report={report} sample={!inDetails} />
-      <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
-        sample={inDetails ? smallSample(report.tasks.length, false) : null} />
-      <Leaderboard report={report} ranked={ranked} colors={colors} />
-      <Scatter models={ranked} S={S} colors={colors} />
+    <div className="grid gap-8">
+      <div className="flex justify-end"><ViewSwitch view={view} onView={onView} /></div>
+      {body}
     </div>
   );
 }

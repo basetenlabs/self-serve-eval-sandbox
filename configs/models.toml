@@ -22,7 +22,7 @@
 #   time per attempt until it has runs of its own.
 # maker names who makes a closed model. The report says who serves each model it compares:
 #   "Baseten's GLM-5.3" for an open model, "Anthropic's Claude Opus 5.5" for a closed one.
-# The Fast variants (GLM-5.3 Fast, DeepSeek V4.1 Flash 1017 Fast) are no longer offered:
+# The Fast variants (GLM-5.3 Fast, DeepSeek V4.1 Flash 1017 Fast) and Kimi K3 are no longer offered:
 #   pipeline.RETIRED names what replaced each. Past runs keep their own models in run.json.
 
 [defaults]
@@ -94,15 +94,6 @@ provider = "baseten"
 model = "zai-org/GLM-5.3"
 prices."zai-org/GLM-5.3" = { input = 1.40, cached_input = 0.14, output = 4.40 }
 
-[models.kimi-k3]
-label = "Kimi K3"
-kind = "open"
-provider = "baseten"
-model = "moonshotai/Kimi-K3"
-# Stays within the key's rate limit.
-max_concurrent = 2
-prices."moonshotai/Kimi-K3" = { input = 3.00, cached_input = 0.30, output = 15.00 }
-
 [models."kimi-k3.1-pro"]
 label = "Kimi K3.1 Pro"
 kind = "open"
@@ -110,6 +101,7 @@ provider = "baseten"
 model = "moonshotai/Kimi-K3.1-Pro"
 # Baseten list rates (baseten.co/pricing, 2026-11-04).
 prices."moonshotai/Kimi-K3.1-Pro" = { input = 2.00, cached_input = 0.20, output = 10.00 }
+estimate_from = ["glm-5.3"]
 
 [models.muse-spark]
 label = "Muse Spark Open"
@@ -119,6 +111,7 @@ model = "meta-models/muse-spark-open"
 # Stays within the key's rate limit.
 max_concurrent = 2
 prices."meta-models/muse-spark-open" = { input = 1.25, cached_input = 0.15, output = 4.25 }
+estimate_from = ["glm-5.3"]
 
 [models."deepseek-v4.1-flash"]
 # The 1017 release, which Baseten serves beside an undated DeepSeek-V4.1-Flash: the label says which.
@@ -134,6 +127,7 @@ kind = "open"
 provider = "baseten"
 model = "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B"
 prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_input = 0.04, output = 0.50 }
+estimate_from = ["deepseek-v4.1-flash", "glm-5.3"]
 
 # The judges grade every attempt the hidden tests have run on. Each reads the request,
 # the merged diff and the agent's diff on its own; then the chair reads the same evidence
@@ -148,7 +142,7 @@ prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_
 #   names. `effort` is sent as reasoning_effort, or as Claude Code's --effort.
 [judge]
 effort = "high"
-chair = "moonshotai/Kimi-K3"
+chair = "moonshotai/Kimi-K3.1-Pro"
 
 [[judge.panel]]
 label = "Claude Opus 5.5"
@@ -165,10 +159,10 @@ api_key_env = "OPENAI_API_KEY"
 prices = { input = 2.00, cached_input = 0.10, output = 10.00 }
 
 [[judge.panel]]
-label = "Kimi K3"
-model = "moonshotai/Kimi-K3"
+label = "Kimi K3.1 Pro"
+model = "moonshotai/Kimi-K3.1-Pro"
 base_url = "https://inference.baseten.co/v1"
 api_key_env = "BASETEN_API_KEY"
-prices = { input = 3.00, cached_input = 0.30, output = 15.00 }
+prices = { input = 2.00, cached_input = 0.20, output = 10.00 }
 # It also chairs, so it grades twice per attempt; the cap keeps it within the key's rate limit.
 max_concurrent = 4
