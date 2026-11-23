@@ -241,3 +241,26 @@ export function takeaway(models: Model[], S: Record<string, Summary | undefined>
   const sentence = v ? [v.head, v.cost].filter(Boolean).join(" ") : `${quality}${tail}.${after}`;
   return { sentence, verdict: v, pairs, open, closed, ...leads };
 }
+
+/** A model's share of the PRs it has a scored attempt on that it solved, or null before one is scored. */
+export const solvedShare = (s: Summary | undefined): number | null => (s?.tasks ? s.tasks_solved / s.tasks : null);
+
+/** One model on the quality-against-cost chart: costing less and solving a larger share are both better. */
+export interface Tradeoff {
+  key: string;
+  cost: number;
+  share: number;
+}
+
+/**
+ * The Pareto frontier: the models no other model beats on both cost and share solved, cheapest first, so joining
+ * them in order draws the line. One model beats another when it costs no more and solves no smaller a share, and
+ * is better on at least one of the two; two with the same figures both stay. A point missing a figure takes no part.
+ */
+export function frontier(points: Tradeoff[]): string[] {
+  const ok = points.filter((p) => Number.isFinite(p.cost) && Number.isFinite(p.share));
+  const beats = (a: Tradeoff, b: Tradeoff) => a.cost <= b.cost && a.share >= b.share && (a.cost < b.cost || a.share > b.share);
+  return ok.filter((p) => !ok.some((q) => beats(q, p)))
+    .sort((a, b) => a.cost - b.cost || a.share - b.share)
+    .map((p) => p.key);
+}

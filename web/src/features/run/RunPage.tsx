@@ -15,6 +15,7 @@ import { pipeline } from "@/lib/stages";
 import { takeaway } from "@/lib/stats";
 import type { AppState, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useReportView } from "@/lib/view";
 import { LivePanel } from "./LivePanel";
 import { Pipeline } from "./Pipeline";
 
@@ -25,6 +26,8 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
   // report.json is rewritten as attempts finish; fetch it again whenever the count moves.
   const version = run ? `${run.progress.done}|${run.phase}|${run.report}` : null;
   const { report } = useReport(run?.report ? id : null, version);
+  // The results tab's Simple or Detailed view, shared with the standalone report.
+  const [view, setView] = useReportView();
 
   if (!state) return <Surface><div className="bt-skeleton h-96" aria-busy /></Surface>;
   if (!run) {
@@ -72,7 +75,7 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
             {report && current === "board" && <TaskDrawer report={report} taskId={task ?? null} onClose={() => open(null)} />}
           </TabsContent>
           <TabsContent value="results">
-            {report ? <Results report={report} onOpen={open} /> : <Loading />}
+            {report ? <Results report={report} onOpen={open} view={view} onView={setView} /> : <Loading />}
             {report && current === "results" && <TaskDrawer report={report} taskId={task ?? null} onClose={() => open(null)} />}
           </TabsContent>
           <TabsContent value="tasks">{report ? <Tasks report={report} openId={task ?? null} onOpen={open} /> : <Loading />}</TabsContent>
