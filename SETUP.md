@@ -104,7 +104,7 @@ From a terminal:
 .venv/bin/pr-eval run your-org/your-repo --limit 10
 ```
 
-Go and Python repositories need nothing more. For other languages, give the install and test commands, for example `--setup "npm ci" --test "npx vitest run {test_files}"`, where `{test_files}` becomes the pull request's changed test files.
+The install and test commands are worked out when the run starts: a guess from the repository's files (Go and Python defaults, the Node package manager and test runner, Cargo), proved in a sandbox on one PR, and if that fails a short model loop on `deepseek-v4.1-flash` (spend counts toward the run). What works is kept in `data/commands.json` for the next run. Commands you give always win, for example `--setup "npm ci" --test "npx vitest run {test_files}"`, where `{test_files}` becomes the pull request's changed test files.
 
 ## When something goes wrong
 

@@ -82,6 +82,10 @@ class Skip(Exception):
     """A pull request that can't be a task, and why."""
 
 
+class NoRecipe(Skip):
+    """A repository without default commands here: the run works them out (commands.py)."""
+
+
 def parse_pull(text: str) -> tuple[str, int] | None:
     """(owner/repo, number) from a pull request's link or owner/repo#number, else None."""
     match = PULL.fullmatch(text.strip())
@@ -156,7 +160,7 @@ def recipe(repo: str, language: str, test_paths: list[str], package_json: dict |
                 "test": ("node_modules/.bin/vitest run --project main --coverage.enabled=false "
                          + " ".join(shlex.quote(p) for p in files)),
                 "scope": "the PR's changed test files"}
-    raise Skip(f"no default setup and test commands for {language}; pass --setup and --test")
+    raise NoRecipe(f"no default setup and test commands for {language}; pass --setup and --test")
 
 
 def toml_value(value) -> str:
@@ -475,7 +479,13 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     runnable = [p for p in test_paths if p in present and SOURCE_FILE.search(p)]
     go_files = [f["path"] for f in files if f["path"].endswith(".go")]
     imports = go_imports(mirror, reference, go_files) if repo == "grafana/grafana" else None
-    commands = recipe(repo, language, runnable, package_json, imports) if not (setup and test) else {}
+    commands = {}
+    if not (setup and test):
+        try:
+            commands = recipe(repo, language, runnable, package_json, imports)
+        except NoRecipe:  # a guess from its files for now, proved when the run starts
+            from .commands import first_guess
+            commands = first_guess(mirror, base, language, runnable)
     template = test or commands["test"]
     commands = {"setup": setup or commands["setup"], "scope": commands.get("scope", "the given test command"),
                 "setup_timeout": commands.get("setup_timeout", 900), "memory": commands.get("memory"),
@@ -645,11 +655,6 @@ def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = Non
         language = language or gh(f"repos/{repo}").get("language") or "unknown"
     except RuntimeError as exc:
         raise SystemExit(f"can't read {repo} on GitHub: {exc}") from None
-    if not (setup and test):
-        try:
-            recipe(repo, language, [])
-        except Skip as why:
-            raise SystemExit(f"{repo}: {why}") from None
     say(f"Cloning {repo}")
     mirror = clone(repo, repos_dir, on_progress)
     out.mkdir(parents=True, exist_ok=True)

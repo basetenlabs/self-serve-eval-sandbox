@@ -113,6 +113,22 @@ export interface Run {
   /** What Run again puts back in the form; null when it can't. */
   again?: Again | null;
   board?: Board;
+  /** "commands" while the run works out how to install and test a repository. */
+  step?: string | null;
+  /** The install and test commands each named repository ran with. */
+  commands?: Record<string, CommandsUsed>;
+}
+
+/** A repository's install and test commands in a run, and where they came from. */
+export interface CommandsUsed {
+  setup: string;
+  test: string;
+  /** given on the form or the command line; saved from an earlier run; the default; or worked out at the start. */
+  source: "given" | "saved" | "default" | "worked out";
+  proven_on?: { pr: number; commit?: string | null } | null;
+  tries?: number;
+  cost_usd?: number | null;
+  model?: string | null;
 }
 
 /** A run's pull requests, models and commands, to start the same run again. */
@@ -167,6 +183,8 @@ export interface RepoInfo {
   language?: string;
   private?: boolean;
   defaults?: boolean;
+  /** Commands an earlier run worked out for it. */
+  commands?: { setup: string; test: string; at?: string } | null;
   error?: string;
 }
 
@@ -339,6 +357,7 @@ export interface Report {
     note?: string | null;
     status?: { phase?: string; detail?: string } | null;
     request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;
+    commands?: Record<string, CommandsUsed>;
   };
   models: Model[];
   summary: Record<string, Summary>;

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Empty, Eyebrow } from "@/components/brand";
+import { commandsSource } from "@/lib/commands";
 import { day, plural } from "@/lib/format";
 import { ordered, palette } from "@/lib/models";
 import { rank, takeaway } from "@/lib/stats";
@@ -53,10 +54,12 @@ export function smallSample(tasks: number, pointer = true): string | null {
 
 /** Notes that change how to read the run. `sample: false` leaves the small-sample note to the head-to-head's details;
  *  `pointer: false` drops its pointer to the table's rows, for a view without them. */
-export function Banners({ report, sample = true, pointer = true }: { report: Report; sample?: boolean; pointer?: boolean }) {
+export function Banners({ report, sample = true, pointer = true, commands = false }: {
+  report: Report; sample?: boolean; pointer?: boolean; commands?: boolean;
+}) {
   const { run, tasks, trials } = report;
   const expected = (run.tasks ?? []).length * report.models.length * (run.attempts || 1);
-  const items: [string, string][] = [];
+  const items: [string, React.ReactNode][] = [];
   const stopped = !report.complete && ["failed", "stopped"].includes(run.status?.phase ?? "") ? run.status?.detail : null;
   if (stopped) {
     items.push(["Stopped", `${trials.length} of ${expected || "?"} attempts had finished. ${stopped}`]);
@@ -67,6 +70,17 @@ export function Banners({ report, sample = true, pointer = true }: { report: Rep
   if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed."]);
   const small = sample ? smallSample(tasks.length, pointer) : null;
   if (small) items.push(["Small sample", small]);
+  // The detailed view says how each repository was installed and tested.
+  const used = commands ? Object.entries(run.commands ?? {}) : [];
+  for (const [repo, c] of used) {
+    items.push([used.length > 1 ? `Commands, ${repo}` : "Commands", (
+      <span className="grid gap-1">
+        <span>{commandsSource(c)}</span>
+        <span>Install: <code className="ev-code break-all">{c.setup}</code></span>
+        <span>Test: <code className="ev-code break-all">{c.test}</code></span>
+      </span>
+    )]);
+  }
   if (!items.length) return null;
   return (
     <div className="border-t border-lightGrey2">
@@ -125,7 +139,7 @@ export function Results({ report, onOpen, view, onView }: {
   } else {
     body = (
       <div className="grid gap-14">
-        <Banners report={report} sample={!inDetails} />
+        <Banners report={report} sample={!inDetails} commands />
         <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
           sample={inDetails ? smallSample(report.tasks.length, false) : null} />
         <Leaderboard report={report} ranked={ranked} colors={colors} />
