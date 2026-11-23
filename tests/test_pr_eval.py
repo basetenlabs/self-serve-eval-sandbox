@@ -398,7 +398,7 @@ class RecipeTest(unittest.TestCase):
                     (Path(d) / f"o__r-{n}" / "validation" / "result.json").write_text(json.dumps({"status": status}))
             quick = app.quick_sample()
         self.assertEqual(quick["tasks"], 3)  # the screened-out and the failing ones are left out; a sandbox error runs again
-        self.assertEqual((quick["repos"], quick["names"]), (1, ["o/r"]))
+        self.assertEqual((quick["repos"], quick["names"], quick["at_once"]), (1, ["o/r"], app.QUICK_CONCURRENCY))
 
     def test_spread_mixes_repositories(self):
         rows = [{"repo": "a", "n": i} for i in range(5)] + [{"repo": "b", "n": i} for i in range(5)]

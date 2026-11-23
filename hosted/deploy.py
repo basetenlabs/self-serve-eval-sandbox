@@ -105,7 +105,7 @@ SMOKE_TIMEOUT = 1800  # seconds for the whole attempt: sandboxes, install, agent
 SMOKE_OWNER = "deploy-smoke"
 LABELS = {"app": "pr-eval-host"}
 # One team's sandboxes and one set of keys serve everyone: runs going at once, in all and per person, and what runs
-# spent on models in the last 24 hours, in all and per person (a quick sample is about $12).
+# spent on models in the last 24 hours, in all and per person (a quick sample is about $11).
 LIMITS = {name: os.environ.get(name, default) for name, default in {
     "PR_EVAL_MAX_RUNS": "2", "PR_EVAL_RUNS_PER_PERSON": "1",
     "PR_EVAL_SPEND_TOTAL": "1000", "PR_EVAL_SPEND_PER_PERSON": "500"}.items()}
