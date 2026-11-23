@@ -61,8 +61,8 @@ RUNS_PER_PERSON = int(os.environ.get("PR_EVAL_RUNS_PER_PERSON") or 1)
 SPEND_TOTAL = float(os.environ.get("PR_EVAL_SPEND_TOTAL") or 0) or None
 SPEND_PER_PERSON = float(os.environ.get("PR_EVAL_SPEND_PER_PERSON") or 0) or None
 SPEND_WINDOW = timedelta(days=1)
-# What a run's attempt with a model no earlier run priced counts toward those limits: this, or the dearest
-# attempt any model has cost so far if that's more. Guessing low would let an unpriced model run past them.
+# What a run's try with a model no earlier run priced counts toward those limits: this, or the dearest
+# try any model has cost so far if that's more. Guessing low would let an unpriced model run past them.
 UNKNOWN_ATTEMPT_COST = 5.0
 # What one judge's answer with no price counts: well over any measured so far (about $0.05 to $0.15).
 UNKNOWN_JUDGE_COST = 0.25
@@ -157,7 +157,7 @@ class App:
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(judge), "models": models, "runs": runs,
-                "quick": quick_sample(),
+                "quick": quick_sample(), "tries": pipeline.DEFAULT_TRIES,
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
@@ -228,11 +228,11 @@ class App:
         return stopped
 
     def unpriced(self, everyone: list[tuple[Path, dict]]) -> dict[str, float]:
-        """What an agent attempt that ran but has no price counts, by model: its latest cost per attempt, else
-        UNKNOWN_ATTEMPT_COST or the dearest attempt seen, whichever is more. Key "" is that fallback."""
+        """What an agent try that ran but has no price counts, by model: its latest cost per try, else
+        UNKNOWN_ATTEMPT_COST or the dearest try seen, whichever is more. Key "" is that fallback."""
         found = self.estimates(sorted((r for _, r in everyone), key=lambda r: r["active_at"], reverse=True))
-        each = {key: e["cost_per_attempt"] for key, e in found.items()}
-        dearest = [c for e in found.values() for c in [e["cost_per_attempt"], *(s["cost_per_attempt"] for s in e["by_scope"].values())]]
+        each = {key: e["cost_per_try"] for key, e in found.items()}
+        dearest = [c for e in found.values() for c in [e["cost_per_try"], *(s["cost_per_try"] for s in e["by_scope"].values())]]
         return {**each, "": max([UNKNOWN_ATTEMPT_COST, *dearest])}
 
     def pid(self, run_id: str) -> int | None:
@@ -408,7 +408,8 @@ class App:
 
     def estimates(self, runs: list[dict]) -> dict[str, dict]:
         """Cost and time per attempt for each model, from the most recent run that has them, and from the
-        most recent over each set of repositories (`by_scope`): a large repository costs far more per attempt."""
+        most recent over each set of repositories (`by_scope`): a large repository costs far more per attempt.
+        Measured per try, then counted for an attempt of up to DEFAULT_TRIES tries (see expected_tries)."""
         found: dict[str, dict] = {}
         for run in runs:  # newest first
             job_dir = self.jobs_dir / run["id"]
@@ -417,7 +418,7 @@ class App:
             scope = ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
             for key, s in (read_json(job_dir / "report.json").get("summary") or {}).items():
                 if s.get("valid") and s.get("cost_per_attempt") is not None:
-                    each = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
+                    each = per_try(s)
                     found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(scope, each)
         return found
 
@@ -585,18 +586,21 @@ class App:
         return {name.lower() for name in [*named, *map(repo_of, meta.get("candidates") or meta.get("tasks") or [])]}
 
     @staticmethod
-    def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None) -> str | None:
-        """Why a run of `count` pull requests with these models would go over a spending limit, from each
-        model's cost per attempt as the page estimates it. A model with no earlier run counts as
-        UNKNOWN_ATTEMPT_COST or the dearest attempt seen, whichever is more."""
+    def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None,
+                    tries: int = pipeline.DEFAULT_TRIES) -> str | None:
+        """Why a run of `count` pull requests with these models, up to `tries` tries each, would go over a
+        spending limit, from each model's cost per try and how often it needed another, as the page
+        estimates them. A model with no earlier run counts as UNKNOWN_ATTEMPT_COST or the dearest try seen,
+        whichever is more, for every try."""
         if not (SPEND_TOTAL or (SPEND_PER_PERSON and user)):
             return None
         known = {m["key"]: m for m in state["models"]}
-        seen = [each["cost_per_attempt"] for m in state["models"]
-                for each in [m, *(m.get("by_scope") or {}).values()] if each.get("cost_per_attempt") is not None]
-        unknown = max([UNKNOWN_ATTEMPT_COST, *seen])
-        estimate = [((known.get(key, {}).get("by_scope") or {}).get(scope) or known.get(key, {})).get("cost_per_attempt")
-                    for key in dict.fromkeys(keys)]
+        seen = [each["cost_per_try"] for m in state["models"]
+                for each in [m, *(m.get("by_scope") or {}).values()] if each.get("cost_per_try") is not None]
+        unknown = max([UNKNOWN_ATTEMPT_COST, *seen]) * tries
+        found = [(known.get(key, {}).get("by_scope") or {}).get(scope) or known.get(key, {}) for key in dict.fromkeys(keys)]
+        estimate = [None if each.get("cost_per_try") is None else
+                    each["cost_per_try"] * expected_tries(each.get("solve_rate"), tries) for each in found]
         cost = sum(unknown if each is None else each for each in estimate) * count
         mine = state.get("spend")
         if mine and cost > mine["cap"] - mine["spent"]:
@@ -647,9 +651,12 @@ class App:
         quick = self.repos_of(self.jobs_dir / run_id) is None
         # What it has left to run must fit what's left of the limits, as a new run's would.
         keys = [m["key"] for m in run["models"]]
-        left = run["progress"]["total"] - run["progress"]["done"] + run["lost"]
+        tries = read_json(self.jobs_dir / run_id / "run.json").get("tries", 1)  # the run's own, as it resumes with them
+        # Attempts stopped between tries count too: they run again from their next try.
+        again = sum(runner.tries_left(read_json(p), tries) for p in (self.jobs_dir / run_id / "trials").glob("*/result.json"))
+        left = run["progress"]["total"] - run["progress"]["done"] + run["lost"] + again
         scope = quick_scope() if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
-        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user)):
+        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user, tries)):
             return {"error": problem}
         if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
             return {"error": NO_PAGE_TOKEN}
@@ -758,6 +765,26 @@ def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | Non
     return total, by_owner
 
 
+def per_try(s: dict) -> dict:
+    """A model's cost, time and solve rate per try from its summary in a report, and what an attempt of up to
+    DEFAULT_TRIES tries comes to. A report from before tries were recorded has one try per attempt."""
+    tries = s.get("tries") or s["valid"]
+    cost = s.get("cost_per_try", s["cost_per_attempt"])
+    seconds = s.get("median_seconds_per_try", s.get("median_seconds"))
+    rate = (s.get("solved") or 0) / tries if tries else None
+    expected = expected_tries(rate, pipeline.DEFAULT_TRIES)
+    return {"cost_per_attempt": cost * expected, "seconds_per_attempt": None if seconds is None else seconds * expected,
+            "tries_per_attempt": expected, "cost_per_try": cost, "solve_rate": rate}
+
+
+def expected_tries(solve_rate: float | None, tries: int) -> float:
+    """How many tries an attempt of up to `tries` takes on average: each one after the first runs only when
+    every try before it failed. Without a solve rate to go by, all of them."""
+    if solve_rate is None:
+        return float(tries)
+    return sum((1 - solve_rate) ** n for n in range(tries))
+
+
 def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[str, dict]:
     """A model with no runs yet takes the cost and time per attempt of the first of its `estimate_from` models that
     has them, the cost scaled by the two models' output price."""
@@ -769,7 +796,8 @@ def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[s
             if not mine or not theirs or not theirs.get("output"):
                 continue
             ratio = mine["output"] / theirs["output"]
-            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r}
+            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r,
+                                        **({"cost_per_try": e["cost_per_try"] * r} if "cost_per_try" in e else {})}
             source = found[base.key]
             found[key] = {**scale(source), "by_scope": {k: scale(v) for k, v in source["by_scope"].items()}}
             break
@@ -777,7 +805,7 @@ def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[s
 
 
 def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
-    """A run's charges since `since`. One with no price counts as `unpriced` says for an agent attempt of its
+    """A run's charges since `since`. One with no price counts as `unpriced` says for an agent try of its
     model, or UNKNOWN_JUDGE_COST for a judge's answer: a missing price never reads as free."""
     cost = 0.0
     try:
@@ -818,18 +846,19 @@ def again(meta: dict) -> dict | None:
 
 
 def cell(model: str, attempt: int, result: dict) -> dict:
-    """A finished attempt on the board: its outcome, time, cost, and what the tests and judge said."""
-    seconds = None
-    if result.get("started_at") and result.get("finished_at"):
-        seconds = round((datetime.fromisoformat(result["finished_at"])
-                         - datetime.fromisoformat(result["started_at"])).total_seconds())
+    """A finished attempt on the board: its outcome, time, cost (every try's), and what the tests and judge said."""
+    spans = [(x.get("started_at"), x.get("finished_at")) for x in report.tries_of(result)]
+    seconds = round(sum((datetime.fromisoformat(f) - datetime.fromisoformat(s)).total_seconds() for s, f in spans)) \
+        if all(s and f for s, f in spans) else None
+    costs = [(x.get("agent") or {}).get("cost_usd") for x in report.tries_of(result)]
     # Not scored: the step it failed at in a few words, for the cell and the live activity; the attempt's
     # sheet has the whole sentence and its log.
     return {"model": model, "attempt": attempt, "stage": result.get("outcome") or "invalid",
             "reason": causes.short(result), "seconds": seconds,
-            "cost": (result.get("agent") or {}).get("cost_usd"), "diff": result.get("diff"),
+            "cost": None if None in costs else sum(costs), "diff": result.get("diff"),
             "tests_passed": (result.get("tests") or {}).get("passed"),
-            "judge": (result.get("judge") or {}).get("verdict")}
+            "judge": (result.get("judge") or {}).get("verdict"),
+            **({"try": result["try"]} if (result.get("try") or 1) > 1 else {})}
 
 
 def usd(x: float) -> str:

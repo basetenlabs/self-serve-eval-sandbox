@@ -19,14 +19,14 @@ export function useReportModel(report: Report) {
   }, [report]);
 }
 
-/** Facts about a run for its eyebrow: harness, PRs, attempts and dates. */
+/** Facts about a run for its eyebrow: harness, PRs, attempts, tries and dates. */
 export function reportFacts(report: Report): string[] {
   const { run, tasks, trials } = report;
   const repos = new Set(tasks.map((t) => t.repo)).size;
   const last = trials.map((t) => t.finished_at).filter(Boolean).sort().pop();
   const dates = last && day(last) !== day(run.created_at) ? `${day(run.created_at)} to ${day(last)}` : day(run.created_at);
   return [`Claude Code ${run.harness_version ?? ""}`.trim(), `${plural(tasks.length, "merged PR")} from ${plural(repos, "repo")}`,
-    `${plural(run.attempts, "attempt")} per task`, dates];
+    `${plural(run.attempts, "attempt")} per task`, ...((run.tries ?? 1) > 1 ? [`up to ${run.tries} tries each`] : []), dates];
 }
 
 /** The standalone report's header: facts, then the one-sentence answer. */
@@ -91,7 +91,7 @@ export function Results({ report, onOpen }: { report: Report; onOpen?: (taskId: 
   return (
     <div className="grid gap-14">
       <Banners report={report} sample={!inDetails} />
-      <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} onOpen={onOpen}
+      <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
         sample={inDetails ? smallSample(report.tasks.length, false) : null} />
       <Leaderboard report={report} ranked={ranked} colors={colors} />
       <Scatter models={ranked} S={S} colors={colors} />

@@ -48,12 +48,12 @@ def creation_timed_out() -> runtime.RuntimeError:
 
 
 @contextlib.contextmanager
-def sandboxes(prepare=None, create=None):
+def sandboxes(prepare=None, create=None, tests=None):
     """run_trial's sandbox steps, faked: `prepare(name, ...)` stands in for prepare_workspace,
-    `create(name)` for creating a sandbox."""
+    `create(name)` for creating a sandbox, `tests(name, ...)` for the hidden tests (they pass)."""
     names = iter(f"sandbox-{n}" for n in range(1000))
 
-    def tests(name, *_):
+    def passing(name, *_):
         return {"passed": True, "timed_out": False, "output": "1 passed in 0.1s", "summary": "1 passed"}
 
     def agent(name, model, placeholder_env, relay_headers, path, *_):
@@ -71,13 +71,13 @@ def sandboxes(prepare=None, create=None):
             mock.patch.object(runner, "capture_patch", return_value=("patch", "1\t0\tfile.py")), \
             mock.patch.object(runner, "sh", return_value=(0, "", False)), \
             mock.patch.object(runner, "set_aside_agent_tests", return_value=[]), \
-            mock.patch.object(runner, "run_tests", side_effect=tests), \
+            mock.patch.object(runner, "run_tests", side_effect=tests or passing), \
             mock.patch.object(runner.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
         yield
 
 
-def run_one(d: Path, the_task=None) -> dict:
-    trial = runner.trial_runner([MODEL], runner.Settings(), "run-one")
+def run_one(d: Path, the_task=None, tries: int = 1) -> dict:
+    trial = runner.trial_runner([MODEL], runner.Settings(), "run-one", tries)
     the_task = the_task or task(d)
     return trial((the_task, MODEL, 1, d / "trials" / runner.trial_name(the_task, MODEL, 1)))
 
@@ -203,6 +203,67 @@ class RetryTests(unittest.TestCase):
             result = run_one(Path(d))
         self.assertEqual((result["step"], result["transient"]), ("upload", False))
         self.assertLessEqual(tries["upload"], 2)  # the agent's and its verifier's, one try each
+
+
+class TriesTests(unittest.TestCase):
+    """An attempt the model fails is tried again from scratch, up to the run's tries, and pays for every try."""
+
+    def hidden_tests(self, passing_tries: set[int]):
+        """run_tests faked: the hidden tests pass on the tries listed (counted from 1)."""
+        calls = []
+
+        def tests(name, *_):
+            calls.append(name)
+            passed = len(calls) in passing_tries
+            return {"passed": passed, "timed_out": False, "output": "", "summary": "1 passed" if passed else "1 failed"}
+        return tests, calls
+
+    def test_a_failed_attempt_is_tried_again_until_a_try_solves_it(self):
+        tests, calls = self.hidden_tests({2})
+        with tempfile.TemporaryDirectory() as d, sandboxes(tests=tests), \
+                mock.patch.object(runner, "price_agent", side_effect=lambda a, *_: {**a, "cost_usd": 0.5}):
+            result = run_one(Path(d), tries=3)
+            trial_dir = Path(d) / "trials" / result["trial"]
+            record = report.trial_record(trial_dir)
+            kept = sorted(p.name for p in (trial_dir / runner.TRIES).iterdir())
+        self.assertEqual((result["outcome"], result["try"], len(calls)), ("solved", 2, 2))  # no third try
+        self.assertEqual(kept, ["1"])  # the failed try's files, set apart
+        self.assertEqual([(t["try"], t["outcome"], t["agent"]["cost_usd"]) for t in record["earlier_tries"]],
+                         [(1, "failed", 0.5)])
+        s = report.summarize([record])
+        self.assertEqual((s["solved"], s["cost_usd"], s["cost_per_solved"]), (1, 1.0, 1.0))  # the failed try is paid for
+        self.assertEqual((s["tries"], s["cost_per_try"], s["solved_on"]), (2, 0.5, [0, 1]))
+
+    def test_tries_end_at_the_runs_limit_and_one_try_is_the_old_behavior(self):
+        for tries in (3, 1):
+            tests, calls = self.hidden_tests(set())
+            with tempfile.TemporaryDirectory() as d, sandboxes(tests=tests):
+                result = run_one(Path(d), tries=tries)
+            self.assertEqual((result["outcome"], result["try"], len(calls)), ("failed", tries, tries))
+            self.assertEqual([t["try"] for t in result.get("earlier_tries", [])], list(range(1, tries)))
+
+    def test_a_stopped_attempt_goes_on_from_its_next_try_and_a_lost_try_is_not_counted(self):
+        task = SimpleNamespace(id="t")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "trials" / runner.trial_name(task, MODEL, 1)
+            path.mkdir(parents=True)
+            (path / "result.json").write_text(json.dumps({"outcome": "failed", "try": 1}))
+            (path / "agent.log").write_text("first")
+            self.assertEqual(len(runner.pending_trials([task], [MODEL], 1, Path(d), tries=3)), 1)  # stopped between tries
+            self.assertEqual(runner.pending_trials([task], [MODEL], 1, Path(d)), [])  # a run of one try is done
+            self.assertIsNone(runner.fresh_folder(path))
+            self.assertEqual(sorted(p.name for p in path.iterdir()), [runner.TRIES])
+            self.assertEqual((path / runner.TRIES / "1" / "agent.log").read_text(), "first")
+            # The next try is lost to infrastructure: run again on resume as before, and still the second try.
+            (path / "result.json").write_text(json.dumps({"outcome": "invalid", "invalid_reason": "sandbox-error", "try": 2}))
+            (path / "agent.log").write_text("lost")
+            self.assertEqual(len(runner.pending_trials([task], [MODEL], 1, Path(d), tries=3)), 1)
+            self.assertEqual(runner.fresh_folder(path), "sandbox-error")
+            self.assertEqual(sorted(p.name for p in path.iterdir()), [runner.TRIES])
+            self.assertEqual([t["try"] for t in runner.earlier_tries(path)], [1])
+            # A run from before tries were recorded: its failed attempt was its one try.
+            (path / "result.json").write_text(json.dumps({"outcome": "failed"}))
+            self.assertEqual(runner.pending_trials([task], [MODEL], 1, Path(d)), [])
 
 
 class EarlyStopTests(unittest.TestCase):

@@ -28,7 +28,7 @@ from pathlib import Path
 from . import causes, meter, runtime
 from . import judge as judge_mod
 from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
-from .rundir import charge, now, write_json
+from .rundir import charge, now, read_json, write_json
 from .tasks import AGENT_SECONDS, TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
@@ -553,14 +553,51 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
             "seconds": round(time.monotonic() - started, 1), "summary": test_summary(out), "output": out}
 
 
+# In an attempt's folder: the tries its model already failed, one folder each (tries/1, tries/2, ...).
+TRIES = "tries"
+# What the attempt's result keeps of each earlier try, for the report and the page.
+TRY_AGENT = ("seconds", "retry_wait_seconds", "cost_usd", "cost_source", "timed_out", "num_turns", "tokens",
+             "rate_limited_retries")
+
+
 def fresh_folder(trial_dir: Path) -> str | None:
-    """Empty an attempt's folder. Returns why its last try was invalid, if it was."""
-    # An attempt starts in a clean folder: one cut short or lost to infrastructure leaves files behind.
-    earlier = trial_dir / "result.json"
-    rerun_after = json.loads(earlier.read_text()).get("invalid_reason") if earlier.is_file() else None
-    shutil.rmtree(trial_dir, ignore_errors=True)
-    trial_dir.mkdir(parents=True)
-    return rerun_after
+    """Empty an attempt's folder for its next try. Returns why its last try was invalid, if it was.
+
+    A try the model failed moves to tries/<n>/ and stays part of the attempt: its cost and time count.
+    Anything else left behind, a try cut short or lost to infrastructure, is deleted."""
+    earlier = read_json(trial_dir / "result.json")
+    kept = trial_dir / TRIES
+    if earlier.get("outcome") == "failed":
+        target = kept / str(earlier.get("try") or 1)
+        shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True)
+        for path in list(trial_dir.iterdir()):
+            if path.name != TRIES:
+                path.rename(target / path.name)
+        return None
+    for path in list(trial_dir.iterdir()) if trial_dir.is_dir() else []:
+        if path.name == TRIES:
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    return earlier.get("invalid_reason")
+
+
+def earlier_tries(trial_dir: Path) -> list[dict]:
+    """The tries of this attempt its model already failed, oldest first, each in brief."""
+    found = []
+    for path in (trial_dir / TRIES).glob("*/result.json"):
+        r = read_json(path)
+        if r.get("outcome") == "failed" and path.parent.name.isdigit():
+            found.append({"try": int(path.parent.name), "outcome": "failed", "started_at": r.get("started_at"),
+                          "finished_at": r.get("finished_at"),
+                          "agent": {k: (r.get("agent") or {}).get(k) for k in TRY_AGENT},
+                          "diff": r.get("diff"), "tests": {k: (r.get("tests") or {}).get(k) for k in ("passed", "summary")},
+                          "judge": {k: (r.get("judge") or {}).get(k) for k in ("verdict", "reason")} if r.get("judge") else None})
+    return sorted(found, key=lambda t: t["try"])
 
 
 @dataclass
@@ -619,17 +656,21 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     when trying it again could go differently.
     """
     rerun_after = ready.rerun_after if ready else fresh_folder(trial_dir)
+    earlier = earlier_tries(trial_dir)
     container = ready.container if ready else container_name(run_id)
     verifier = container_name(run_id)
     verify_dir = trial_dir / "verification"
     verify_dir.mkdir(exist_ok=True)
     result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
-              "model_id": model.model, "attempt": attempt, "started_at": ready.started_at if ready else now(),
-              "outcome": None,
+              "model_id": model.model, "attempt": attempt, "try": len(earlier) + 1,
+              "started_at": ready.started_at if ready else now(), "outcome": None,
               "invalid_reason": None, **environment_identity(settings),
               "agent_sandbox": container, "verifier_sandbox": verifier}
     if rerun_after:
         result["rerun_after"] = rerun_after
+    if earlier:  # the tries the model failed before this one: the attempt's cost and time include them
+        result["earlier_tries"] = earlier
+    since = {"started_at": result["started_at"], **({"try": result["try"]} if earlier else {})}  # for the live view
     # Tasks collected before the limit went up to an hour keep their old 30 minutes in task.toml: the hour applies to them too.
     agent_timeout = settings.agent_timeout or max(int(task.meta["agent"].get("timeout_sec", 0)), AGENT_SECONDS)
     memory = sandbox_memory(task, settings)
@@ -687,13 +728,13 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         if ready and ready.error:
             raise ready.error
         if not ready:
-            stage(live, "sandboxes", started_at=result["started_at"])
+            stage(live, "sandboxes", **since)
         verifier_ready = helper.submit(ready_verifier)
         if ready:
             reason, result["setup"] = ready.reason, ready.setup
         else:
             start_container(container, run_id, settings, memory)
-            stage(live, "setup", started_at=result["started_at"])
+            stage(live, "setup", **since)
             reason, result["setup"] = prepare_workspace(container, task, trial_dir)
         if reason:
             return finish("invalid", reason)
@@ -702,7 +743,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         step = "agent"
-        stage(live, "agent", started_at=result["started_at"])
+        stage(live, "agent", **since)
         # The agent ran, so it spent: charged below, or unpriced in `finally` if this ends first. Through
         # the meter every call is in the ledger already.
         charged = ticket is not None
@@ -730,7 +771,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         # A finished top-level process is not proof its detached children stopped.
         # Destroy the entire agent VM BEFORE any hidden tests leave this host.
         step = "tests"
-        stage(live, "tests", started_at=result["started_at"], diff=result["diff"])
+        stage(live, "tests", **since, diff=result["diff"])
         runtime.delete(container)
         alive.remove(container)
         reason, result["verifier_setup"] = verifier_ready.result()
@@ -782,7 +823,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         return finish("failed")
     if settings.judge is None:
         return finish("solved" if tests["passed"] else "failed")
-    stage(live, "judge", started_at=result["started_at"], diff=result["diff"], tests_passed=tests["passed"])
+    stage(live, "judge", **since, diff=result["diff"], tests_passed=tests["passed"])
     result["judge"], outcome, reason = judge_attempt(settings.judge, task, patch, tests, test_output, trial_dir)
     return finish(outcome, reason)
 
@@ -991,22 +1032,33 @@ def lost_trials(job_dir: Path) -> int:
     return sum(lost(json.loads(p.read_text())) for p in (job_dir / "trials").glob("*/result.json"))
 
 
-def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path) -> list[tuple]:
-    """Trials not finished in `job_dir`, or lost to infrastructure, attempt-major, so a stopped run is balanced."""
+def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, tries: int = 1) -> list[tuple]:
+    """Trials not finished in `job_dir`, lost to infrastructure, or failed with tries left (a stop between
+    tries, or a resume that raised --tries), attempt-major, so a stopped run is balanced."""
     pending = []
     for attempt in range(1, attempts + 1):
         for task in tasks:
             for model in models:
                 path = job_dir / "trials" / trial_name(task, model, attempt)
                 done = path / "result.json"
-                if not done.is_file() or lost(json.loads(done.read_text())):
+                result = json.loads(done.read_text()) if done.is_file() else None
+                if not result or lost(result) or tries_left(result, tries):
                     pending.append((task, model, attempt, path))
     return pending
 
 
-def trial_runner(models: list[Model], settings: Settings, run_id: str):
+def tries_left(result: dict, tries: int) -> bool:
+    """Whether an attempt the model failed may still be tried again under the run's `tries`."""
+    return result.get("outcome") == "failed" and (result.get("try") or 1) < tries
+
+
+def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: int = 1):
     """Runs one pending trial within its model's own limit, and once more if it was lost to something
-    passing (causes.transient). A broken trial is saved, never raised."""
+    passing (causes.transient). A broken trial is saved, never raised.
+
+    A try the model fails (tests fail, the judges say no, it gave up or ran out of time) is followed by
+    another from scratch, up to `tries` in all, the same for every model; the first that solves it ends the
+    attempt. A try lost to infrastructure isn't one of them: it keeps the handling above."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
 
     def once(job, ready: Ready | None) -> dict:
@@ -1024,16 +1076,24 @@ def trial_runner(models: list[Model], settings: Settings, run_id: str):
                 write_json(path / "result.json", result)
             return result
 
+    def one_try(job, ready: Ready | None) -> dict:
+        result = once(job, ready)
+        if result.get("transient") and not STOPPING.is_set():
+            first = {k: result.get(k) for k in ("invalid_reason", "step", "cause")}
+            print(f"  {result['trial']}: {result['cause']} Trying it once more.", flush=True)
+            result = once(job, None)
+            result["first_try"] = first
+            if result.get("outcome") != "interrupted":
+                write_json(job[3] / "result.json", result)
+        return result
+
     def trial(job, ready: Ready | None = None) -> dict:
         with limits[job[1].key]:
-            result = once(job, ready)
-            if result.get("transient") and not STOPPING.is_set():
-                first = {k: result.get(k) for k in ("invalid_reason", "step", "cause")}
-                print(f"  {result['trial']}: {result['cause']} Trying it once more.", flush=True)
-                result = once(job, None)
-                result["first_try"] = first
-                if result.get("outcome") != "interrupted":
-                    write_json(job[3] / "result.json", result)
+            result = one_try(job, ready)
+            while tries_left(result, tries) and not STOPPING.is_set():
+                print(f"  {result['trial']}: not solved on try {result.get('try') or 1} of {tries}. "
+                      "Trying again from scratch.", flush=True)
+                result = one_try(job, None)
             return result
 
     return trial
@@ -1118,10 +1178,10 @@ def fit(requested: int, free_mb: int | None = None) -> tuple[int, int, int | Non
 
 
 def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-        run_id: str, on_result=None) -> None:
+        run_id: str, on_result=None, tries: int = 1) -> None:
     """Run every trial not already finished in `job_dir`, a few at a time. Raises Halted if they all fail alike."""
-    pending = pending_trials(tasks, models, attempts, job_dir)
-    in_parallel(pending, trial_runner(models, settings, run_id), settings.concurrency, run_id, on_result,
+    pending = pending_trials(tasks, models, attempts, job_dir, tries)
+    in_parallel(pending, trial_runner(models, settings, run_id, tries), settings.concurrency, run_id, on_result,
                 halt=SameFailure())
 
 
@@ -1144,7 +1204,7 @@ class Verdict:
 
 
 def check_and_run(candidates: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-                  run_id: str, on_checked=None, on_result=None) -> None:
+                  run_id: str, on_checked=None, on_result=None, tries: int = 1) -> None:
     """Check the tasks and run the models on each one as soon as its own check passes.
 
     Checks and trials share the run's sandboxes, checks first, so a slow check holds up
@@ -1155,7 +1215,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
     total)` every trial, where total counts the trials of tasks that have passed so far.
     """
     todo = [t for t in candidates if needs_check(t, settings)]
-    trial = trial_runner(models, settings, run_id)
+    trial = trial_runner(models, settings, run_id, tries)
     verdicts = {t.id: Verdict() for t in todo}
     unchecked, trials_done, trials_total = len(candidates), 0, 0
 
@@ -1166,7 +1226,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
             on_checked(task, status, unchecked)
         if status != "valid":
             return []
-        trials = pending_trials([task], models, attempts, job_dir)
+        trials = pending_trials([task], models, attempts, job_dir, tries)
         trials_total += len(trials)
         return trials
 
@@ -1174,7 +1234,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
     for task in candidates:
         if task not in todo:
             jobs += [("trial", t) for t in checked(task, validation_status(task, settings))]
-    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir)]
+    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir, tries)]
 
     def check(task: Task) -> dict:
         status = None

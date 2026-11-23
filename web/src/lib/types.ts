@@ -18,10 +18,12 @@ export interface Model {
 export interface CatalogModel extends Model {
   missing?: string | null;
   default?: boolean;
+  /** Per attempt, counting the tries an attempt is likely to take (AppState.tries at most). */
   cost_per_attempt?: number;
   seconds_per_attempt?: number;
+  tries_per_attempt?: number;
   /** The same, from the most recent run over each set of repositories ("o/a,o/b", lower case) or "quick". */
-  by_scope?: Record<string, { cost_per_attempt: number; seconds_per_attempt: number }>;
+  by_scope?: Record<string, { cost_per_attempt: number; seconds_per_attempt: number; tries_per_attempt?: number }>;
 }
 
 export interface Checks {
@@ -53,6 +55,8 @@ export interface Cell {
   diff?: { files: number; added: number; removed: number } | null;
   tests_passed?: boolean | null;
   judge?: string | null;
+  /** The try this is, from the second on: live, the one running; finished, the last. */
+  try?: number;
 }
 
 export interface BoardRow {
@@ -127,6 +131,8 @@ export interface AppState {
   runs: Run[];
   /** `ready`: its tasks are collected, so it starts without reading GitHub. */
   quick: { tasks: number; repos: number; names?: string[]; ready?: boolean };
+  /** Tries per attempt a run started here gets: a try the model fails runs again, up to this many. */
+  tries?: number;
   default_limit: number;
   max_limit: number;
   /** Some run is going, anyone's: the page polls faster. */
@@ -232,6 +238,10 @@ export interface Summary {
   rebuilt_cost_attempts?: number;
   partial_cost_attempts?: number;
   judge_disagreements: number;
+  /** Tries over the valid attempts, and how many attempts each try solved ([on try 1, on try 2, ...]). */
+  tries?: number;
+  cost_per_try?: number | null;
+  solved_on?: number[];
 }
 
 export interface Task {
@@ -252,11 +262,26 @@ export interface Task {
 
 export type Outcome = "solved" | "failed" | "invalid";
 
+/** A try of an attempt that its model failed before the last one, in brief. */
+export interface EarlierTry {
+  try: number;
+  outcome: "failed";
+  started_at?: string | null;
+  finished_at?: string | null;
+  agent?: Trial["agent"];
+  diff?: Trial["diff"];
+  tests?: { passed?: boolean | null; summary?: string | null } | null;
+  judge?: { verdict?: string; reason?: string } | null;
+}
+
 export interface Trial {
   trial: string;
   task_id: string;
   model: string;
   attempt: number;
+  /** Set when the attempt took more than one try: the last one's number, and the ones before it. */
+  try?: number;
+  earlier_tries?: EarlierTry[];
   outcome: Outcome;
   invalid_reason?: string | null;
   /** Not scored: the step it failed at, why in one sentence, and the end of the log that shows it. */
@@ -307,6 +332,8 @@ export interface Report {
     run_id: string;
     created_at: string;
     attempts: number;
+    /** Tries per attempt; missing on runs from before tries, which had one. */
+    tries?: number;
     tasks?: string[];
     harness_version?: string;
     judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;

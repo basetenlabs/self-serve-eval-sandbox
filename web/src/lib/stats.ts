@@ -241,3 +241,9 @@ export function takeaway(models: Model[], S: Record<string, Summary | undefined>
   const sentence = v ? [v.head, v.cost].filter(Boolean).join(" ") : `${quality}${tail}.${after}`;
   return { sentence, verdict: v, pairs, open, closed, ...leads };
 }
+
+/** How many solved attempts each try solved, from a summary's `solved_on`: "5 on try 1, 2 on try 2". */
+export function solvedOn(counts?: number[]): string {
+  const said = (counts ?? []).map((n, i) => (n ? `${n} on try ${i + 1}` : null)).filter(Boolean);
+  return said.length ? said.join(", ") : "–";
+}

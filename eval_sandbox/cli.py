@@ -38,6 +38,8 @@ def wanted(args) -> tuple[list[str], dict[str, list[int]]]:
 
 
 def cmd_run(args) -> int:
+    if args.tries is not None and args.tries < 1:
+        sys.exit("--tries is at least 1 (1 means no second try)")
     if args.resume:
         # A resumed run keeps its own tasks. --attempts may grow it and --models may add
         # models, so a new model is compared on the same tasks without rerunning the others.
@@ -51,6 +53,8 @@ def cmd_run(args) -> int:
             raise
         job.meta["models"] += [m.as_dict() for m in models if m.key in added]
         job.meta["attempts"] = max(args.attempts or 0, job.meta.get("attempts", 1))
+        # A run keeps its tries (one, for runs from before tries were recorded) unless --tries raises them.
+        job.meta["tries"] = max(args.tries or 0, job.meta.get("tries", 1))
         job.save()
     else:
         repos, pulls = wanted(args)
@@ -61,7 +65,8 @@ def cmd_run(args) -> int:
         request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
                                    test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task,
                                    quick=args.quick)
-        job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
+        job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1,
+                               tries=args.tries or pipeline.DEFAULT_TRIES, name=args.name,
                                jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region)
     print(f"run {job.id} -> {job.path}")
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
@@ -182,6 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--models", type=csv, help=f"comma-separated keys from configs/models.toml (default "
                    f"{','.join(pipeline.DEFAULT_MODELS)}; with --resume, models to add to the run)")
     r.add_argument("--attempts", type=int, help="attempts per task and model (default 1; on --resume, raises the run's count)")
+    r.add_argument("--tries", type=int, help=f"tries per attempt: a try the model fails is run again from scratch, and "
+                   f"the attempt is solved if any try solves it; every model gets the same (default {pipeline.DEFAULT_TRIES}; "
+                   "1 = no second try; on --resume, raises the run's count)")
     r.add_argument("--resume", type=Path, help="finish a stopped run in this job directory")
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")

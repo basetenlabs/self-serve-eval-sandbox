@@ -38,7 +38,7 @@ pr-eval serve
 
 It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then:
 
-1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes) or **Your pull requests**: paste links, or type a repository and pick from its merges.
+1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes, or up to three times that when a model needs every try) or **Your pull requests**: paste links, or type a repository and pick from its merges.
 2. Choose the models to compare (Claude Opus 5.5, DeepSeek V4.1 Flash 1017 and GLM-5.3 to start).
 3. Press **Start run**. When it finishes, **Open report** shows solve rate, cost per solved task and time per task, with every attempt's diff, trace, test output and the judges' verdicts.
 
@@ -55,6 +55,7 @@ pr-eval run your-org/your-repo --limit 10 --models claude-opus,deepseek-v4.1-fla
 pr-eval run                                         # the sample tasks
 pr-eval run your-org/your-repo --pr 123 --pr 456    # exactly these PRs
 pr-eval run https://github.com/o/a/pull/12 x/b#9    # or links, from any number of repositories
+pr-eval run your-org/your-repo --tries 1           # one try per attempt, no second (default 3)
 ```
 
 Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finished run, add `--attempts 3` for more attempts or `--models kimi-k3` to add a model. `pr-eval <command> --help` lists the options.
@@ -92,7 +93,8 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 ## What the numbers mean
 
 - **Solve rate**: solved attempts / valid attempts, with a 95% range. With a few dozen tasks, a few points' difference is noise.
-- **Cost per solved task**: model spend / solved attempts, so a model that fails often pays for its failures. Judges and sandbox compute aren't included.
+- **Tries**: an attempt the model fails (the tests fail, the judges say no, it gives up or runs out of time) runs again from scratch, without being told why, up to three tries in all (`--tries`, the same for every model; on `--resume` it can only go up). The attempt is solved if any try solves it, and the report says which try did. A try lost to infrastructure isn't one of them. Runs from before tries were recorded had one.
+- **Cost per solved task**: model spend / solved attempts, every try included, so a model that fails often pays for its failures. Time per task counts every try too. Judges and sandbox compute aren't included.
 - **Invalid attempts**: setup, provider, test or judge errors. Reported, never counted as failures.
 - A merge date after a model's training cutoff makes memorization less likely, not impossible.
 
