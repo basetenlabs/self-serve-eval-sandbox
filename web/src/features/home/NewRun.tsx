@@ -24,8 +24,8 @@ const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands,
 type Commands = { setup: string; test: string };
 const LIMITS = [5, 10, 20, 40];
 const MODELS_KEY = "pr-eval-models-3"; // a new name when the default models change, so everyone starts on them once
-// Every quick-sample attempt starts at once, so the slowest try sets the end; an attempt the model
-// fails runs again, so a run of several tries can take that long for each.
+// Quick-sample attempts start together (up to state.quick.at_once), so the slowest try sets the end; an
+// attempt the model fails runs again, so a run of several tries can take that long for each.
 const QUICK_MINUTES = 35;
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -112,6 +112,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const catalog = state.models.map((m) => ({ ...m, ...m.by_scope?.[scope] }));
   const models = catalog.filter((m) => chosenModels.includes(m.key));
   const attempts = prs * models.length;
+  const quickAtOnce = Math.min(attempts, state.quick.at_once ?? attempts);
   const priced = models.length > 0 && models.every((m) => m.cost_per_attempt != null);
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
@@ -183,7 +184,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         <Column heading={<Step n="01">Pull requests</Step>} aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
           <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="ev-sources" aria-label="Pull requests">
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")}
-              text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. ${tries > 1 ? "Up to about" : "About"} ${quickMinutes} minutes.`} />
+              text={`Real fixes, features and security changes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}. ${tries > 1 ? "Up to about" : "About"} ${quickMinutes} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
               text={`Use merged pull requests from a ${hosted ? "public" : "public or private"} GitHub repository.`} />
           </RadioGroup.Root>
@@ -285,7 +286,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                   tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}.`
                     : "No earlier run to estimate from yet."} />
                 <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `≈ ${minutes} min` : "–"} />}
-                  tip={mode === "quick" && tries > 1 ? "Every attempt starts at once, and one the model fails runs again: the slowest sets the end."
+                  tip={mode === "quick" && tries > 1 ? `${quickAtOnce < attempts ? `Up to ${quickAtOnce} attempts run` : "Every attempt starts"} at once, and one the model fails runs again: the slowest sets the end.`
                     : slowest ? `Slowest model takes about ${dur(slowest)} per attempt${tries > 1 ? ", its tries included" : ""}.` : undefined} />
               </div>
               <dl className="bt-kv ev-plan-rows">
@@ -304,7 +305,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                   )) : "–"}
                 </PlanRow>
                 <PlanRow label="Sandboxes at once" tip="Each attempt uses its own sandbox for the agent, then a fresh one for the hidden tests.">
-                  {!attempts ? "–" : mode === "quick" ? attempts * 2 : "≤ 16"}
+                  {!attempts ? "–" : mode === "quick" ? quickAtOnce * 2 : "≤ 16"}
                 </PlanRow>
                 {state.spend && (
                   <PlanRow label="Last 24 hours" tip="What your runs spent on models in the last 24 hours, judges included, out of your limit.">

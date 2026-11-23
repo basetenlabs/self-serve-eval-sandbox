@@ -129,7 +129,7 @@ export interface AppState {
   models: CatalogModel[];
   runs: Run[];
   /** `ready`: its tasks are collected, so it starts without reading GitHub. */
-  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean };
+  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean; at_once?: number };
   /** Tries per attempt a run started here gets: a try the model fails runs again, up to this many. */
   tries?: number;
   default_limit: number;

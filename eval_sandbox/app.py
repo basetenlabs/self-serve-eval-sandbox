@@ -40,7 +40,7 @@ BEAUSITE = {w: f"BeausiteClassic-{w}.woff2" for w in ("350", "400", "500")}
 FONT_FILE = re.compile(r"/fonts/(BeausiteClassic-(?:350|400|500)\.woff2)")
 MAX_LIMIT = 50
 PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
-QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
+QUICK_CONCURRENCY = 20  # quick-sample attempts at once; with three models, the rest start as the first end
 # The sign-in server in front of the hosted page (@blaxel/sign-in) names who is asking in USER_HEADER, after
 # dropping any value the browser sent itself; locally there is no sign-in and no header, and the `gh` login
 # reads everything. Hosted (see hosted()), the page runs public repositories only and nobody signs in with
@@ -727,7 +727,7 @@ def quick_sample() -> dict:
     sample = tasks.sample(True)
     left_out = quick_left_out()
     return {"tasks": sum(len(prs) for prs in sample.values()) - len(left_out), "repos": len(sample),
-            "names": list(sample), "ready": quick_collected()}
+            "names": list(sample), "ready": quick_collected(), "at_once": QUICK_CONCURRENCY}
 
 
 def quick_left_out() -> set[str]:
