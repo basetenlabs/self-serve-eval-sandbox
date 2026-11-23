@@ -6,6 +6,7 @@ A task folder is what one trial needs and nothing more:
       task.toml                  metadata, setup and test commands, timeouts
       instruction.md             what the agent is asked to do (PR or issue text, names the tests call)
       environment/source.tar.gz  the repository at the PR's base commit, no .git
+      environment/history.pack   the commits up to the base commit, made when first run
       tests/files/...            the PR's test files at the merged commit   (hidden)
       tests/deleted.txt          test files the PR removed                  (hidden)
       tests/test.sh              runs the hidden tests, writes the reward   (hidden)
@@ -273,8 +274,8 @@ def fetching(mirror: Path) -> threading.Lock:
     return _FETCHING.setdefault(mirror, threading.Lock())
 
 
-def prefetch(mirror: Path, commit: str) -> None:
-    """Fetch, in one batch, the files at `commit` that a blobless clone doesn't have yet.
+def prefetch(mirror: Path, *commits: str) -> None:
+    """Fetch, in one batch, the files at `commits` that a blobless clone doesn't have yet.
 
     Without it, `git archive` asks GitHub for each missing file on its own, one round trip per
     file. The first task in a repository fetches its whole tree (PostHog's: 220 MB, under a
@@ -283,7 +284,7 @@ def prefetch(mirror: Path, commit: str) -> None:
     if not git(mirror, "config", "--get", "--default=", "remote.origin.promisor").strip():
         return  # a full clone has everything
     with fetching(mirror):
-        listing = git(mirror, "rev-list", "--objects", "--no-walk", "--missing=print", commit).decode()
+        listing = git(mirror, "rev-list", "--objects", "--no-walk", "--missing=print", *commits).decode()
         missing = [line[1:] for line in listing.splitlines() if line.startswith("?")]
         if missing:
             subprocess.run(["git", *GIT_AUTH, f"--git-dir={mirror}", "-c", "fetch.negotiationAlgorithm=noop",
@@ -739,6 +740,64 @@ def spread(rows, limit, repo=lambda row: row["repo"]):
             if by_repo[name] and len(picked) < limit:
                 picked.append(by_repo[name].pop())  # newest first: least likely to be memorized
     return picked
+
+
+# The agent's checkout is a git repository with the commits that led to the base commit, as a clone
+# would be, so `git log` and `git blame` show how the code got here. The last HISTORY_COMMITS of
+# them: enough for that, and small enough to upload to every sandbox (chi's: 0.3 MB, PostHog's: 12 MB).
+HISTORY_COMMITS, HISTORY_MAX_BYTES = 100, 64 << 20
+_HISTORIES: dict[Path, threading.Lock] = {}
+
+
+@dataclass
+class History:
+    pack: Path          # a git pack: the commits, and their files other than the base commit's own
+    base: str
+    shallow: list[str]  # the commits where it stops, whose parents it doesn't have
+    commits: int
+
+
+def history(task: Task, repos_dir: Path = DEFAULT_REPOS) -> History | None:
+    """The history up to the task's base commit, for the agent's checkout, made once per task.
+
+    None when the repository's clone isn't here (or the pack would be too big). Only the base commit
+    and its ancestors go in: never the pull request's commits or anything after them.
+    """
+    env, base = task.path / "environment", task.meta["task"]["base_sha"]
+    pack, about = env / "history.pack", env / "history.json"
+    with _HISTORIES.setdefault(task.path, threading.Lock()):
+        if not about.is_file():
+            mirror = repos_dir / f"{task.meta['task']['repo'].replace('/', '__')}.git"
+            if not re.fullmatch(r"[0-9a-f]{40}", base) or not mirror.is_dir():
+                return None
+            write_history(mirror, base, pack, about)
+        meta = json.loads(about.read_text())
+    if not meta.get("commits") or not pack.is_file():
+        return None
+    return History(pack, meta["base"], meta["shallow"], meta["commits"])
+
+
+def write_history(mirror: Path, base: str, pack: Path, about: Path) -> None:
+    listing = git(mirror, "rev-list", "--parents", "--topo-order", f"--max-count={HISTORY_COMMITS}", base).decode()
+    parents = {commit: rest for commit, *rest in map(str.split, listing.splitlines())}
+    shallow = [commit for commit, rest in parents.items() if any(p not in parents for p in rest)]
+    prefetch(mirror, *parents)  # older versions of files a blobless clone hasn't fetched
+    # The sandbox has the base commit's files already, in the source it unpacks.
+    present = {line.split()[2] for line in git(mirror, "ls-tree", "-r", base).decode().splitlines()
+               if line.split()[1] == "blob"}
+    objects = [line for line in git(mirror, "rev-list", "--objects", "--no-walk=unsorted", "--missing=print",
+                                    *parents).decode().splitlines()
+               if not line.startswith("?") and line.split()[0] not in present]
+    tmp = pack.with_name(f".{pack.name}.{os.getpid()}")
+    with tmp.open("wb") as out:
+        subprocess.run(["git", f"--git-dir={mirror}", "pack-objects", "-q", "--stdout"],
+                       input="\n".join(objects).encode() + b"\n", stdout=out, check=True)
+    fits = tmp.stat().st_size <= HISTORY_MAX_BYTES
+    if fits:
+        tmp.replace(pack)
+    else:
+        tmp.unlink()
+    about.write_text(json.dumps({"base": base, "commits": len(parents) if fits else 0, "shallow": shallow}))
 
 
 _COMPRESSING = threading.Lock()

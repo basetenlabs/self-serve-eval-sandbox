@@ -44,6 +44,13 @@ class FakeProvider(http.server.BaseHTTPRequestHandler):
                       {"type": "message_stop"}]
             payload = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
             kind = "text/event-stream"
+        elif self.path == "/v1/responses" and body.get("stream"):
+            usage = {"input_tokens": 1000, "output_tokens": 100, "input_tokens_details": {"cached_tokens": 600}}
+            events = [{"type": "response.created", "response": {"id": "r1", "usage": None}},
+                      {"type": "response.output_text.delta", "delta": "hi"},
+                      {"type": "response.completed", "response": {"id": "r1", "usage": usage}}]
+            payload = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+            kind = "text/event-stream"
         elif self.path == "/v1/responses":
             payload = json.dumps({"usage": {"input_tokens": 280_000, "output_tokens": 4000,
                                             "input_tokens_details": {"cached_tokens": 200_000, "cache_write_tokens": 40_000}}}).encode()
@@ -196,6 +203,26 @@ class MeterTest(unittest.TestCase):
         self.assertNotIn(meter.HEADER, headers)
         [entry] = self.ledger("gpt")
         self.assertAlmostEqual(entry["usd"], (40_000 * 4 + 200_000 * .20 + 40_000 * 5 + 4000 * 15) / 1e6)
+
+    def test_pis_streamed_responses_calls_go_through_at_the_standard_tier_and_are_charged(self):
+        model = config.load()[0]["gpt-6.2-sol"]
+        token, _ = self.attempt("pi", "me@example.org", model)
+        tool = {"type": "function", "name": "bash", "parameters": {"type": "object"}, "strict": True}
+        body = {"model": model.model, "store": False, "stream": True, "prompt_cache_key": "s1", "max_output_tokens": 1000,
+                "reasoning": {"effort": "high", "summary": "auto"}, "include": ["reasoning.encrypted_content"],
+                "input": [{"type": "additional_tools", "role": "developer", "tools": [tool]},
+                          {"type": "configuration_update", "reasoning": {"effort": "high"}},
+                          {"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}]}
+        hosted = {**body, "input": [{"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]}]}
+        tier = {**body, "input": [{"type": "configuration_update", "service_tier": "priority"}]}
+        for refused in (hosted, tier, {**body, "service_tier": "flex"}):
+            self.assertEqual(self.call(token, "/openai/v1/responses", refused)[0], 403)
+        self.assertFalse(FakeProvider.seen)
+        status, answer = self.call(token, "/openai/v1/responses", body)
+        self.assertEqual((status, b"response.completed" in answer), (200, True))
+        self.assertEqual(FakeProvider.seen[0][2]["service_tier"], "default")  # never the project's own tier
+        [entry] = self.ledger("pi")
+        self.assertAlmostEqual(entry["usd"], (400 * 2 + 600 * .10 + 100 * 10) / 1e6)  # its usage, not the worst case
 
     def test_the_caller_never_picks_the_host_the_key_goes_to(self):
         ticket, _ = self.attempt("mine", "a@x.co")

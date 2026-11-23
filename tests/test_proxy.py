@@ -136,10 +136,19 @@ class Upstream(BaseHTTPRequestHandler):
     """A provider that remembers what reached it and answers with a short stream."""
     protocol_version = "HTTP/1.1"
     seen: list = []
+    busy = 0  # calls to turn away with a 429 first
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["content-length"]))
         Upstream.seen.append((self.path, {k.lower(): v for k, v in self.headers.items()}, body))
+        if Upstream.busy:
+            Upstream.busy -= 1
+            self.send_response(429)
+            self.send_header("retry-after", "0")
+            self.send_header("content-length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
         payload = b"event: message_stop\ndata: {}\n\n"
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -203,6 +212,13 @@ class TheRelayIsTheAgentsOneWayOut(unittest.TestCase):
         self.assertNotIn("authorization", headers)  # no second sign-in beside the relay's
         self.assertEqual(headers["anthropic-version"], "2023-06-01")
         self.assertNotIn("placeholder", json.dumps(headers))
+
+    def test_a_429_is_waited_out_here_too_not_handed_to_the_agent(self):
+        Upstream.busy = 1
+        self.addCleanup(setattr, Upstream, "busy", 0)
+        status, _ = self.ask("/chat/completions", {"authorization": "Bearer pr-eval-placeholder-1"})
+        self.assertEqual((status, len(Upstream.seen)), (200, 2))
+        self.assertTrue(any("rate-limited: waited" in str(c.args[0]) for c in proxy.log.call_args_list))
 
     def test_the_agent_never_picks_the_host_the_credential_goes_to(self):
         for target in ("@evil.example/v1/messages", "http://evil.example/v1/messages", ".evil.example/x"):
