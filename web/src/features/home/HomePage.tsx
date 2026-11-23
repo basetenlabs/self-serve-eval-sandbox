@@ -9,24 +9,15 @@ import type { AppState, Run } from "@/lib/types";
 import { fillAgain, NewRun } from "./NewRun";
 import { RunsList } from "./RunsList";
 
-// Back from adding repositories to the GitHub App, in a tab GitHub opened: install, update, or request
-// (an organization's owner has to approve it).
-const fromGitHub = new URLSearchParams(location.search).get("setup_action");
-
 export function HomePage({ state, error, go, hurry }: {
   state: AppState | null; error: string | null; go: (r: Route) => void; hurry: () => void;
 }) {
   const live = state?.runs.find((r) => isActive(r.phase));
   const last = state?.runs.find((r) => r.again);
   const [form, setForm] = React.useState(0); // a new key remounts the form, which reads what fillAgain left
-  const [installed, setInstalled] = React.useState(fromGitHub);
-  React.useEffect(() => {
-    if (fromGitHub) history.replaceState(null, "", location.pathname + location.hash); // a reload doesn't say it again
-  }, []);
   // No hero: the page opens on the form, under a one-line title (the /baseten-design skill's "Open on the content").
   return (
     <>
-      {installed && <InstalledNote action={installed} onClose={() => setInstalled(null)} />}
       {live && <><LiveBanner run={live} /><Spacer /></>}
 
       <Surface id="new-run" aria-labelledby="new-run-heading" className="scroll-mt-3">
@@ -99,23 +90,6 @@ function LiveBanner({ run }: { run: Run }) {
           <span className="watch">Watch it <Chevron /></span>
           <span className="meter" aria-hidden><i style={{ transform: `scaleX(${share})` }} /></span>
         </a>
-      </div>
-    </Surface>
-  );
-}
-
-/** GitHub opened this page in a new tab: the person's first tab is where they were, and it looks again on its own. */
-function InstalledNote({ action, onClose }: { action: string; onClose: () => void }) {
-  return (
-    <Surface as="div" className="tight">
-      <div role="status" className="bt-notice success flex-wrap items-center">
-        <span className="min-w-0 flex-1">
-          {action === "request"
-            ? "GitHub sent your request to the organization's owners. Once one approves it, your repositories show up on the page you started from."
-            : "GitHub saved the repositories Baseten Eval Sandbox can read."}{" "}
-          <span className="text-body">You can close this tab and go back to the one you started in: it looks again when you return.</span>
-        </span>
-        <Button variant="ghost" onClick={onClose}>Dismiss</Button>
       </div>
     </Surface>
   );

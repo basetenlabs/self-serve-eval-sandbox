@@ -102,7 +102,7 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
           )}
         </span>
       </div>
-      {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
+      {list?.error ? <Problem>{list.error}</Problem> : (
         <ul className="ev-pulls-list max-h-[420px] overflow-y-auto" aria-label={`${repo} pull requests`} aria-busy={loading || searching}>
           {!list && !needle ? Array.from({ length: 6 }, (_, i) => <SkeletonRow key={i} at={i} />) : groups.map((g) => (
             <React.Fragment key={g.label || "all"}>
@@ -226,7 +226,7 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
           {list?.language && !list.error ? ` · ${list.language}` : ""}
         </span>
       </div>
-      {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
+      {list?.error ? <Problem>{list.error}</Problem> : (
         <ul className="ev-pulls-list" aria-busy={loading}>
           {numbers.map((n) => {
             const row = rows.get(n);
@@ -311,15 +311,10 @@ function SkeletonRow({ number, trailing, at = 0 }: { number?: number; trailing?:
   );
 }
 
-function Problem({ children, install }: { children: React.ReactNode; install?: string }) {
+function Problem({ children }: { children: React.ReactNode }) {
   return (
     <div role="alert" className="bt-notice error flex-wrap items-center">
       <span className="min-w-0 flex-1">{children}</span>
-      {install && (
-        <Button asChild variant="outline">
-          <a href={install} target="_blank" rel="noreferrer">Add it on GitHub <External /></a>
-        </Button>
-      )}
     </div>
   );
 }

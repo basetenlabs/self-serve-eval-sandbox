@@ -125,7 +125,7 @@ export interface AppState {
   checks: Checks;
   models: CatalogModel[];
   runs: Run[];
-  /** `ready`: its tasks are collected, so it starts without a GitHub sign-in. */
+  /** `ready`: its tasks are collected, so it starts without reading GitHub. */
   quick: { tasks: number; repos: number; names?: string[]; ready?: boolean };
   default_limit: number;
   max_limit: number;
@@ -135,22 +135,18 @@ export interface AppState {
   blocked?: string | null;
   /** What your runs spent on models in the last 24 hours, and your limit, when there is one. */
   spend?: { spent: number; cap: number } | null;
-  github: GitHubAccount;
+  github: GitHubAccess;
   favorites: Favorite[];
   /** Hosted: you are an admin, so you see every run and the Access page. */
   admin?: boolean;
 }
 
-/** Who reads GitHub for you. Hosted, `sign_in` offers your own GitHub sign-in; locally the `gh` CLI's login reads. */
-export interface GitHubAccount {
-  sign_in: boolean;
-  /** Hosted: the page reads public repositories itself, so only private ones need your sign-in. */
+/** Who reads GitHub. Hosted, the page reads public repositories only, with its own token, and nobody signs in
+ * with GitHub; locally the `gh` CLI's login reads. */
+export interface GitHubAccess {
+  hosted: boolean;
+  /** The page has its own token for public repositories. Hosted without one, only the quick sample runs. */
   public?: boolean;
-  login: string | null;
-  /** Where to choose which repositories the GitHub App may read. */
-  install?: string;
-  /** A sign-in waiting for you to enter its code on GitHub. */
-  device?: { user_code: string; verification_uri: string; interval: number };
 }
 
 /** A pull request saved for later, newest first. */
@@ -167,8 +163,6 @@ export interface RepoInfo {
   private?: boolean;
   defaults?: boolean;
   error?: string;
-  /** Where to add this repository to the GitHub App, when the person's sign-in can't read it yet. */
-  install?: string;
 }
 
 /** A pull request to pick, from /api/prs; `why` says why it can't be a task. */

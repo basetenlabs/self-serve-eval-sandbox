@@ -176,14 +176,14 @@ def write_toml(path: Path, sections: dict[str, dict]) -> None:
     path.write_text("\n".join(lines))
 
 
-# Hosted (GitHub sign-in on, the page's runs inherit its environment), visitors have no terminal: errors name
-# what they or the page's admins can do instead of a `gh` command.
-HOSTED = bool(os.environ.get("PR_EVAL_GITHUB_CLIENT_ID"))
+# Hosted (public repositories only; the page's runs inherit its environment), visitors have no terminal: errors
+# name what they or the page's admins can do instead of a `gh` command.
+HOSTED = bool(os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"))
 
 
 def gh(endpoint: str, token: str | None = None):
     """One GitHub API call through the gh CLI, which carries the user's own login, or `token`:
-    the hosted page's visitor's, when they signed in with GitHub."""
+    the hosted page's own, which reads public repositories only."""
     return gh_args([endpoint], endpoint, token)
 
 
@@ -242,7 +242,7 @@ def clone(repo: str, repos_dir: Path, on_progress=None) -> Path:
         if p.wait():
             shutil.rmtree(partial, ignore_errors=True)
             raise SystemExit(f"couldn't clone {repo} ({tail.strip()[-200:]}): " + (
-                "check that your GitHub sign-in can read it: add it to the page's GitHub App on GitHub" if HOSTED
+                "this page runs public repositories only" if HOSTED
                 else "check that `gh auth status` shows an account with access to it"))
         partial.rename(path)
     return path

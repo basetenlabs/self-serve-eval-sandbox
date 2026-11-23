@@ -45,12 +45,9 @@ another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key
                             has no access list yet (the first deploy).
     PR_EVAL_GITHUB_TOKEN    a fine-grained GitHub token with "Public repositories" read-only access and nothing
                             else (Keychain pr-eval-host-github-token). With it the page reads and runs public
-                            repositories for everyone, no GitHub sign-in needed; without it, every run needs one.
+                            repositories for everyone; without it, the page runs the quick sample only.
 
-For private repositories, a person signs in with GitHub through the GitHub App "Baseten Eval Sandbox"
-(device flow; read-only Contents, Pull requests and Metadata), and the run reads and clones with their
-token. Its client id is public: the app's client secret and private key never reach the page. Their tokens
-stay in the page's memory.
+The page runs public repositories only: nobody signs in with GitHub, and it never reads a private repository.
 """
 from __future__ import annotations
 
@@ -106,9 +103,6 @@ SMOKE_AGENT_SECONDS = 360
 SMOKE_TIMEOUT = 1800  # seconds for the whole attempt: sandboxes, install, agent, hidden tests, judges
 SMOKE_OWNER = "deploy-smoke"
 LABELS = {"app": "pr-eval-host"}
-# The GitHub App's client id is public by design (device flow); it is not a secret.
-GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
-GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # One team's sandboxes and one set of keys serve everyone: runs going at once, in all and per person, and what runs
 # spent on models in the last 24 hours, in all and per person (a quick sample is about $12 with its judges).
 LIMITS = {name: os.environ.get(name, default) for name, default in {
@@ -139,7 +133,7 @@ SECRETS = {
 }
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
-# Optional: the page's own public-only GitHub token. Without it, public repositories need a GitHub sign-in too.
+# Optional: the page's own public-only GitHub token. Without it, the page runs the quick sample only.
 GITHUB_TOKEN = ("PR_EVAL_GITHUB_TOKEN", "pr-eval-host-github-token")
 MAIL_FROM = os.environ.get("PR_EVAL_MAIL_FROM", "Eval Sandbox <eval-sandbox@notifications.blaxel.ai>")
 LEAK = trace.SECRET
@@ -300,7 +294,7 @@ def release_files() -> dict[str, bytes]:
 
 def copy_quick_tasks(sandbox) -> str:
     """The quick sample's task folders, collected here first where missing (with the local `gh` login). On the
-    page they let a signed-in person with no GitHub account run the quick sample: its runs only read them.
+    page they let the quick sample run without reading GitHub: its runs only read them.
     Each holds its repository's source (about 200 MB for a large one), so only folders the page lacks go,
     one at a time. Returns the task with the largest source, which the smoke test runs."""
     have = set(run(sandbox, f"mkdir -p {APP}/tasks && cd {APP}/tasks && ls -d */task.toml 2>/dev/null | cut -d/ -f1 || true").split())
@@ -355,8 +349,7 @@ def page_env(keys: dict[str, str], origin: str, meter: str, meter_port: int | No
     # The key the page's runs create their trial sandboxes with: the deploy's own.
     sandboxes = {"BASETEN_SANDBOX_API_KEY": client().key, **({"BASETEN_TEAM_ID": client().team} if client().team else {})}
     env = {**keys, **sandboxes,
-           "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
-           "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin, **LIMITS, **RETENTION,
+           "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "APP_ORIGIN": origin, **LIMITS, **RETENTION,
            "PR_EVAL_METER_URL": meter, "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     if meter_port:
         env["PR_EVAL_METER_PORT"] = str(meter_port)
@@ -385,7 +378,7 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "AUTH_ACCESS_FILE": ACCESS, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
     name, service = GITHUB_TOKEN
-    print(f'Public repositories without a GitHub sign-in: {"on" if name in env else "off (no " + service + ")"}')
+    print(f'Public repositories: {"on" if name in env else "off, quick sample only (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
         sign_in_env["PR_EVAL_ADMINS"] = admins
     if key := mail_key():
