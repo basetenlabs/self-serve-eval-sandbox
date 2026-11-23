@@ -1163,7 +1163,8 @@ class PipelineTest(unittest.TestCase):
             repos = Path(d) / "repos"
             (repos / "o__secret.git").mkdir(parents=True)
             job = self.job(d, pipeline.Request(repos=["o/secret"]))
-            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
+            # Its own tasks folder too: the run's sweep would otherwise delete this checkout's real ones.
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), mock.patch.object(tasks, "DEFAULT_TASKS", Path(d) / "tasks"), \
                     mock.patch.object(tasks, "gh", return_value={"private": True}), \
                     mock.patch.object(pipeline, "alive", side_effect=lambda pid: pid == os.getpid()), \
                     mock.patch.object(pipeline, "preflight", return_value=([baseten_model()], None)), \
