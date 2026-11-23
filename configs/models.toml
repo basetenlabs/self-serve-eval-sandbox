@@ -53,6 +53,15 @@ model = "gpt-6.2-astra"
 prices."gpt-6.2-astra" = { input = 8.00, cached_input = 0.40, cache_write = 10.00, output = 40.00 }
 estimate_from = ["gpt-6.2-sol", "claude-opus"]
 
+[models."gpt-6-luna"]
+label = "GPT-6 Luna"
+kind = "closed"
+maker = "OpenAI"
+provider = "openai"
+model = "gpt-6-luna"
+prices."gpt-6-luna" = { input = 0.10, cached_input = 0.01, cache_write = 0.125, output = 0.50 }
+estimate_from = ["gpt-6.2-sol", "claude-opus"]
+
 [models.claude-sonnet]
 label = "Claude Sonnet 5.5"
 kind = "closed"
