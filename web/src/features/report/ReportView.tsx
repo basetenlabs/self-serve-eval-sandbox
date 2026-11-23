@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Empty, Eyebrow } from "@/components/brand";
-import { day, plural } from "@/lib/format";
+import { day, harness, plural } from "@/lib/format";
 import { ordered, palette } from "@/lib/models";
 import { rank, takeaway } from "@/lib/stats";
 import type { Report } from "@/lib/types";
@@ -28,7 +28,7 @@ export function reportFacts(report: Report): string[] {
   const repos = new Set(tasks.map((t) => t.repo)).size;
   const last = trials.map((t) => t.finished_at).filter(Boolean).sort().pop();
   const dates = last && day(last) !== day(run.created_at) ? `${day(run.created_at)} to ${day(last)}` : day(run.created_at);
-  return [`Claude Code ${run.harness_version ?? ""}`.trim(), `${plural(tasks.length, "merged PR")} from ${plural(repos, "repo")}`,
+  return [harness(run), `${plural(tasks.length, "merged PR")} from ${plural(repos, "repo")}`,
     `${plural(run.attempts, "attempt")} per task`, ...((run.tries ?? 1) > 1 ? [`up to ${run.tries} tries each`] : []), dates];
 }
 

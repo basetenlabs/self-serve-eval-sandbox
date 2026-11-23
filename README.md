@@ -1,8 +1,8 @@
 # Self-Serve Model Eval Sandbox
 
-Can an open model do your team's real coding work? `pr-eval` takes pull requests your team already merged and asks Claude Code to solve each one with the models you select. It grades their changes and reports how many tasks each model solves and what each solved task costs.
+Can an open model do your team's real coding work? `pr-eval` takes pull requests your team already merged and asks a coding agent, [Pi](https://pi.dev), to solve each one with the models you select. It grades their changes and reports how many tasks each model solves and what each solved task costs.
 
-The command-line tool and the local page are both called `pr-eval`. Status: v0. Claude Code is the only harness. MIT licensed.
+The command-line tool and the local page are both called `pr-eval`. Status: v0. Every model runs in Pi; `--harness claude-code` runs Claude Code instead. MIT licensed.
 
 Trials run in [Baseten Sandboxes](https://docs.baseten.co/sandboxes/overview): each attempt works in a machine of its own, where the agent has no network and can reach only the model provider.
 
@@ -57,6 +57,7 @@ pr-eval run your-org/your-repo --pr 123 --pr 456    # exactly these PRs
 pr-eval run https://github.com/o/a/pull/12 x/b#9    # or links, from any number of repositories
 pr-eval run your-org/your-repo --tries 1            # one try per attempt, no second (default 3)
 pr-eval run your-org/your-repo --judge              # also grade with the LLM judges (off by default)
+pr-eval run your-org/your-repo --harness claude-code # Claude Code instead of Pi
 ```
 
 Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finished run, add `--attempts 3` for more attempts or `--models kimi-k3.1-pro` to add a model. `pr-eval <command> --help` lists the options.
@@ -87,7 +88,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 ## How it works
 
 1. **Collect.** Each merged PR becomes a task. The PR's text, or the issue it closes, is the request. The merged diff and the PR's tests are kept aside as the answer. Before any model runs, the PR's tests must fail without the change and pass with it; PRs that don't are left out. With `--judge`, the chair judge also checks that the request says enough to pass them (the text is often written before the PR's final code) and leaves out PRs whose request doesn't; if it can't be reached, the task goes ahead on its tests alone. A test that can't import a name the request never gives makes the attempt not scored, not a model failure.
-2. **Run.** Claude Code works on the request with the model under test. Its calls go through a small relay in the sandbox; for open models on Baseten, the relay also sets the same reasoning effort on every request.
+2. **Run.** Pi works on the request with the model under test, the way a developer runs it: its own tools and system prompt, the repository's AGENTS.md, and the model's reasoning effort. Its first message names the repository, gives the request, says how the change is checked (the test command, with the pull request's tests left unnamed) and that there is no network, a time limit and nobody to ask. Each model speaks its provider's own API through a small relay in the sandbox that adds the key. A run with `--harness claude-code` uses Claude Code, whose relay translates calls for models that aren't Claude; the run records its harness, and a resumed run keeps it.
 3. **Grade.** The PR's hidden tests run against the agent's code. Solved means they pass. LLM judges are off by default. With `--judge`, three of them (Claude Opus 5.5, GPT-6.1 Sol and Kimi K3.1 Pro) each compare its diff with the merged one, and Kimi K3.1 Pro writes the final verdict; solved then means the tests pass and the final verdict is a pass. If the chair can't answer, a unanimous panel decides. `--judge <model id>` grades with that one judge alone, and `pr-eval rejudge` grades a finished run with the judges afterwards.
 4. **Report.** One HTML page per run, plus `report.json`.
 
@@ -101,7 +102,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Models
 
-`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic API. GPT models use OpenAI Responses for tool calls through the same Claude Code harness. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) and `kimi-k3` are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
+`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic Messages API, GPT models OpenAI Responses and the open models Baseten's Chat Completions. A model Pi's catalog doesn't list yet gives its limits in a `pi = { context_window, max_tokens }` line. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) and `kimi-k3` are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
 
 ## Development
 

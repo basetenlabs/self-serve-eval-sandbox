@@ -1,4 +1,4 @@
-import { dur, elapsed, pct, usd } from "@/lib/format";
+import { dur, elapsed, harness, pct, usd } from "@/lib/format";
 import type { Model, Report } from "@/lib/types";
 
 /** The ranking as a Markdown table, for pasting into a doc or a PR. */
@@ -20,7 +20,7 @@ export function benchMarkdown(report: Report, ranked: Model[]): string {
     `| ${cols.map(() => "----").join(" | ")} |`,
     ...rows.map((r) => `| ${r.join(" | ")} |`),
     "",
-    `Claude Code ${run.harness_version || ""}, ${report.tasks.length} merged PRs from ${repos} ${repos === 1 ? "repo" : "repos"}, ` +
+    `${harness(run)}, ${report.tasks.length} merged PRs from ${repos} ${repos === 1 ? "repo" : "repos"}, ` +
       `${run.attempts} attempt(s) each${tries > 1 ? `, up to ${tries} tries per attempt (a failed try runs again from scratch; solved if any try solves it)` : ""}. ` +
       `Time per task: median agent time${tries > 1 ? " over every try" : ""}. Total wall clock: start to last result, ` +
       `leaving out time the run sat stopped before a resume. Cost: all valid attempts${tries > 1 ? ", every try," : ""} / solved attempts.`,

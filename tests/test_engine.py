@@ -242,8 +242,11 @@ class TriesTests(unittest.TestCase):
 
     def test_a_failed_attempt_is_tried_again_until_a_try_solves_it(self):
         tests, calls = self.hidden_tests({2})
+        def agent(name, model, placeholder_env, relay_headers, path, *_):
+            path.write_text("")
+            return {"subtype": "success", "timed_out": False, "cost_usd": 0.5}
         with tempfile.TemporaryDirectory() as d, sandboxes(tests=tests), \
-                mock.patch.object(runner, "price_agent", side_effect=lambda a, *_: {**a, "cost_usd": 0.5}):
+                mock.patch.object(runner, "run_agent", side_effect=agent):
             result = run_one(Path(d), tries=3)
             trial_dir = Path(d) / "trials" / result["trial"]
             record = report.trial_record(trial_dir)

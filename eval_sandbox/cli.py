@@ -66,7 +66,8 @@ def cmd_run(args) -> int:
                                    quick=args.quick)
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1,
                                tries=args.tries or pipeline.DEFAULT_TRIES, name=args.name,
-                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region)
+                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region,
+                               harness=args.harness)
     print(f"run {job.id} -> {job.path}")
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
                                region=args.region, agent_timeout=args.agent_timeout,
@@ -190,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
                    f"the attempt is solved if any try solves it; every model gets the same (default {pipeline.DEFAULT_TRIES}; "
                    "1 = no second try; on --resume, raises the run's count)")
     r.add_argument("--resume", type=Path, help="finish a stopped run in this job directory")
+    r.add_argument("--harness", choices=runner.HARNESSES, default=runner.pi.NAME,
+                   help="the coding agent every model runs in (default pi; a resumed run keeps its own)")
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
     # Off by default, so the hidden tests alone decide and no judge is paid for.

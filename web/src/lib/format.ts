@@ -75,3 +75,8 @@ export function ago(iso: string | null | undefined, now = Date.now()): string {
 
 export const secondsSince = (iso: string | null | undefined, now = Date.now()) =>
   iso ? Math.max(0, (now - new Date(iso).getTime()) / 1000) : 0;
+
+/** The coding agent a run's models worked in, with its version: "Pi 1.6.0". Runs from before Pi used Claude Code. */
+export function harness(run: { harness?: string; harness_version?: string }): string {
+  return `${run.harness === "pi" ? "Pi" : "Claude Code"} ${run.harness_version ?? ""}`.trim();
+}
