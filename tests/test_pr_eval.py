@@ -792,13 +792,14 @@ class PipelineTest(unittest.TestCase):
                          "deepseek-v4.1-flash-1017-fast is no longer offered: use deepseek-v4.1-flash")
 
     def test_resume_keeps_the_runs_own_judge(self):
-        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "none")  # no judge key needed
-        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, None), "none")  # no judge key needed
+        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, None), "gpt-x")
         self.assertEqual(pipeline.resumed_judge({"judge": None}, "gpt-y"), "gpt-y")  # named on the command line
-        self.assertEqual(pipeline.resumed_judge({}, "default"), "default")  # a run from before judges were recorded
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "default")  # --judge alone: the panel
+        self.assertEqual(pipeline.resumed_judge({}, None), "default")  # a run from before judges were recorded
         panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
-        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, "default"), "default")
-        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, "default"), "a")
+        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, None), "default")
+        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, None), "a")
 
     def job(self, d, request):
         return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
@@ -964,6 +965,8 @@ class PipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             old = self.private_run_with_transcripts(d, timedelta(days=8))
             jobs = old.parent
+            (old / "trials" / "t__m__1" / runner.TRIES / "1").mkdir(parents=True)  # a try the model failed before
+            (old / "trials" / "t__m__1" / runner.TRIES / "1" / "agent.jsonl").write_text("x")
             with mock.patch.object(tasks, "gh", return_value={"private": True}), \
                     mock.patch.object(pipeline, "alive", return_value=False), contextlib.redirect_stdout(io.StringIO()):
                 with mock.patch.dict(os.environ, {"PR_EVAL_PRIVATE_RETENTION_DAYS": ""}):
@@ -977,7 +980,8 @@ class PipelineTest(unittest.TestCase):
                         pipeline.expire_transcripts(jobs)  # a public repository's run keeps them
                     self.assertTrue((old / "trials" / "t__m__1" / "agent.jsonl").exists())
                     pipeline.expire_transcripts(jobs)
-            self.assertEqual(sorted(p.name for p in (old / "trials" / "t__m__1").iterdir()), ["agent.patch", "result.json"])
+            self.assertEqual(sorted(p.name for p in (old / "trials" / "t__m__1").iterdir()), ["agent.patch", "result.json", "tries"])
+            self.assertFalse((old / "trials" / "t__m__1" / runner.TRIES / "1" / "agent.jsonl").exists())
             self.assertTrue((old / "report.html").exists())
 
     def test_a_starting_run_keeps_the_clones_it_is_about_to_use(self):
@@ -1000,7 +1004,7 @@ class PipelineTest(unittest.TestCase):
             job = self.job(d, pipeline.Request(repos=["o/r"]))
             saved = []
 
-            def check_and_run(candidates, *_, on_checked, on_result):
+            def check_and_run(candidates, *_, on_checked, on_result, **__):
                 on_checked(candidates[0], "valid", 1)
                 meta = pipeline.Job(job.path).meta
                 saved.append((meta["status"]["phase"], meta["tasks"]))
@@ -1048,6 +1052,54 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(runner.lost_trials(Path(d)), 4)
         # Only infrastructure: a diff that won't apply or tests that hang may be the model's doing.
         self.assertEqual([attempt for _, _, attempt, _ in pending], [1, 2, 3, 4, 10])
+
+    def test_tries_are_saved_with_the_run_and_a_resume_keeps_or_raises_them(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(pipeline, "preflight", return_value=([baseten_model()], None)), \
+                mock.patch.object(pipeline, "execute", return_value=0), mock.patch.object(pipeline, "sweep_private"), \
+                mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+            jobs = Path(d) / "jobs"
+
+            def tries(run_id):
+                return pipeline.Job(jobs / run_id).meta.get("tries")
+            cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r1"])
+            cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r2", "--tries", "1"])
+            self.assertEqual((tries("r1"), tries("r2")), (pipeline.DEFAULT_TRIES, 1))
+            cli.main(["run", "--resume", str(jobs / "r2")])
+            self.assertEqual(tries("r2"), 1)  # kept
+            cli.main(["run", "--resume", str(jobs / "r2"), "--tries", "2"])
+            self.assertEqual(tries("r2"), 2)  # raised
+            old = pipeline.Job(jobs / "r1")
+            del old.meta["tries"]
+            old.save()
+            cli.main(["run", "--resume", str(jobs / "r1")])
+            self.assertEqual(tries("r1"), 1)  # a run from before tries were recorded had one
+
+    def test_judges_grade_a_run_only_when_asked_for_and_a_resume_keeps_them(self):
+        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
+
+        def preflight(keys, choice, *_):
+            return [baseten_model()], None if choice == "none" else panel if choice == "default" else panel.only(choice)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(pipeline, "preflight", side_effect=preflight) as checked, \
+                mock.patch.object(pipeline, "execute", return_value=0) as execute, \
+                mock.patch.object(pipeline, "sweep_private"), mock.patch.dict(os.environ), \
+                contextlib.redirect_stdout(io.StringIO()):
+            jobs = Path(d) / "jobs"
+
+            def run(*argv):
+                cli.main(["run", *argv, "--jobs", str(jobs)])
+                return checked.call_args.args[1], execute.call_args.args[2].judge
+            self.assertEqual(run("o/r", "--name", "tests"), ("none", None))  # the default: the hidden tests alone
+            self.assertEqual(run("o/r", "--name", "panel", "--judge"), ("default", panel))  # today's panel and chair
+            self.assertEqual(run("o/r", "--name", "one", "--judge", "a")[0], "a")
+            self.assertIsNone(pipeline.Job(jobs / "tests").meta["judge"])
+            self.assertEqual(pipeline.Job(jobs / "panel").meta["judge"]["chair"]["model"], "b")
+            self.assertEqual(run("--resume", str(jobs / "tests")), ("none", None))  # stays tests only
+            self.assertEqual(run("--resume", str(jobs / "panel")), ("default", panel))  # keeps its judges
+            self.assertEqual(run("--resume", str(jobs / "tests"), "--judge")[0], "default")
+            with self.assertRaisesRegex(SystemExit, "at least 1"):
+                cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r3", "--tries", "0"])
 
     def test_a_resumed_run_still_lists_the_prs_it_left_out_before(self):
         job = SimpleNamespace(meta={"left_out": {"old": "reference-fails"}})
@@ -1116,11 +1168,36 @@ class AppTest(unittest.TestCase):
                 (jobs / run_id).mkdir()
                 (jobs / run_id / "run.json").write_text(json.dumps({"run_id": run_id, "request": request, "tasks": task_ids}))
                 (jobs / run_id / "report.json").write_text(json.dumps(
-                    {"summary": {"m": {"valid": 1, "cost_per_attempt": cost, "median_seconds": 60}}}))
+                    {"summary": {"m": {"valid": 1, "solved": 1, "cost_per_attempt": cost, "median_seconds": 60}}}))
             found = app.App(jobs).estimates([{"id": "big"}, {"id": "quick"}])  # newest first
         self.assertEqual(found["m"]["cost_per_attempt"], 2.0)  # with nothing closer, the most recent run
-        self.assertEqual(found["m"]["by_scope"], {"o/big": {"cost_per_attempt": 2.0, "seconds_per_attempt": 60},
-                                                  "o/r,o/s": {"cost_per_attempt": 0.2, "seconds_per_attempt": 60}})
+        solved_first = {"tries_per_attempt": 1.0, "solve_rate": 1.0, "seconds_per_attempt": 60}
+        self.assertEqual(found["m"]["by_scope"], {"o/big": {"cost_per_attempt": 2.0, "cost_per_try": 2.0, **solved_first},
+                                                  "o/r,o/s": {"cost_per_attempt": 0.2, "cost_per_try": 0.2, **solved_first}})
+
+    def test_estimates_count_the_tries_an_attempt_is_likely_to_take(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d)
+            (jobs / "r").mkdir()
+            (jobs / "r" / "run.json").write_text(json.dumps({"run_id": "r", "tasks": ["o__r-1"]}))
+            # Four attempts took eight tries and solved one: a try solves it one time in eight.
+            (jobs / "r" / "report.json").write_text(json.dumps({"summary": {"m": {
+                "valid": 4, "solved": 1, "tries": 8, "cost_per_attempt": 2.0, "cost_per_try": 1.0,
+                "median_seconds": 200, "median_seconds_per_try": 100}}}))
+            found = app.App(jobs).estimates([{"id": "r"}])["m"]
+        expected = 1 + 7 / 8 + (7 / 8) ** 2  # a second try when the first fails, a third when both do
+        self.assertAlmostEqual(found["tries_per_attempt"], expected)
+        self.assertAlmostEqual(found["cost_per_attempt"], expected)
+        self.assertAlmostEqual(found["seconds_per_attempt"], 100 * expected)
+        self.assertEqual((app.expected_tries(1.0, 3), app.expected_tries(0.0, 3), app.expected_tries(None, 3)), (1, 3, 3))
+
+    def test_a_board_cell_counts_every_try(self):
+        cell = app.cell("m", 1, {"outcome": "solved", "try": 2, "started_at": "2026-10-23T18:01:00+00:00",
+                                 "finished_at": "2026-10-23T18:02:00+00:00", "agent": {"cost_usd": 0.5},
+                                 "earlier_tries": [{"try": 1, "started_at": "2026-10-23T18:00:00+00:00",
+                                                    "finished_at": "2026-10-23T18:00:30+00:00", "agent": {"cost_usd": 1.0}}]})
+        self.assertEqual((cell["seconds"], cell["cost"], cell["try"]), (90, 1.5, 2))
+        self.assertNotIn("try", app.cell("m", 1, {"outcome": "solved", "agent": {"cost_usd": 0.5}}))
 
     def test_the_board_shows_each_attempt_live(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1233,7 +1310,7 @@ class AppTest(unittest.TestCase):
                 mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
                 mock.patch.object(page, "spawn") as spawn, mock.patch.object(app.pipeline, "preflight"), \
                 mock.patch.object(page, "state", return_value={"blocked": None, "quick": {"tasks": 10}, "checks": {
-                    "sandboxes": True, "gh": False, "judge": {"problem": None}}}):
+                    "sandboxes": True, "gh": False}}):
             self.assertEqual(page.repo_info("o/public", "a@x.co")["language"], "Go")
             self.assertEqual(asked.call_args.args, ("repos/o/public", "page-tok"))
             self.assertIn("public repositories only", page.repo_info("o/private", "a@x.co")["error"])
@@ -1449,7 +1526,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
@@ -1458,28 +1535,26 @@ class AppTest(unittest.TestCase):
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
         spawn.assert_called_once()
 
-    def test_starting_a_run_takes_the_judges_check_from_the_page(self):
+    def test_the_page_starts_runs_graded_on_their_hidden_tests_alone(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            checks = {"sandboxes": True, "gh": True, "judge": {"problem": "the judge needs KEY"}}
+            checks = {"sandboxes": True, "gh": True}
             with mock.patch.object(page, "state", return_value={"busy": False, "runs": [], "checks": checks}), \
                     mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight") as preflight, \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
-                self.assertEqual(page.start({"pulls": {"o/a": [1]}, "models": ["m"]}), {"error": "the judge needs KEY"})
-                checks["judge"]["problem"] = None
-                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"]}))
-        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked again
+                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"], "judge": "default"}))
+        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked
         spawn.assert_called_once()
-        self.assertIn("--judges-checked", spawn.call_args.args[1])  # nor by the run it starts
+        self.assertFalse([a for a in spawn.call_args.args[1] if a.startswith("--judge")])  # nor turned on by the form
 
-    def test_a_run_the_page_started_does_not_ask_the_judges_again(self):
+    def test_judges_are_asked_only_when_a_run_wants_them(self):
         panel = SimpleNamespace(problem=mock.Mock(return_value="the judge needs KEY"))
         with mock.patch.object(app.pipeline.config, "load", return_value=({}, panel)):
-            self.assertEqual(app.pipeline.preflight([], judges_checked=True), ([], panel))
+            self.assertEqual(app.pipeline.preflight([]), ([], None))  # the hidden tests alone decide
             panel.problem.assert_not_called()
-            with self.assertRaises(SystemExit):
-                app.pipeline.preflight([])
+            with self.assertRaises(SystemExit):  # asked for, a judge that can't run stops the run before it starts
+                app.pipeline.preflight([], "default")
 
     @staticmethod
     def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
@@ -1534,14 +1609,19 @@ class AppTest(unittest.TestCase):
             state = self.hosted_state(page, "a@x.co")
             self.assertEqual((state["spend"], state["blocked"]), ({"spent": 45, "cap": 50}, None))
             self.assertIsNone(self.hosted_state(page, None)["spend"])  # locally, no one's own limit
-            model = {"key": "m", "cost_per_attempt": 1.0, "by_scope": {"o/a": {"cost_per_attempt": 0.1}}}
+            model = {"key": "m", "cost_per_try": 1.0, "solve_rate": 1.0,
+                     "by_scope": {"o/a": {"cost_per_try": 0.1, "solve_rate": 1.0}}}
             state["models"] = [model]
             self.assertIn("about $10.00, and you have $5.00 left of your $50.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co"))
             self.assertIsNone(page.over_budget(state, ["m"], 10, "o/a", "a@x.co"))  # cheaper on this repository
-            # No earlier run prices "other": it counts as the dearest of UNKNOWN_ATTEMPT_COST and every attempt seen.
-            self.assertIn(f"about {app.usd(app.UNKNOWN_ATTEMPT_COST * 10)}", page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
+            model["solve_rate"] = 0.0  # never solves on the first try: every attempt pays for every try
+            self.assertIn("about $30.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co", tries=3))
+            self.assertIn("about $10.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co", tries=1))
+            # No earlier run prices "other": each of its tries counts as the dearest of UNKNOWN_ATTEMPT_COST and every try seen.
+            self.assertIn(f"about {app.usd(app.UNKNOWN_ATTEMPT_COST * 10 * pipeline.DEFAULT_TRIES)}",
+                          page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
             with mock.patch.object(app, "UNKNOWN_ATTEMPT_COST", 0.01):
-                self.assertIn("about $10.00", page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
+                self.assertIn("about $10.00", page.over_budget(state, ["other"], 10, "o/a", "a@x.co", tries=1))
             self.add_run(jobs, "r2", "a@x.co", phase="done", cost=10)
             self.assertIn("reached your $50.00 limit", self.hosted_state(page, "a@x.co")["blocked"])
             self.add_run(jobs, "r3", None, phase="done", cost=50)
@@ -1606,7 +1686,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_started_while_signed_in_records_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
@@ -1620,7 +1700,7 @@ class AppTest(unittest.TestCase):
     def test_runs_started_in_the_same_second_get_their_own_folders(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}, "quick": {"tasks": 10}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}, "quick": {"tasks": 10}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(app, "datetime", SimpleNamespace(now=lambda: datetime(2026, 10, 29, 9, 0, 0))):
@@ -1668,14 +1748,14 @@ class AppTest(unittest.TestCase):
             self.assertIsInstance(app.App.chosen_pulls(bad), str, bad)
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
                 started = page.start({"pulls": {"o/a": [3, 1]}, "models": ["m"]})
                 refused = page.start({"pulls": {"o/a": [1], "x/b": [2]}, "models": ["m"], "setup": "npm ci", "test": "npx t"})
         self.assertTrue(started["id"].startswith("a-"))
-        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"], "--judges-checked"])
+        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"]])
         self.assertIn("one repository", refused["error"])
 
     def test_the_page_serves_reports_and_traces_but_not_raw_logs(self):
@@ -1760,6 +1840,33 @@ class ReportTest(unittest.TestCase):
         self.assertEqual((s["valid"], s["invalid"], s["solved"]), (2, 1, 1))
         self.assertEqual(s["pass_at_1"], 0.5)
         self.assertEqual(s["cost_per_solved"], 2.0)  # the failure is paid for; the invalid one is not counted
+
+    def test_a_run_from_before_tries_reads_as_before(self):
+        trials = [self.trial("t1", "m", "solved", 1.0), self.trial("t2", "m", "failed", 1.0)]
+        s = report.summarize(trials)
+        self.assertEqual((s["cost_per_attempt"], s["cost_per_solved"], s["median_seconds"], s["median_turns"],
+                          s["mean_output_tokens"]), (1.0, 2.0, 60, 5, 5))
+        self.assertEqual((s["tries"], s["cost_per_try"], s["solved_on"]), (2, 1.0, [1]))
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "x").mkdir()
+            (Path(d) / "x" / "result.json").write_text(json.dumps(trials[0]))
+            record = report.trial_record(Path(d) / "x")
+        self.assertNotIn("try", record)
+        self.assertNotIn("earlier_tries", record)
+
+    def test_an_attempt_pays_for_every_try_and_says_which_one_solved_it(self):
+        later = {**self.trial("t1", "m", "solved", 1.0), "try": 2,
+                 "started_at": "2026-10-20T00:01:00+00:00", "finished_at": "2026-10-20T00:02:00+00:00",
+                 "earlier_tries": [{"try": 1, "outcome": "failed", "started_at": "2026-10-20T00:00:00+00:00",
+                                    "finished_at": "2026-10-20T00:00:30+00:00",
+                                    "agent": {"cost_usd": 2.0, "seconds": 30, "num_turns": 2, "tokens": {"output": 7}}}]}
+        s = report.summarize([later, self.trial("t2", "m", "failed", 1.0)])
+        self.assertEqual((s["solved"], s["cost_usd"], s["cost_per_attempt"], s["cost_per_solved"]), (1, 4.0, 2.0, 4.0))
+        self.assertEqual((s["tries"], s["solved_on"]), (3, [0, 1]))
+        self.assertAlmostEqual(s["cost_per_try"], 4 / 3)
+        self.assertEqual((s["median_seconds"], s["median_turns"], s["mean_output_tokens"]), (75, 6, 8.5))  # 90 and 60, ...
+        timing = report.summarize_timing([later])
+        self.assertEqual((timing["elapsed_seconds"], timing["total_working_seconds"], timing["timed_attempts"]), (90, 90, 1))
 
     def test_rate_limit_waits_are_not_working_time(self):
         with tempfile.TemporaryDirectory() as d:

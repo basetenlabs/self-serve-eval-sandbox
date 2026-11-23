@@ -15,14 +15,13 @@ export function readiness(state: AppState): Item[] {
   const baseten = state.models.find((m) => m.provider === "baseten");
   const gpt = state.models.find((m) => m.provider === "openai");
   const claude = state.models.find((m) => m.provider === "anthropic");
-  const host = (local: string, problem?: string | null) =>
-    hosted ? `${problem ? `${problem}. ` : ""}The page's admins need to fix this.` : problem ? `${problem}, then restart pr-eval serve` : local;
+  const host = (local: string) => hosted ? "The page's admins need to fix this." : local;
   const github: Item = { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
   if (hosted) {
-    const ready = c.sandboxes && !!baseten && !baseten.missing && !!claude && !claude.missing && !gpt?.missing && c.judge.ok;
+    const ready = c.sandboxes && !!baseten && !baseten.missing && !!claude && !claude.missing && !gpt?.missing;
     return [
       ...(state.github.public ? [] : [{ ok: null, label: "GitHub: the quick sample only", fix: "The page's admins can turn on public repos." }]),
-      { ok: ready, label: ready ? "Models and judges ready" : "This page isn't ready to run", fix: "Its admins are fixing it." },
+      { ok: ready, label: ready ? "Models ready" : "This page isn't ready to run", fix: "Its admins are fixing it." },
     ];
   }
   return [
@@ -33,8 +32,6 @@ export function readiness(state: AppState): Item[] {
     { ok: !!baseten && !baseten.missing, label: "Baseten key, for open models", fix: host("Set BASETEN_API_KEY, then restart pr-eval serve") },
     { ok: !!claude && !claude.missing, label: "Claude key, for Claude models", fix: host("Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, then restart pr-eval serve") },
     ...(gpt ? [{ ok: !gpt.missing, label: "OpenAI key, for GPT models", fix: host("Set OPENAI_API_KEY, then restart pr-eval serve") }] : []),
-    { ok: c.judge.ok, label: `${c.judge.chair ? "Judges" : "Judge"}: ${c.judge.label}${c.judge.effort ? ` at ${c.judge.effort} effort` : ""}${c.judge.chair ? `; ${c.judge.chair} gives the final verdict` : ""}`,
-      fix: host("Restart pr-eval serve", c.judge.problem) },
   ];
 }
 
@@ -48,7 +45,7 @@ export function Readiness({ state }: { state: AppState }) {
         <details className="ev-details">
           <summary>
             <Chevron />
-            {state.github.hosted ? "Ready to run" : "Sandboxes, keys and judges are ready"}
+            {state.github.hosted ? "Ready to run" : "Sandboxes and keys are ready"}
           </summary>
           <div className="mt-3"><Checks items={items} /></div>
         </details>

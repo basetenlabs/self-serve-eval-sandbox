@@ -35,6 +35,9 @@ DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]
 # name them, and Run again puts the replacement in the form.
 RETIRED = {"glm-5.3-fast": "glm-5.3", "deepseek-v4.1-flash-1017-fast": "deepseek-v4.1-flash", "kimi-k3": "kimi-k3.1-pro"}
 DEFAULT_LIMIT = 10
+# Tries per attempt: a try the model fails is run again from scratch, up to this many in all, and the attempt is
+# solved if any try solves it. Every model gets the same. Runs from before tries were recorded had one.
+DEFAULT_TRIES = 3
 ACTIVE = ("collecting", "checking", "running")
 # An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
 # A run on a private repository loses these PR_EVAL_PRIVATE_RETENTION_DAYS after it ends (unset: kept);
@@ -176,7 +179,8 @@ def expire_transcripts(jobs_dir: Path) -> None:
             continue
         if (status.get("updated_at") or meta.get("created_at") or "") > cutoff:  # ISO times in UTC sort as text
             continue
-        found = [f for name in TRANSCRIPTS for f in path.parent.glob(f"trials/*/{name}")]
+        found = [f for name in TRANSCRIPTS for pattern in (f"trials/*/{name}", f"trials/*/{runner.TRIES}/*/{name}")
+                 for f in path.parent.glob(pattern)]
         repos = run_repos(meta)
         if not found or not any(answers.setdefault(r.lower(), private(r)) for r in repos):
             continue
@@ -270,14 +274,12 @@ def public_to_anyone(repo: str) -> bool:
         return False
 
 
-def preflight(model_keys: list[str], judge_choice: str = "default",
-              models_config: Path = config.DEFAULT_MODELS, *, judges_checked: bool = False,
-              ) -> tuple[list[config.Model], config.Panel | None]:
+def preflight(model_keys: list[str], judge_choice: str = "none",
+              models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Panel | None]:
     """The models and judges for a run, or SystemExit saying what is missing.
 
-    `judge_choice` is "default" for the configured panel, "none" for tests only, or one
-    judge's model id or label to grade with that judge alone. `judges_checked` doesn't ask the
-    judges' providers again: the page checked them a moment before it started the run.
+    `judge_choice` is "none" for the hidden tests alone, "default" for the configured panel,
+    or one judge's model id or label to grade with that judge alone.
     """
     catalog, judge = config.load(models_config)
     if retired := [k for k in model_keys if k in RETIRED and k not in catalog]:
@@ -292,13 +294,13 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
         return models, None
     if judge_choice != "default":
         judge = judge.only(judge_choice)
-    if not judges_checked and (problem := judge.problem()):
+    if problem := judge.problem():
         raise SystemExit(problem)
     return models, judge
 
 
 def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
-            name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
+            tries: int = DEFAULT_TRIES, name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
             tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1") -> Job:
     run_id = name or default_name(request)
     path = jobs_dir / run_id
@@ -308,7 +310,7 @@ def new_job(request: Request, models: list[config.Model], judge: config.Panel | 
     write_json(path / "run.json", {
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
         "harness_version": None, "backend": "baseten", "image": image, "region": region,
-        "attempts": attempts, "models": [m.as_dict() for m in models],
+        "attempts": attempts, "tries": tries, "models": [m.as_dict() for m in models],
         "judge": judge.as_dict() if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
@@ -355,7 +357,7 @@ def restore_tasks(ids: list[str], tasks_dir: Path, request: dict) -> list[tasks.
 def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> int:
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
-    attempts = job.meta.get("attempts", 1)
+    attempts, tries = job.meta.get("attempts", 1), job.meta.get("tries", 1)
     try:
         restore_execution(job.meta, settings)
         fit_memory(job, settings)
@@ -376,7 +378,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
             if len(check(job, selected, settings)) != len(selected):
                 raise SystemExit("The original task set no longer passes validation; start a new run.")
             start_running(job, models, settings)
-            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
+            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job), tries=tries)
         else:
             check_and_run(job, candidates, models, settings)
         path = report.build(job.path)
@@ -434,10 +436,14 @@ def collecting(job: Job):
 
 
 def start_running(job: Job, models: list[config.Model], settings: runner.Settings) -> None:
-    attempts = job.meta.get("attempts", 1)
-    job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models"
-                          + (f" x {attempts} attempts" if attempts > 1 else ""))
+    job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models" + times(job.meta))
     report.build(job.path)
+
+
+def times(meta: dict) -> str:
+    """How many attempts each task and model gets, and tries each attempt, for the status line."""
+    attempts, tries = meta.get("attempts", 1), meta.get("tries", 1)
+    return (f" x {attempts} attempts" if attempts > 1 else "") + (f", up to {tries} tries each" if tries > 1 else "")
 
 
 def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Model],
@@ -461,14 +467,13 @@ def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Mo
         job.meta["checked"] = True
         leave_out(job, statuses)
         if job.meta["tasks"]:
-            attempts = job.meta.get("attempts", 1)
             job.status("running", f"All checked. Running {len(job.meta['tasks'])} tasks x {len(models)} models"
-                                  + (f" x {attempts} attempts" if attempts > 1 else ""))
+                                  + times(job.meta))
         else:
             job.save()
 
     runner.check_and_run(candidates, models, job.meta.get("attempts", 1), job.path, settings, job.id,
-                         on_checked=checked, on_result=progress_printer(job))
+                         on_checked=checked, on_result=progress_printer(job), tries=job.meta.get("tries", 1))
     if not job.meta["tasks"]:
         raise SystemExit(none_passed(len(candidates), statuses))
 
@@ -522,6 +527,7 @@ def progress_printer(job: Job):
         nonlocal last_build
         cost = (result.get("agent") or {}).get("cost_usd")
         reason = f" ({result['invalid_reason']})" if result.get("invalid_reason") else ""
+        reason += f" on try {result['try']}" if (result.get("try") or 1) > 1 else ""
         print(f"[{done}/{total}] {result['trial']}: {result['outcome']}{reason}"
               + (f" ${cost:.3f}" if cost is not None else "")
               + (f": {result['cause']}" if result.get("cause") else ""), flush=True)
@@ -585,10 +591,13 @@ def resumed_models(meta: dict, requested: list[str] | None) -> tuple[list[str], 
     return have + added, added
 
 
-def resumed_judge(meta: dict, choice: str) -> str:
-    """The judge a resumed run started with, unless --judge names one, so a tests-only run stays tests only."""
-    if choice != "default" or "judge" not in meta:
+def resumed_judge(meta: dict, choice: str | None) -> str:
+    """The judge a resumed run started with, unless --judge was given, so a tests-only run stays tests only
+    and a judged one keeps its judges."""
+    if choice is not None:
         return choice
+    if "judge" not in meta:  # a run from before judges were recorded: the panel graded it
+        return "default"
     judge = meta["judge"]
     if not judge:
         return "none"

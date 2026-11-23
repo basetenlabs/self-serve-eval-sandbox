@@ -264,3 +264,9 @@ export function frontier(points: Tradeoff[]): string[] {
     .sort((a, b) => a.cost - b.cost || a.share - b.share)
     .map((p) => p.key);
 }
+
+/** How many solved attempts each try solved, from a summary's `solved_on`: "5 on try 1, 2 on try 2". */
+export function solvedOn(counts?: number[]): string {
+  const said = (counts ?? []).map((n, i) => (n ? `${n} on try ${i + 1}` : null)).filter(Boolean);
+  return said.length ? said.join(", ") : "–";
+}

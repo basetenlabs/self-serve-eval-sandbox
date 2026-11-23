@@ -24,7 +24,9 @@ const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands,
 type Commands = { setup: string; test: string };
 const LIMITS = [5, 10, 20, 40];
 const MODELS_KEY = "pr-eval-models-3"; // a new name when the default models change, so everyone starts on them once
-const QUICK_MINUTES = 35; // every quick-sample attempt starts at once; the slowest attempt sets the end
+// Every quick-sample attempt starts at once, so the slowest try sets the end; an attempt the model
+// fails runs again, so a run of several tries can take that long for each.
+const QUICK_MINUTES = 35;
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Start a run: which pull requests, which models, then a plan with cost and time before Start. */
@@ -36,6 +38,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   React.useEffect(() => { try { sessionStorage.removeItem(COMMANDS); } catch { /* private window */ } }, []);
   const [pick, setPick] = useStored<Pick>("pr-eval-pick", "choose");
   const [limit, setLimit] = React.useState(state.default_limit);
+  const tries = state.tries ?? 1;
+  const quickMinutes = QUICK_MINUTES * tries;
   const [chosen, setChosen] = React.useState<number[]>([]);
   const [checked, setChecked] = React.useState<Record<string, PullList | null>>({});
   const [setup, setSetup] = React.useState(handed.setup);
@@ -112,7 +116,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
   // A run takes at least its slowest attempt, however many go at once.
-  const minutes = mode === "quick" ? QUICK_MINUTES : Math.max(1, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60));
+  const minutes = mode === "quick" ? quickMinutes : Math.max(1, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60));
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
@@ -179,7 +183,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         <Column heading={<Step n="01">Pull requests</Step>} aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
           <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="ev-sources" aria-label="Pull requests">
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")}
-              text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. About ${QUICK_MINUTES} minutes.`} />
+              text={`Real fixes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}, every attempt at once. ${tries > 1 ? "Up to about" : "About"} ${quickMinutes} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
               text={`Use merged pull requests from a ${hosted ? "public" : "public or private"} GitHub repository.`} />
           </RadioGroup.Root>
@@ -278,13 +282,19 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             <div className="ev-plan">
               <div className="ev-plan-stats">
                 <PlanStat label="Estimated cost" value={<Rolling value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`} />}
-                  tip={priced ? "From each model's cost per attempt in its most recent run on these repositories, or else its most recent run."
+                  tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}.`
                     : "No earlier run to estimate from yet."} />
                 <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `≈ ${minutes} min` : "–"} />}
-                  tip={slowest ? `Slowest model takes about ${dur(slowest)} per attempt.` : undefined} />
+                  tip={mode === "quick" && tries > 1 ? "Every attempt starts at once, and one the model fails runs again: the slowest sets the end."
+                    : slowest ? `Slowest model takes about ${dur(slowest)} per attempt${tries > 1 ? ", its tries included" : ""}.` : undefined} />
               </div>
               <dl className="bt-kv ev-plan-rows">
                 <PlanRow label="Pull requests">{prs || "–"}</PlanRow>
+                {tries > 1 && (
+                  <PlanRow label="Tries" tip="A try the model fails runs again from scratch, without seeing why it failed. The attempt is solved if any try solves it, and its cost and time include every try.">
+                    Up to {tries} per attempt
+                  </PlanRow>
+                )}
                 <PlanRow label="Models">
                   {models.length ? [...models.filter(isOpen), ...models.filter((m) => !isOpen(m))].map((m) => (
                     <span key={m.key} className="flex min-w-0 items-center justify-end gap-2">

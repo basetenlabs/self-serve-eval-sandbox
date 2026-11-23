@@ -146,7 +146,8 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
       </div>
     );
   } else if (c.stage === "solved" || c.stage === "failed") {
-    const line = [c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ");
+    // Time and cost of every try; which try ended it, from the second on.
+    const line = [c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null, c.try ? `try ${c.try}` : null].filter(Boolean).join(" · ");
     sub = <div className="mt-0.5 truncate font-mono text-[12px]" title={line}>{line}</div>;
   } else if (c.stage === "invalid") {
     sub = <div className="mt-0.5 truncate text-[12px]" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
@@ -155,7 +156,7 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
   const cell = (
     <div key={c.stage} className={cn("flex h-12 animate-fade flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
-        <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}</span>
+        <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}{live && c.try ? ` · try ${c.try}` : ""}</span>
         {live && c.started_at && <span className="num font-mono text-[12px]">{clock(secondsSince(c.started_at, now))}</span>}
       </div>
       {sub}
