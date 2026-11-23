@@ -519,19 +519,22 @@ class ModelKeyTests(unittest.TestCase):
 
     def test_the_agent_gets_a_placeholder_and_only_the_relay_gets_the_key(self):
         key = "real-company-key-0123456789abcdef"
-        for provider, name, upstream, header in (
+        cases = [(harness, *keys) for harness in runner.HARNESSES for keys in (
                 ("anthropic", "ANTHROPIC_API_KEY", "https://api.anthropic.com", "X-Api-Key"),
-                ("baseten", "BASETEN_API_KEY", "https://inference.baseten.co/v1", "Authorization")):
-            with self.subTest(provider), tempfile.TemporaryDirectory() as d:
+                ("baseten", "BASETEN_API_KEY", "https://inference.baseten.co/v1", "Authorization"))]
+        for harness, provider, name, upstream, header in cases:
+            agent = {runner.pi.NAME: "pi --mode json", runner.CLAUDE_CODE: "claude -p"}[harness]
+            with self.subTest(harness=harness, provider=provider), tempfile.TemporaryDirectory() as d:
                 d = Path(d)
                 task = SimpleNamespace(id="public-task", instruction="Fix it.", path=d,
                                        meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}})
-                model = SimpleNamespace(key="m", model="m", effort="high", provider=provider)
+                model = SimpleNamespace(key="m", model="m", label="M", effort="high", provider=provider, pi=None,
+                                        rate_for=lambda _: None, price_call=lambda *_: None)
                 ran, started, order = [], [], []
 
                 def execute(container, script, *, env=None, **_):
                     ran.append((container, script, env or {}))
-                    order.append("agent" if "claude -p" in script else "step")
+                    order.append("agent" if agent in script else "step")
                     # An agent that found a key and printed it, in its log and its change.
                     return runtime.Execution(0, json.dumps({"type": "result", "result": key}) + "\n", key)
 
@@ -553,12 +556,12 @@ class ModelKeyTests(unittest.TestCase):
                         mock.patch.object(runner, "price_agent", side_effect=lambda agent, *args: agent), \
                         mock.patch.object(runner, "run_tests", return_value={"passed": True, "timed_out": False,
                                                                               "output": "ok"}):
-                    runner.run_trial(task, model, 1, d / "trial", "run-one", runner.Settings())
+                    runner.run_trial(task, model, 1, d / "trial", "run-one", runner.Settings(harness=harness))
                 # The agent: a placeholder to sign in with, in a jail with no network but the bridge to the relay.
-                (container, script, env), = [r for r in ran if "claude -p" in r[1]]
+                (container, script, env), = [r for r in ran if agent in r[1]]
                 self.assertEqual(container, "agent")
                 self.assertTrue(env[name].startswith("pr-eval-placeholder-"))
-                self.assertIn(f"--net none --bridge {runner.PROXY_PORT}={runner.RELAY_SOCKET} -- claude -p", script)
+                self.assertIn(f"--net none --bridge {runner.PROXY_PORT}={runner.RELAY_SOCKET} -- {agent}", script)
                 self.assertFalse([r for r in ran if key in r[1] + json.dumps(r[2])])  # in no command, in no environment
                 # The relay: the key's one holder, through its environment, outside the jail.
                 (container, process, relay, env), = started
@@ -657,7 +660,7 @@ class TrialBoundaryTests(unittest.TestCase):
         the ticket is revoked once the agent stops, and the run's ledger gets no second, whole-attempt charge."""
         events, seen = [], {}
 
-        def agent(name, model, placeholder_env, relay_headers, path, timeout, meter_url):
+        def agent(name, model, placeholder_env, relay_headers, path, timeout, meter_url, *_):
             seen.update(placeholder_env=placeholder_env, relay_headers=relay_headers, meter_url=meter_url,
                         tickets=list((path.parents[2] / "meter").iterdir()))
             path.write_text("")

@@ -1,4 +1,4 @@
-"""Run Claude Code trials in Baseten sandboxes.
+"""Run coding-agent trials in Baseten sandboxes: Pi (pi.py) by default, or Claude Code.
 
 A trial is one (task, model, attempt). Setup installs dependencies with the
 network open. Everything after it runs in a jail with no network (docker/jail.py):
@@ -26,7 +26,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import causes, meter, runtime, tasks
+from . import causes, meter, pi, runtime, tasks
 from . import judge as judge_mod
 from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
 from .rundir import charge, now, read_json, write_json
@@ -38,6 +38,9 @@ PROXY_PORT = 18787
 # Set when a run is interrupted: attempts cut short then are dropped, not saved as invalid,
 # so `--resume` runs them again.
 STOPPING = threading.Event()
+
+CLAUDE_CODE = "claude-code"
+HARNESSES = (pi.NAME, CLAUDE_CODE)
 
 # The agent's first message; the harness's own system prompt stays as it is. It says what a contributor
 # knows before starting: the repository, the request, how the change will be checked, and what this machine allows.
@@ -101,8 +104,10 @@ DISALLOWED_TOOLS = "WebFetch,WebSearch"
 CACHES = ("__pycache__/", "*.py[co]", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/")
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Claude Code says "API Error: ..."; Pi gives the provider's status first ("400: {...}").
 PROVIDER_ERROR = re.compile(r"API Error|authentication|unauthori[sz]ed|invalid api key|credit balance|"
-                            r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed", re.I)
+                            r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed|"
+                            r"^[45]\d\d: |Connection error", re.I)
 
 
 def stage(path: Path, name: str, **extra) -> None:
@@ -124,6 +129,7 @@ class Settings:
     memory: int = 4096                 # MB; a task that needs more says so (memory_mb)
     region: str = "us-pdx-1"
     agent_timeout: int | None = None   # overrides the task's own
+    harness: str = pi.NAME             # or "claude-code"; a resumed run keeps its own (pipeline.restore_execution)
     judge: Panel | None = None
     keep_sandboxes: bool = False
 
@@ -176,12 +182,25 @@ def duration(seconds: int) -> str:
     return f"{round(seconds / 60)} minutes"
 
 
-def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, dict[str, str]]:
-    """The shell that starts the model relay, the shell that starts Claude Code for this model in its jail,
-    and the non-secret env Claude Code needs. With `meter_url`, the relay calls the provider through the key
+# Run first in the agent's script: wait for the relay's socket, which the jail's one port leads to.
+RELAY_WAIT = (f"for i in $(seq 1 100); do [ -S {RELAY_SOCKET} ] && break; sleep 0.1; done\n"
+              f"[ -S {RELAY_SOCKET} ] || {{ echo 'pr-eval: the model relay did not start' >&2; exit {RELAY_MISSING}; }}\n")
+
+
+def agent_script(model: Model, meter_url: str | None = None,
+                 harness: str = CLAUDE_CODE) -> tuple[str, str, dict[str, str]]:
+    """The shell that starts the model relay, the shell that starts the agent for this model in its jail,
+    and the non-secret env the agent needs. With `meter_url`, the relay calls the provider through the key
     meter instead (see meter.py)."""
-    env = dict(HARNESS_ENV)
     upstream = meter.base_url(meter_url, model.provider) if meter_url else PROVIDER_URLS[model.provider]
+    if harness == pi.NAME:
+        # Pi speaks each provider's own API, so the relay only signs each call and passes it on.
+        relay = (f"rm -f {RELAY_SOCKET}; exec python3 /opt/eval/proxy.py --upstream {shlex.quote(upstream)} "
+                 f"--socket {RELAY_SOCKET} --log-file /logs/proxy.log")
+        before, command = pi.launch(model, f"http://127.0.0.1:{PROXY_PORT}")
+        script = f"{RELAY_WAIT}{before}exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {command}\n"
+        return relay, script, dict(pi.ENV)
+    env = dict(HARNESS_ENV)
     # Translated calls use the selected effort. Native Claude requests pass through.
     effort = f"--effort {shlex.quote(model.effort)} " if model.provider in API_KEYS else ""
     program = "python3 /opt/eval/proxy.py"
@@ -209,24 +228,22 @@ def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, 
         signs_in = f'export ANTHROPIC_AUTH_TOKEN="${key_name}"; unset {key_name}\n'
     else:
         env["ANTHROPIC_MODEL"] = model.model
-    script = (
-        f"for i in $(seq 1 100); do [ -S {RELAY_SOCKET} ] && break; sleep 0.1; done\n"
-        f"[ -S {RELAY_SOCKET} ] || {{ echo 'pr-eval: the model relay did not start' >&2; exit {RELAY_MISSING}; }}\n"
-        f"{signs_in}"
-        f"exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {claude}\n")
+    script = f"{RELAY_WAIT}{signs_in}exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {claude}\n"
     return relay, script, env
 
 
 def run_agent(container: str, model: Model, placeholder_env: dict, relay_headers: dict, log_path: Path, timeout: int,
-              meter_url: str | None = None) -> dict:
-    """Run Claude Code remotely and collect the durable stream log.
+              meter_url: str | None = None, harness: str = CLAUDE_CODE) -> dict:
+    """Run the agent remotely and collect the durable stream log.
 
     `placeholder_env` holds the attempt's placeholder credential, never a real key. `relay_headers` is
     what the model relay signs each call with, the key or the attempt's meter ticket (see
     config.sandbox_credential and meter.admit): the relay runs outside the agent's jail, and is the only
     process in the sandbox that ever has it.
     """
-    relay, script, env_vars = agent_script(model, meter_url)
+    relay, script, env_vars = agent_script(model, meter_url, harness)
+    if harness == pi.NAME:
+        placeholder_env = pi.credential_env(placeholder_env)
     with at("network"):
         runtime.start(container, RELAY, relay, env={"PROXY_UPSTREAM_HEADERS": json.dumps(relay_headers)},
                       timeout=timeout + 120, log=RELAY_LOG)
@@ -247,9 +264,15 @@ def run_agent(container: str, model: Model, placeholder_env: dict, relay_headers
     runtime.download(container, "/logs/agent.jsonl", log_path)  # streamed: the log can be tens of MB
     for path in (log_path, log_path.with_suffix(".stderr")):
         redact_file(path)
-    compact_stream(log_path)
+    if harness == pi.NAME:
+        pi.compact(log_path)
+        summary = pi.summarize(log_path, model)
+        summary["tokens"] = token_totals(summary["model_usage"])
+    else:
+        compact_stream(log_path)
+        summary = summarize_stream(log_path)
     return {"exit_code": result.code, "timed_out": result.timed_out,
-            "seconds": round(time.monotonic() - started, 1), **summarize_stream(log_path)}
+            "seconds": round(time.monotonic() - started, 1), **summary}
 
 
 def summarize_stream(path: Path) -> dict:
@@ -847,13 +870,14 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         # the meter every call is in the ledger already.
         charged = ticket is not None
         agent = run_agent(container, model, placeholder_env, relay_headers, trial_dir / "agent.jsonl", agent_timeout,
-                          meter_url)
+                          meter_url, settings.harness)
         if ticket:
             ticket.unlink(missing_ok=True)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         redact_file(trial_dir / "proxy.log")
-        result["agent"] = add_proxy_waits(price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log"),
-                                          trial_dir / "proxy.log")
+        if settings.harness != pi.NAME:  # Pi's summary priced each call already
+            agent = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
+        result["agent"] = add_proxy_waits(agent, trial_dir / "proxy.log")
         if not ticket:
             charge(trial_dir, "agent", model.key, result["agent"].get("cost_usd"))
         charged = True

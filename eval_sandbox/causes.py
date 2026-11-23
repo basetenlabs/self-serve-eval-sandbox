@@ -32,7 +32,7 @@ REASONS = {
     "setup-error": ("setup", "Installing the repository's dependencies failed."),
     "setup-timeout": ("setup", "Installing the repository's dependencies ran out of time."),
     "setup-commit-error": ("setup", "The installed dependencies could not be committed as the starting point."),
-    "agent-crashed": ("agent", "Claude Code stopped before it finished, without an answer."),
+    "agent-crashed": ("agent", "The coding agent stopped before it finished, without an answer."),
     "provider-error": ("agent", "The model's provider answered with an error, so the agent could not finish."),
     "verifier-apply-error": ("tests", "The agent's change could not be applied in the verifier sandbox."),
     "verifier-timeout": ("tests", "The hidden tests ran out of time."),

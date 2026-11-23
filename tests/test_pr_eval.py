@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval_sandbox import app, cli, config, judge, pipeline, report, rundir, runner, runtime, tasks, trace  # noqa: E402
+from eval_sandbox import app, cli, config, judge, pi, pipeline, report, rundir, runner, runtime, tasks, trace  # noqa: E402
 from eval_sandbox.config import Judge, Model, Panel  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -208,6 +208,94 @@ class AgentScriptTest(unittest.TestCase):
         with mock.patch.object(runner.runtime, "execute", return_value=refused), \
                 self.assertRaisesRegex(runner.runtime.RuntimeError, "can't keep a step off the network"):
             runner.sh("trial", "pytest -q", timeout=9)
+
+
+class PiTest(unittest.TestCase):
+    """Pi, the harness every model runs in by default: how it starts, and what is read back from its log."""
+
+    @staticmethod
+    def answer(*blocks, stop="toolUse", error=None, **usage):
+        message = {"role": "assistant", "content": list(blocks), "model": "zai-org/GLM-5.3", "stopReason": stop,
+                   "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, **usage}}
+        return {"type": "message_end", "message": {**message, **({"errorMessage": error} if error else {})}}
+
+    @staticmethod
+    def log(d, events) -> Path:
+        path = Path(d) / "agent.jsonl"
+        path.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in events))  # as Pi writes it
+        return path
+
+    def test_each_model_speaks_its_own_api_through_the_relay_from_the_jail(self):
+        gpt = config.load()[0]["gpt-6.2-sol"]
+        for model in (baseten_model(), anthropic_model(), gpt):
+            with self.subTest(model.key):
+                relay, script, env = runner.agent_script(model, harness=pi.NAME)
+                # The relay only signs each call and passes it on: nothing to translate, no effort to force.
+                self.assertIn(f"proxy.py --upstream {config.PROVIDER_URLS[model.provider]} --socket {runner.RELAY_SOCKET}", relay)
+                self.assertNotIn("--effort", relay)
+                self.assertIn(f"exec {runner.JAIL} --net none --bridge {runner.PROXY_PORT}={runner.RELAY_SOCKET} -- "
+                              f"pi --mode json --no-session --no-approve --model {model.provider}/{model.model} "
+                              f"--thinking {model.effort} ", script)
+                self.assertIn(f">{pi.CONFIG_DIR}/models.json", script)
+                self.assertEqual(pi.models_json(model, f"http://127.0.0.1:{runner.PROXY_PORT}"),
+                                 {"providers": {model.provider: {"baseUrl": f"http://127.0.0.1:{runner.PROXY_PORT}"}}})
+                self.assertEqual(env, pi.ENV)  # its own config, offline, and no key
+
+    def test_a_model_pis_catalog_lacks_comes_with_its_limits(self):
+        muse = config.load()[0]["muse-spark"]
+        entry, = pi.models_json(muse, "http://relay")["providers"]["baseten"]["models"]
+        self.assertEqual((entry["id"], entry["api"], entry["contextWindow"], entry["maxTokens"]),
+                         (muse.model, "openai-completions", 1048576, 262144))
+        self.assertFalse(entry["compat"]["supportsStore"])
+
+    def test_a_claude_subscription_token_is_pis_oauth_token(self):
+        self.assertEqual(pi.credential_env({"CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-placeholder-x"}),
+                         {"ANTHROPIC_OAUTH_TOKEN": "sk-ant-oat01-pr-eval-placeholder-x"})
+        self.assertEqual(pi.credential_env({"BASETEN_API_KEY": "p"}), {"BASETEN_API_KEY": "p"})
+
+    def test_pis_log_gives_the_report_the_same_numbers_as_claude_codes(self):
+        with tempfile.TemporaryDirectory() as d:
+            summary = pi.summarize(self.log(d, [
+                {"type": "harness", "name": "pi", "version": "1.6.0"},
+                {"type": "auto_retry_start", "attempt": 1, "delayMs": 2000, "errorMessage": "429: slow down"},
+                self.answer({"type": "thinking", "thinking": "look"},
+                            {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "ls"}},
+                            input=1000, output=100),
+                {"type": "message_end", "message": {"role": "toolResult", "toolCallId": "c1", "toolName": "bash",
+                                                    "content": [{"type": "text", "text": "a.py"}], "isError": False}},
+                self.answer({"type": "text", "text": "Fixed it."}, stop="stop", input=200, output=20, cacheRead=1000),
+                {"type": "agent_end"},
+            ]), baseten_model())
+        self.assertEqual((summary["harness_version"], summary["subtype"], summary["is_error"], summary["num_turns"]),
+                         ("1.6.0", "success", False, 2))
+        self.assertEqual((summary["tool_calls"], summary["final_message"]), ({"bash": 1}, "Fixed it."))
+        self.assertEqual((summary["api_retries"], summary["rate_limited_retries"], summary["retry_wait_seconds"]), (1, 1, 2.0))
+        self.assertEqual(runner.token_totals(summary["model_usage"]),
+                         {"input": 1200, "cached_input": 1000, "cache_write": 0, "output": 120})
+        self.assertAlmostEqual(summary["cost_usd"], (1200 * 1.40 + 1000 * 0.14 + 120 * 4.40) / 1e6)
+
+    def test_an_error_pi_gave_up_on_is_a_provider_error_and_a_run_cut_off_has_no_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            failed = pi.summarize(self.log(d, [self.answer(stop="error", error='429: {"error": "rate limited"}'),
+                                               {"type": "agent_end"}]), baseten_model())
+            cut = pi.summarize(self.log(d, [self.answer({"type": "text", "text": "Still going"}, input=10, output=5)]),
+                               baseten_model())
+        self.assertEqual((failed["subtype"], failed["is_error"]), ("error", True))
+        self.assertTrue(runner.PROVIDER_ERROR.search(failed["final_message"]))
+        self.assertNotIn("subtype", cut)  # the time limit stopped it: no answer to judge it by
+        self.assertEqual(cut["cost_source"], "rebuilt-partial")
+
+    def test_the_kept_log_holds_each_message_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.log(d, [{"type": "message_update", "message": {"content": "partial"}},
+                                {"type": "tool_execution_update", "partialResult": "x"},
+                                self.answer({"type": "text", "text": "done"}, stop="stop"),
+                                {"type": "turn_end", "message": {"content": "again"}},
+                                {"type": "agent_end", "messages": [{"role": "user"}]}])
+            pi.compact(path)
+            kept = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual([e["type"] for e in kept], ["message_end", "turn_end", "agent_end"])
+        self.assertEqual(kept[1:], [{"type": "turn_end"}, {"type": "agent_end"}])
 
 
 class FirstMessageTest(unittest.TestCase):
@@ -2351,6 +2439,28 @@ class TraceTest(unittest.TestCase):
         self.assertEqual((bash["title"], bash["detail"], bash["output"], bash["at"]), ("grep -rn parse .", "grep -rn parse .\nls", "p.go:1: parse", 30))
         self.assertEqual((edit["title"], edit["detail"], edit["error"], edit["at"]), ("p.go", "- a - b\n+ a + b", True, 100))
         self.assertEqual((got["hidden_thinking"], got["tool_calls"], got["tool_errors"], got["finished"]["turns"]), (1, 2, 1, 3))
+
+    def test_a_pi_log_reads_the_same(self):
+        with tempfile.TemporaryDirectory() as d:
+            trial = Path(d) / "t"
+            start = datetime(2026, 10, 20, tzinfo=timezone.utc).timestamp() * 1000
+            self.write(trial, [
+                {"type": "message_end", "message": {"role": "assistant", "stopReason": "toolUse", "content": [
+                    {"type": "thinking", "thinking": "Look at the parser."},
+                    {"type": "toolCall", "id": "a", "name": "edit", "arguments": {
+                        "path": "/workspace/p.go", "edits": [{"oldText": "a - b", "newText": "a + b"}]}}]}},
+                {"type": "message_end", "message": {"role": "toolResult", "toolCallId": "a", "toolName": "edit",
+                                                    "content": [{"type": "text", "text": "ok"}], "isError": False,
+                                                    "timestamp": start + 30000}},
+                {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+                                                    "content": [{"type": "text", "text": "Done."}]}},
+                {"type": "agent_end"},
+            ], seconds=40)
+            got = trace.condense(trial)
+        self.assertEqual([(s["kind"], s.get("tool")) for s in got["steps"]], [("thinking", None), ("tool", "edit"), ("text", None)])
+        edit = got["steps"][1]
+        self.assertEqual((edit["title"], edit["detail"], edit["output"], edit["error"]), ("p.go", "- a - b\n+ a + b", "ok", False))
+        self.assertEqual(got["finished"], {"turns": 2, "seconds": 40.0, "error": False, "subtype": "success"})
 
     def test_credentials_never_leave_in_a_trace(self):
         with tempfile.TemporaryDirectory() as d, mock_env(SOME_SERVICE_TOKEN="plain-words-but-secret"):

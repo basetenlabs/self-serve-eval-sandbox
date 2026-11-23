@@ -1,20 +1,24 @@
 # Models `pr-eval run --models` can name, and what each costs.
 #
-# Prices are USD per million tokens. Claude Code prices every model at Anthropic list
-# rates, so open models are priced from this table. Claude models take Claude Code's own
-# figure, which knows the 1-hour cache writes its usage report doesn't break out; their
-# rates here price attempts stopped at the time limit, which never report a cost.
+# Prices are USD per million tokens. Attempts in Pi are priced from this table, call by call.
+# Under Claude Code (runs started with --harness claude-code), which prices every model at
+# Anthropic list rates, open models are priced from this table and Claude models take Claude
+# Code's own figure, which knows the 1-hour cache writes its usage report doesn't break out.
 # Check the numbers before quoting a cost:
 #   OpenAI     https://developers.openai.com/api/docs/pricing (Standard, 30-minute cache)
 #   Anthropic  https://www.anthropic.com/pricing (API list rates)
 #   Baseten    https://www.baseten.co/pricing/ (Model APIs)
 #
-# provider = "anthropic": Claude Code talks to the Anthropic API directly, authenticated
-#   by ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
-# provider = "openai": Claude Code uses the relay to call the OpenAI Responses API with OPENAI_API_KEY.
-# provider = "baseten": Claude Code talks to the translating proxy inside the trial
-#   container, which forwards to Baseten Model APIs' Chat Completions endpoint with
-#   BASETEN_API_KEY and sets the same `effort` on every request.
+# Each model speaks its provider's own API from Pi, through the model relay in the trial's
+# sandbox, which adds the key; `effort` is Pi's thinking level, sent as each API expects it.
+# provider = "anthropic": the Anthropic Messages API, authenticated by ANTHROPIC_API_KEY or
+#   CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
+# provider = "openai": the OpenAI Responses API, with OPENAI_API_KEY.
+# provider = "baseten": Baseten Model APIs' Chat Completions endpoint, with BASETEN_API_KEY.
+# Under Claude Code the relay translates the Anthropic API for OpenAI and Baseten models, and
+#   sets the same `effort` on every Baseten request.
+# pi (optional) tells Pi about a model its catalog doesn't list yet: its context window and
+#   longest answer, in tokens.
 # max_concurrent (optional) caps how many attempts of one model run at once, for a
 #   provider that rate-limits the key. Time spent in retry backoff is excluded from the
 #   report's wall clock either way.
@@ -108,6 +112,7 @@ label = "Muse Spark Open"
 kind = "open"
 provider = "baseten"
 model = "meta-models/muse-spark-open"
+pi = { context_window = 1048576, max_tokens = 262144 }
 # Stays within the key's rate limit.
 max_concurrent = 2
 prices."meta-models/muse-spark-open" = { input = 1.25, cached_input = 0.15, output = 4.25 }
@@ -126,6 +131,7 @@ label = "Nemotron 3.5 Super"
 kind = "open"
 provider = "baseten"
 model = "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B"
+pi = { context_window = 1048576, max_tokens = 262144 }
 prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_input = 0.04, output = 0.50 }
 estimate_from = ["deepseek-v4.1-flash", "glm-5.3"]
 
