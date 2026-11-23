@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import causes, config, meter, pipeline, report, runner, runtime, tasks, trace
+from . import causes, commands, config, meter, pipeline, report, runner, runtime, tasks, trace
 from .pipeline import alive, repo_of
 from .rundir import ACCESS, OVER_LIMIT, SPEND_LEDGER, read_json
 
@@ -340,6 +340,7 @@ class App:
             "active_at": max(last),  # ISO times in UTC sort as text
             "models": [{"key": m["key"], "label": m["label"], "kind": m.get("kind"), "model": m.get("model")} for m in models],
             "phase": phase, "detail": detail, "note": meta.get("note"), "judged": bool(meta.get("judge")),
+            "step": status.get("step") if phase == "collecting" else None, "commands": meta.get("commands") or {},
             "progress": {"done": done, "total": total},
             "checking": {"done": sum((tasks_dir / c / "validation" / "result.json").is_file() for c in candidates),
                          "total": len(candidates)},
@@ -451,7 +452,10 @@ class App:
             defaults = True
         except tasks.Skip:
             defaults = False
-        return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults}
+        # Commands an earlier run worked out for it: the form fills them in; left empty, the run uses them anyway.
+        kept = None if commands.curated(repo) else commands.saved(repo)
+        return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults,
+                "commands": {k: kept[k] for k in ("setup", "test", "at")} if kept else None}
 
     def pulls(self, text: str, numbers: str = "", count: str = "", words: str = "", user: str | None = None) -> dict:
         """Pull requests in a repository and which can be tasks: these numbers, the merged ones GitHub
@@ -534,9 +538,6 @@ class App:
             if info.get("error"):
                 return info
             private = private or bool(info.get("private"))
-            if not info["defaults"] and not (setup and test):
-                return {"error": f"{name} is {info['language']}: give the install and test commands "
-                                 "(Go and Python repositories have defaults)."}
         claim = None if quick else {name.lower() for name in repos}
         if problem := self.taken(claim) or self.over_budget(state, keys, state["quick"]["tasks"] if quick else
                                                             sum(map(len, pulls.values())) or limit,

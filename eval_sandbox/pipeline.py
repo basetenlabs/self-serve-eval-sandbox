@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config, judge, report, runner, runtime, tasks
+from . import commands, config, judge, report, runner, runtime, tasks
 from .config import ROOT
 from .rundir import now, write_json
 
@@ -97,10 +97,12 @@ class Job:
     def save(self) -> None:
         write_json(self.path / "run.json", self.meta)
 
-    def status(self, phase: str, detail: str = "") -> None:
+    def status(self, phase: str, detail: str = "", step: str | None = None) -> None:
         if phase not in ACTIVE:  # while this run still reads as going, so no new run starts on files being deleted
             release_private(self)
-        self.meta["status"] = {"phase": phase, "detail": detail, "pid": os.getpid(), "updated_at": now()}
+        # `step` names a part of the phase the page tells apart: "commands", working out how to install and test
+        self.meta["status"] = {"phase": phase, "detail": detail, "pid": os.getpid(), "updated_at": now(),
+                               **({"step": step} if step else {})}
         self.save()
         if detail:
             print(detail, flush=True)
@@ -329,10 +331,14 @@ def find_tasks(request: Request, tasks_dir: Path, on_progress=None) -> list[task
         return tasks.discover(tasks_dir, request.task_ids)
     if request.repos or request.pulls:
         wanted = {repo: request.prs for repo in request.repos} | request.pulls
-        paths = [path for repo, prs in wanted.items() for path in tasks.collect(
-            repo, tasks_dir, prs=prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
-            setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines,
-            on_progress=on_progress)]
+        paths = []
+        for repo, prs in wanted.items():
+            setup, test = request.setup, request.test
+            if not (setup or test) and (kept := commands.saved(repo)) and not commands.curated(repo):
+                setup, test = kept["setup"], kept["test"]  # what an earlier run worked out
+            paths += tasks.collect(repo, tasks_dir, prs=prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
+                                   setup=setup, test=test, language=request.language, max_lines=request.max_lines,
+                                   on_progress=on_progress)
         return [tasks.load(p) for p in paths]
     paths = [path for repo, prs in tasks.sample(request.quick).items() for path in tasks.collect(repo, tasks_dir, prs=prs)]
     found = sorted((tasks.load(p) for p in paths), key=lambda t: t.meta["task"]["merged_at"])
@@ -341,16 +347,18 @@ def find_tasks(request: Request, tasks_dir: Path, on_progress=None) -> list[task
     return tasks.spread(found, request.limit, repo=lambda t: t.meta["task"]["repo"])
 
 
-def restore_tasks(ids: list[str], tasks_dir: Path, request: dict) -> list[tasks.Task]:
-    """A resumed run's tasks, collected again where they were deleted with their private repository."""
+def restore_tasks(ids: list[str], tasks_dir: Path, request: dict, used: dict | None = None) -> list[tasks.Task]:
+    """A resumed run's tasks, collected again where they were deleted with their private repository, with
+    the commands the run used (`used`, by repository: settle_commands)."""
     missing: dict[str, list[int]] = {}
     for task_id in ids:
         number = task_id.rsplit("-", 1)[-1]
         if "__" in task_id and number.isdigit() and not (tasks_dir / task_id / "task.toml").is_file():
             missing.setdefault(repo_of(task_id), []).append(int(number))
     for repo, prs in missing.items():
-        tasks.collect(repo, tasks_dir, prs=prs, setup=request.get("setup"), test=request.get("test"),
-                      language=request.get("language"))
+        known = next((c for r, c in (used or {}).items() if r.lower() == repo.lower()), {})
+        tasks.collect(repo, tasks_dir, prs=prs, setup=known.get("setup") or request.get("setup"),
+                      test=known.get("test") or request.get("test"), language=request.get("language"))
     return tasks.discover(tasks_dir, ids)
 
 
@@ -363,9 +371,10 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
         fit_memory(job, settings)
         resumed = bool(job.meta.get("tasks") and job.meta.get("checked", True))  # after the check: the same tasks
         if resumed:
-            selected = restore_tasks(job.meta["tasks"], tasks_dir, job.meta.get("request") or {})
+            selected = restore_tasks(job.meta["tasks"], tasks_dir, job.meta.get("request") or {}, job.meta.get("commands"))
         elif job.meta.get("candidates"):  # resumed while checking: the same pull requests
-            candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {})
+            candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {},
+                                       job.meta.get("commands"))
         else:
             request = Request(**job.meta.get("request") or {})
             job.status("collecting", f"Finding merged pull requests in {request.describe()}")
@@ -380,7 +389,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
             start_running(job, models, settings)
             runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job), tries=tries)
         else:
-            check_and_run(job, candidates, models, settings)
+            check_and_run(job, settle_commands(job, candidates, settings), models, settings)
         path = report.build(job.path)
         lost = runner.lost_trials(job.path)
         job.status("done", f"Finished. Report: {path}" + (
@@ -403,6 +412,24 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
     except Exception as exc:
         job.status("failed", f"{type(exc).__name__}: {exc}")
         raise
+
+
+def settle_commands(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> list[tasks.Task]:
+    """Each named repository's install and test commands, before any of its PRs is checked: given, or worked
+    out (commands.settle), and recorded in run.json. The samples' tasks carry their own."""
+    request = job.meta.get("request") or {}
+    done = job.meta.setdefault("commands", {})
+    found = {t.id: t for t in candidates}
+    for repo in dict.fromkeys([*(request.get("repos") or []), *(request.get("pulls") or {})]):
+        mine = [t for t in candidates if t.meta["task"]["repo"].lower() == repo.lower()]
+        if not mine or repo in done:  # resumed: worked out before it stopped
+            continue
+        done[repo], settled = commands.settle(
+            job.path, repo, mine, settings, job.id, setup=request.get("setup"), test=request.get("test"),
+            status=lambda text: job.status("collecting", text, step="commands"))
+        found |= {t.id: t for t in settled}
+        job.save()
+    return [found[t.id] for t in candidates]
 
 
 def fit_memory(job: Job, settings: runner.Settings) -> None:
@@ -475,6 +502,9 @@ def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Mo
     runner.check_and_run(candidates, models, job.meta.get("attempts", 1), job.path, settings, job.id,
                          on_checked=checked, on_result=progress_printer(job), tries=job.meta.get("tries", 1))
     if not job.meta["tasks"]:
+        for repo, used in (job.meta.get("commands") or {}).items():
+            if used.get("source") == "saved":  # they may have gone stale: the next run works them out afresh
+                commands.keep(repo, None)
         raise SystemExit(none_passed(len(candidates), statuses))
 
 

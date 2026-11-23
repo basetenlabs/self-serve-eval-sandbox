@@ -164,8 +164,9 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--limit", type=int, default=pipeline.DEFAULT_LIMIT, help=limit_help)
     p.add_argument("--pr", type=int, action="append", help="this PR number; repeatable (one repository)")
     p.add_argument("--since", help="only PRs merged on or after this date (YYYY-MM-DD)")
-    p.add_argument("--setup", help="command that installs dependencies (Go and Python have a default)")
-    p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files")
+    p.add_argument("--setup", help="command that installs dependencies (default: worked out when the run starts)")
+    p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files "
+                                  "(default: worked out when the run starts)")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
     p.add_argument("--quick", action="store_true", help="the quick sample: ten PostHog pull requests (configs/quick_tasks.toml)")
     p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
