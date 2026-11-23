@@ -48,7 +48,7 @@ Ask the person for these. Keep them in the environment of the shell that starts 
 
 | Variable | What it's for | Where to get it |
 | --- | --- | --- |
-| `BASETEN_API_KEY` | the sandboxes attempts run in, open models, and the Kimi K3 judge | Baseten: Settings > API keys. A personal key, or a team creator service account key |
+| `BASETEN_API_KEY` | the sandboxes attempts run in, open models, and the Kimi K3.1 Pro judge | Baseten: Settings > API keys. A personal key, or a team creator service account key |
 | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | Claude models, and the Claude Opus 5.5 judge | Anthropic Console, or `claude setup-token` (the person runs it) |
 | `OPENAI_API_KEY` | GPT models and the GPT-6.1 Sol judge | OpenAI platform: API keys |
 
