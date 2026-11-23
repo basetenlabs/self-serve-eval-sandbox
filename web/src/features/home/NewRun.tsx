@@ -63,15 +63,18 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const mode = source === "quick" ? "quick" : pastedRepos.length ? "pasted" : pasted.repos.length === 1 ? "repo" : pasted.repos.length ? "many" : "empty";
   const repo = mode === "repo" ? pasted.repos[0] : null;
 
-  // The install and test commands last started with each repository come back with it.
+  // The install and test commands last started with each repository come back with it. Another
+  // repository's never stay behind: left empty, the run works them out.
   const [kept, setKept] = useStored<Record<string, Commands>>("pr-eval-commands", {});
   const commandsFor = (repo ?? (mode === "pasted" && pastedRepos.length === 1 ? pastedRepos[0] : "")).toLowerCase();
   const first = React.useRef(true);
   React.useEffect(() => {
     const handedNow = first.current && !!(handed.setup || handed.test);
     first.current = false;
-    const k = commandsFor && kept[commandsFor];
-    if (k && !handedNow) { setSetup(k.setup); setTest(k.test); }
+    if (handedNow) return;
+    const k = commandsFor ? kept[commandsFor] : undefined;
+    setSetup(k?.setup ?? "");
+    setTest(k?.test ?? "");
   }, [commandsFor]);
 
   // Look the repository up as it's typed: language, whether it has default commands, access.
@@ -90,6 +93,12 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     return () => { abort.abort(); window.clearTimeout(timer); setLooking(false); };
   }, [repo]);
 
+  // Commands an earlier run worked out for the repository fill the fields while they're empty.
+  React.useEffect(() => {
+    const saved = info?.commands;
+    if (saved && !setup.trim() && !test.trim()) { setSetup(saved.setup); setTest(saved.test); }
+  }, [info]);
+
   // Pasted PRs that can't be tasks (not merged, no tests) stay out of the run.
   const pastedPulls = Object.fromEntries(pastedRepos
     .map((r) => [r, pasted.pulls[r].filter((n) => !checked[r]?.prs?.find((p) => p.number === n)?.why)] as const)
@@ -97,7 +106,6 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const checking = mode === "pasted" && pastedRepos.some((r) => !checked[r]);
   const lookups = mode === "pasted" ? pastedRepos.flatMap((r) => checked[r] ?? []) : info ? [info] : [];
   const lookupError = lookups.find((l) => l.error)?.error;
-  const needsCommands = lookups.find((l) => l.repo && !l.error && l.defaults === false);
   const prs = mode === "quick" ? state.quick.tasks : mode === "pasted" ? pullCount(pastedPulls)
     : mode === "repo" && !info?.error ? chosen.length : 0;
 
@@ -117,7 +125,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
-  const blocked = !!state.blocked || over || !models.length || !prs || checking || !!lookupError || (!!needsCommands && !commandsGiven)
+  const blocked = !!state.blocked || over || !models.length || !prs || checking || !!lookupError
     || (mode === "pasted" && commandsGiven && Object.keys(pastedPulls).length > 1);
 
   const hint = state.blocked ? state.blocked
@@ -125,7 +133,6 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     : !models.length ? "Choose at least one model."
     : checking ? "Checking the pull requests on GitHub."
     : lookupError ? "Pick a repository the page can read."
-    : needsCommands && !commandsGiven ? `Give the install and test commands for ${needsCommands.language}.`
     : !prs ? (mode === "repo" ? "Choose at least one pull request." : "Name a repository or paste pull request links.")
     : "Runs keep going if you close this page.";
 
@@ -228,11 +235,16 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               )}
 
               {(mode === "repo" || mode === "pasted") && (
-                <details className="ev-details" open={!!needsCommands}>
+                <details className="ev-details">
                   <summary>
                     <Chevron />
-                    Install and test commands {needsCommands ? <Badge variant="warn">Needed for {needsCommands.language}</Badge> : <span className="text-muted-foreground">(optional for Go and Python)</span>}
+                    Install and test commands <span className="text-muted-foreground">(optional)</span>
                   </summary>
+                  <p className="ev-small mt-3">
+                    Left empty, the run works them out when it starts: a guess from the repository's files, proved on one of its
+                    {" "}pull requests, and a small model that reads the output and tries again when the guess fails. What works is
+                    {" "}kept for the repository's next run. Commands you give here are used as they are.
+                  </p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="bt-field gap-2">
                       <Label htmlFor="setup">Install</Label>
@@ -375,7 +387,8 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos }: {
         <code className="ev-code">{info.repo}</code>
         <Badge>{info.language}</Badge>
         {info.private && <Badge variant="warn">Private</Badge>}
-        <span className="text-muted-foreground">{info.defaults ? "Ready: it has default commands." : "Give its install and test commands below."}</span>
+        <span className="text-muted-foreground">{info.commands ? "Ready: install and test commands saved from an earlier run."
+          : info.defaults ? "Ready: it has default commands." : "Ready: its install and test commands are worked out when the run starts."}</span>
       </span>
     );
   } else if (pasted.unknown.length) body = <Bad>Not a repository or pull request: {pasted.unknown[0]}</Bad>;

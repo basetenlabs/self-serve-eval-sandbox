@@ -44,7 +44,7 @@ It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then
 
 The first run builds the trial image on Baseten, which takes a few minutes once. Private repositories work through your `gh` login.
 
-Go and Python repositories have default install and test commands. For anything else, open **Install and test commands** and say how, for example `npm ci` and `npx vitest run {test_files}`. The trial image has Go, Node and Python; add other toolchains in `docker/Dockerfile`.
+Install and test commands are worked out when the run starts: a guess from the repository's files, proved in a sandbox, then a short model loop if the guess fails. What works is kept for the next run and shown on the run page. To set them yourself, open **Install and test commands**, for example `npm ci` and `npx vitest run {test_files}`; yours always win. The trial image has Go, Node and Python; add other toolchains in `docker/Dockerfile`.
 
 ## From a terminal
 

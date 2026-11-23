@@ -8,6 +8,7 @@ import { Tip } from "@/components/ui/tooltip";
 import { fillAgain } from "@/features/home/NewRun";
 import { Results, TaskDrawer, Tasks } from "@/features/report/ReportView";
 import { post, useReport } from "@/lib/api";
+import { commandsSource } from "@/lib/commands";
 import { plural, when } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
 import { ordered, palette } from "@/lib/models";
@@ -169,7 +170,7 @@ function now(run: Run): string {
   const step = pipeline(run).find((s) => s.state === "now")?.key;
   const { done, total } = run.progress;
   const sofar = total ? ` ${done} of ${total} attempts finished.` : "";
-  if (step === "find") return "Finding merged pull requests that came with tests.";
+  if (step === "find") return run.step === "commands" && run.detail ? run.detail.replace(/\.?$/, ".") : "Finding merged pull requests that came with tests.";
   if (step === "check") return "Checking that each pull request's tests fail before the fix and pass after.";
   if (step === "code") return `Models coding, each attempt in its own sandbox.${sofar}`;
   if (step === "grade") return `Grading with the hidden tests${run.judged === false ? "" : ", then the judges"}.${sofar}`;
@@ -183,11 +184,27 @@ function RunNotes({ run }: { run: Run }) {
   if (run.phase === "stopped") line = `Stopped${p.total ? ` with ${p.done} of ${p.total} attempts finished` : ""}.${run.read_only ? "" : " Resume to carry on where it left off."}`;
   else if (run.phase === "done" && run.resumable) line = `${plural(run.lost, "attempt")} ${run.lost === 1 ? "was" : "were"} lost to sandbox, setup or provider problems, not the models.${run.read_only ? "" : ` Resume runs ${run.lost === 1 ? "it" : "them"} again.`}`;
   else if (run.phase === "collecting" || run.phase === "failed" || (run.phase === "checking" && !k.total)) line = run.detail;
-  if (!line && !run.left_out.length && !run.note && !run.log) return null;
+  const used = Object.entries(run.commands ?? {});
+  if (!line && !run.left_out.length && !run.note && !run.log && !used.length) return null;
   return (
     <div className="mt-8 border-t border-lightGrey2">
       {line && <Note label={run.phase === "failed" ? "Failed" : "Status"}>{line}</Note>}
       {run.note && <Note label="Note">{run.note}</Note>}
+      {used.length > 0 && (
+        <Note label="Commands">
+          <div className="grid gap-3">
+            {used.map(([repo, c]) => (
+              <div key={repo} className="grid gap-1">
+                <span>{used.length > 1 ? `${repo}: ` : ""}{commandsSource(c)}</span>
+                <span className="label-xs text-muted-foreground">Install</span>
+                <code className="ev-code break-all">{c.setup}</code>
+                <span className="label-xs text-muted-foreground">Test</span>
+                <code className="ev-code break-all">{c.test}</code>
+              </div>
+            ))}
+          </div>
+        </Note>
+      )}
       {run.left_out.length > 0 && (
         <Note label="Left out">
           <details className="ev-details">
