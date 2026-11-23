@@ -35,7 +35,7 @@ its team, so give the page a team of its own (BASETEN_TEAM_ID) where others shar
 
 Keys come from the Keychain items in SECRETS below, else from the environment. <NAME>_KEYCHAIN_ITEM names
 another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key:
-    BASETEN_API_KEY         open models and the Kimi K3 judge
+    BASETEN_API_KEY         open models and the Kimi K3.1 Pro judge
     ANTHROPIC_API_KEY       Claude models and the Opus judge
     OPENAI_API_KEY          the GPT-6.1 Sol judge
     PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the

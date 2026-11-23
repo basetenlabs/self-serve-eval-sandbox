@@ -48,7 +48,7 @@ class HungJudgeTest(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def chat_judge(self) -> Judge:
-        return Judge(model="moonshotai/Kimi-K3", label="Kimi K3", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY")
+        return Judge(model="moonshotai/Kimi-K3.1-Pro", label="Kimi K3.1 Pro", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY")
 
     def test_a_hung_chat_request_is_retried_well_before_the_old_wait(self):
         timeouts = []

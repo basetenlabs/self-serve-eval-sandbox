@@ -34,7 +34,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const [text, setText] = useStored("pr-eval-pulls", "");
   const [handed] = React.useState(takeCommands);
   React.useEffect(() => { try { sessionStorage.removeItem(COMMANDS); } catch { /* private window */ } }, []);
-  const [pick, setPick] = useStored<Pick>("pr-eval-pick", "latest");
+  const [pick, setPick] = useStored<Pick>("pr-eval-pick", "choose");
   const [limit, setLimit] = React.useState(state.default_limit);
   const [chosen, setChosen] = React.useState<number[]>([]);
   const [checked, setChecked] = React.useState<Record<string, PullList | null>>({});
@@ -190,8 +190,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
               <div className="bt-field gap-2">
                 <Label htmlFor="pulls">GitHub repository or pull request URLs</Label>
                 <p id="pulls-help" className="ev-small">
-                  Paste a repository URL to browse recent merges, or paste individual pull request URLs to use those PRs.
-                  {" "}Each PR must be merged and include a test change.
+                  Paste a repository URL to browse its merged PRs, with a mix of security changes, fixes and features chosen for you,
+                  {" "}or paste individual pull request URLs to use those PRs.
+                  {" "}A PR can be a task when it is merged, changes both code and tests, and has at most
+                  {" "}{(state.pr_size?.lines ?? 1000).toLocaleString()} changed lines ({(state.pr_size?.pasted_lines ?? 3000).toLocaleString()} for one you paste);
+                  {" "}a greyed-out PR says which of these it misses. Models finish PRs under about 300 lines most often, so start there.
                   {hosted ? " This page runs public repositories only." : " A private repository needs a GitHub CLI login here that can read it."}
                 </p>
                 <textarea
@@ -226,6 +229,12 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                       favorites={favorites} onFavorite={onFavorite} />
                   )}
                 </div>
+              )}
+
+              {mode === "pasted" && pastedRepos.length === 1 && (
+                <Button variant="outline" className="w-fit" onClick={() => { setText(`https://github.com/${pastedRepos[0]}`); setPick("choose"); }}>
+                  Browse all merged PRs in {pastedRepos[0]}
+                </Button>
               )}
 
               {mode === "pasted" && (

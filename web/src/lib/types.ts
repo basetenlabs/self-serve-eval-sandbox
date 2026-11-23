@@ -129,6 +129,7 @@ export interface AppState {
   quick: { tasks: number; repos: number; names?: string[]; ready?: boolean };
   default_limit: number;
   max_limit: number;
+  pr_size?: { lines: number; pasted_lines: number; files: number };
   /** Some run is going, anyone's: the page polls faster. */
   busy: boolean;
   /** Why you can't start a run now: your run is going, the most runs are, or a spending limit is reached. */

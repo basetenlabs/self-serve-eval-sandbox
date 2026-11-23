@@ -60,8 +60,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(models["claude-opus"].kind, "closed")
         for model in models.values():
             self.assertIn(model.model, model.prices, f"{model.key} has no price for its own id")
-        self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3"])
-        self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3")
+        self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3.1-Pro"])
+        self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3.1-Pro")
 
     def test_closed_models_name_their_maker(self):
         # The report says who serves each model it compares: Baseten for an open one, a closed one's maker.
