@@ -745,15 +745,9 @@ class Proxy(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         headers = with_credential({k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS})
         headers["accept-encoding"] = "identity"
-        request = urllib.request.Request(CONFIG.upstream + self.path, data=raw, headers=headers, method=self.command)
-        try:
-            try:
-                up = urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_SEC)
-            except urllib.error.HTTPError as error:
-                up = error
-        except Exception as error:  # a DNS or connection failure never reached the host
-            self._send(502, error_body(error, "anthropic"))
-            return self._record(turn, started, path, "as-is", 502, type(error).__name__)
+        up = self._upstream(CONFIG.upstream + self.path, raw, "anthropic", headers)
+        if up is None:  # a DNS or connection failure never reached the host
+            return self._record(turn, started, path, "as-is", 502, "unreachable")
         self.send_response(up.status)
         for name, value in up.headers.items():
             if name.lower() not in HOP_HEADERS:
@@ -911,12 +905,13 @@ class Proxy(BaseHTTPRequestHandler):
         """The one upstream endpoint this proxy exists to reach."""
         return CONFIG.upstream + "/chat/completions"
 
-    def _upstream(self, url: str, body: bytes | None, shape: str) -> Upstream | None:
+    def _upstream(self, url: str, body: bytes | None, shape: str,
+                  headers: dict[str, str] | None = None) -> Upstream | None:
         """Call the upstream, answering the client with a 502 and returning None if it was never reached.
         A 429 is asked again after a wait, for up to RATE_LIMIT_WAIT_SEC, before it goes back to the client."""
         waited, retries = 0.0, 0
         while True:
-            up = call_upstream(url, body, upstream_headers(self.headers))
+            up = call_upstream(url, body, headers or upstream_headers(self.headers))
             if not hasattr(up, "status"):
                 self._send(502, error_body(up, shape))
                 return None
