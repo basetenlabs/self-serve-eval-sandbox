@@ -58,8 +58,7 @@ def cmd_run(args) -> int:
         job.save()
     else:
         repos, pulls = wanted(args)
-        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config,
-                                           judges_checked=args.judges_checked)
+        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge or "none", args.models_config)
         if args.quick and (args.repos or args.task):
             sys.exit("--quick is the quick sample; it doesn't take repositories or --task")
         request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
@@ -95,9 +94,9 @@ def cmd_collect(args) -> int:
 def cmd_validate(args) -> int:
     pipeline.ensure_image(args.image)
     selected = tasks.discover(args.tasks, args.task)
-    # The panel's chair also checks that each request says enough to pass its tests.
+    # With --judge, the panel's chair also checks that each request says enough to pass its tests.
     settings = runner.Settings(image=runtime.resolve_image(args.image), concurrency=args.concurrency,
-                               judge=config.load()[1])
+                               judge=config.load()[1] if args.judge else None)
     counts: dict[str, int] = {}
 
     def checked(record, done, total):
@@ -193,9 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--resume", type=Path, help="finish a stopped run in this job directory")
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
-    r.add_argument("--judge", default="default", help="'none' to score on tests only, or one judge's model id to grade with it alone")
-    # The page passes it: it checked the judges just before, and asking again held up each start by 1.6-3.5 s.
-    r.add_argument("--judges-checked", action="store_true", help=argparse.SUPPRESS)
+    # Off by default, so the hidden tests alone decide and no judge is paid for.
+    r.add_argument("--judge", nargs="?", const="default", metavar="MODEL",
+                   help="also grade with the LLM judges: alone, the configured panel and its chair; with a judge's model "
+                        "id, that judge alone; 'none' for none (default: the hidden tests alone decide; on --resume, "
+                        "the run's own)")
     r.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY,
                    help=f"attempts and checks at once (default {runner.DEFAULT_CONCURRENCY})")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
@@ -223,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--task", action="append")
     v.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY)
     v.add_argument("--image", default=runner.DEFAULT_IMAGE)
+    v.add_argument("--judge", action="store_true", help="also have the judges' chair check that each request says enough to pass its tests")
     v.set_defaults(func=cmd_validate)
 
     j = sub.add_parser("rejudge", help="grade a finished run again (new judge model or prompt) without re-running agents")

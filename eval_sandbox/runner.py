@@ -6,9 +6,10 @@ the agent's only way out is the model relay, a process outside its jail that it
 reaches through one socket and that calls the model provider and nothing else.
 The agent's patch is saved and its entire sandbox deleted. A second sandbox,
 set up the same way while the agent works, then gets the patch and the hidden
-tests. The reference patch is used only by separate validation sandboxes and
-the host-side judge. On a task still being checked, an attempt's own sandbox is
-set up alongside the check, and its agent starts only once the check passes.
+tests. The reference patch is used only by separate validation sandboxes and,
+on a run with judges, the host-side judges. On a task still being checked, an
+attempt's own sandbox is set up alongside the check, and its agent starts only
+once the check passes.
 """
 from __future__ import annotations
 
@@ -819,7 +820,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     if result.get("cleanup_error"):
         return finish("invalid", "sandbox-cleanup-error", log="error.log")
     if not patch.strip():
-        result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
+        if settings.judge is not None:  # a run with judges says why they weren't asked
+            result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
         return finish("failed")
     if settings.judge is None:
         return finish("solved" if tests["passed"] else "failed")
@@ -1056,9 +1058,9 @@ def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: in
     """Runs one pending trial within its model's own limit, and once more if it was lost to something
     passing (causes.transient). A broken trial is saved, never raised.
 
-    A try the model fails (tests fail, the judges say no, it gave up or ran out of time) is followed by
-    another from scratch, up to `tries` in all, the same for every model; the first that solves it ends the
-    attempt. A try lost to infrastructure isn't one of them: it keeps the handling above."""
+    A try the model fails (tests fail, judges on a run with them say no, it gave up or ran out of time) is
+    followed by another from scratch, up to `tries` in all, the same for every model; the first that solves
+    it ends the attempt. A try lost to infrastructure isn't one of them: it keeps the handling above."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
 
     def once(job, ready: Ready | None) -> dict:

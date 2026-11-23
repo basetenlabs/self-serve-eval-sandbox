@@ -126,12 +126,12 @@ class Judge:
         if self.provider == "anthropic":
             if not shutil.which("claude"):
                 return (f"the {self.name} judge runs through Claude Code: install it "
-                        "(npm install -g @anthropic-ai/claude-code), or pass --judge none to score on tests only")
+                        "(npm install -g @anthropic-ai/claude-code), or leave out --judge to score on tests alone")
             if not claude_credential():
                 return f"the {self.name} judge needs a Claude credential: {CLAUDE_CREDENTIAL_HELP}"
             return None
         if not self.api_key:
-            return f"the {self.name} judge needs {self.api_key_env}; set it, or pass --judge none to score on tests only"
+            return f"the {self.name} judge needs {self.api_key_env}; set it, or leave out --judge to score on tests alone"
         cannot = (f"the key in {self.api_key_env} can't use the judge model {self.model}"
                   "{}; use a key that can, or change its [[judge.panel]] entry in configs/models.toml")
         request = urllib.request.Request(f"{self.base_url}/models", headers={"authorization": f"Bearer {self.api_key}"})

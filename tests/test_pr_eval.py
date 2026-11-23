@@ -792,13 +792,14 @@ class PipelineTest(unittest.TestCase):
                          "deepseek-v4.1-flash-1017-fast is no longer offered: use deepseek-v4.1-flash")
 
     def test_resume_keeps_the_runs_own_judge(self):
-        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "none")  # no judge key needed
-        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, None), "none")  # no judge key needed
+        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, None), "gpt-x")
         self.assertEqual(pipeline.resumed_judge({"judge": None}, "gpt-y"), "gpt-y")  # named on the command line
-        self.assertEqual(pipeline.resumed_judge({}, "default"), "default")  # a run from before judges were recorded
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "default")  # --judge alone: the panel
+        self.assertEqual(pipeline.resumed_judge({}, None), "default")  # a run from before judges were recorded
         panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
-        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, "default"), "default")
-        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, "default"), "a")
+        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, None), "default")
+        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, None), "a")
 
     def job(self, d, request):
         return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
@@ -1073,6 +1074,30 @@ class PipelineTest(unittest.TestCase):
             old.save()
             cli.main(["run", "--resume", str(jobs / "r1")])
             self.assertEqual(tries("r1"), 1)  # a run from before tries were recorded had one
+
+    def test_judges_grade_a_run_only_when_asked_for_and_a_resume_keeps_them(self):
+        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
+
+        def preflight(keys, choice, *_):
+            return [baseten_model()], None if choice == "none" else panel if choice == "default" else panel.only(choice)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(pipeline, "preflight", side_effect=preflight) as checked, \
+                mock.patch.object(pipeline, "execute", return_value=0) as execute, \
+                mock.patch.object(pipeline, "sweep_private"), mock.patch.dict(os.environ), \
+                contextlib.redirect_stdout(io.StringIO()):
+            jobs = Path(d) / "jobs"
+
+            def run(*argv):
+                cli.main(["run", *argv, "--jobs", str(jobs)])
+                return checked.call_args.args[1], execute.call_args.args[2].judge
+            self.assertEqual(run("o/r", "--name", "tests"), ("none", None))  # the default: the hidden tests alone
+            self.assertEqual(run("o/r", "--name", "panel", "--judge"), ("default", panel))  # today's panel and chair
+            self.assertEqual(run("o/r", "--name", "one", "--judge", "a")[0], "a")
+            self.assertIsNone(pipeline.Job(jobs / "tests").meta["judge"])
+            self.assertEqual(pipeline.Job(jobs / "panel").meta["judge"]["chair"]["model"], "b")
+            self.assertEqual(run("--resume", str(jobs / "tests")), ("none", None))  # stays tests only
+            self.assertEqual(run("--resume", str(jobs / "panel")), ("default", panel))  # keeps its judges
+            self.assertEqual(run("--resume", str(jobs / "tests"), "--judge")[0], "default")
             with self.assertRaisesRegex(SystemExit, "at least 1"):
                 cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r3", "--tries", "0"])
 
@@ -1285,7 +1310,7 @@ class AppTest(unittest.TestCase):
                 mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
                 mock.patch.object(page, "spawn") as spawn, mock.patch.object(app.pipeline, "preflight"), \
                 mock.patch.object(page, "state", return_value={"blocked": None, "quick": {"tasks": 10}, "checks": {
-                    "sandboxes": True, "gh": False, "judge": {"problem": None}}}):
+                    "sandboxes": True, "gh": False}}):
             self.assertEqual(page.repo_info("o/public", "a@x.co")["language"], "Go")
             self.assertEqual(asked.call_args.args, ("repos/o/public", "page-tok"))
             self.assertIn("public repositories only", page.repo_info("o/private", "a@x.co")["error"])
@@ -1501,7 +1526,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
@@ -1510,28 +1535,26 @@ class AppTest(unittest.TestCase):
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
         spawn.assert_called_once()
 
-    def test_starting_a_run_takes_the_judges_check_from_the_page(self):
+    def test_the_page_starts_runs_graded_on_their_hidden_tests_alone(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            checks = {"sandboxes": True, "gh": True, "judge": {"problem": "the judge needs KEY"}}
+            checks = {"sandboxes": True, "gh": True}
             with mock.patch.object(page, "state", return_value={"busy": False, "runs": [], "checks": checks}), \
                     mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight") as preflight, \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
-                self.assertEqual(page.start({"pulls": {"o/a": [1]}, "models": ["m"]}), {"error": "the judge needs KEY"})
-                checks["judge"]["problem"] = None
-                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"]}))
-        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked again
+                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"], "judge": "default"}))
+        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked
         spawn.assert_called_once()
-        self.assertIn("--judges-checked", spawn.call_args.args[1])  # nor by the run it starts
+        self.assertFalse([a for a in spawn.call_args.args[1] if a.startswith("--judge")])  # nor turned on by the form
 
-    def test_a_run_the_page_started_does_not_ask_the_judges_again(self):
+    def test_judges_are_asked_only_when_a_run_wants_them(self):
         panel = SimpleNamespace(problem=mock.Mock(return_value="the judge needs KEY"))
         with mock.patch.object(app.pipeline.config, "load", return_value=({}, panel)):
-            self.assertEqual(app.pipeline.preflight([], judges_checked=True), ([], panel))
+            self.assertEqual(app.pipeline.preflight([]), ([], None))  # the hidden tests alone decide
             panel.problem.assert_not_called()
-            with self.assertRaises(SystemExit):
-                app.pipeline.preflight([])
+            with self.assertRaises(SystemExit):  # asked for, a judge that can't run stops the run before it starts
+                app.pipeline.preflight([], "default")
 
     @staticmethod
     def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
@@ -1663,7 +1686,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_started_while_signed_in_records_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
@@ -1677,7 +1700,7 @@ class AppTest(unittest.TestCase):
     def test_runs_started_in_the_same_second_get_their_own_folders(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}, "quick": {"tasks": 10}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}, "quick": {"tasks": 10}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(app, "datetime", SimpleNamespace(now=lambda: datetime(2026, 10, 29, 9, 0, 0))):
@@ -1725,14 +1748,14 @@ class AppTest(unittest.TestCase):
             self.assertIsInstance(app.App.chosen_pulls(bad), str, bad)
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
                 started = page.start({"pulls": {"o/a": [3, 1]}, "models": ["m"]})
                 refused = page.start({"pulls": {"o/a": [1], "x/b": [2]}, "models": ["m"], "setup": "npm ci", "test": "npx t"})
         self.assertTrue(started["id"].startswith("a-"))
-        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"], "--judges-checked"])
+        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"]])
         self.assertIn("one repository", refused["error"])
 
     def test_the_page_serves_reports_and_traces_but_not_raw_logs(self):

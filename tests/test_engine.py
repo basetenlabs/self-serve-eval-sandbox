@@ -205,6 +205,28 @@ class RetryTests(unittest.TestCase):
         self.assertLessEqual(tries["upload"], 2)  # the agent's and its verifier's, one try each
 
 
+class GradingTests(unittest.TestCase):
+    """Without judges, a run's default, the hidden tests alone decide whether an attempt is solved."""
+
+    def test_passing_tests_solve_an_attempt_and_no_judge_is_asked(self):
+        asked = AssertionError("a judge was asked")
+        with tempfile.TemporaryDirectory() as d, sandboxes(), \
+                mock.patch.object(judge, "grade", side_effect=asked), mock.patch.object(judge, "screen", side_effect=asked):
+            result = run_one(Path(d))
+        self.assertEqual((result["outcome"], result.get("invalid_reason"), result.get("judge")), ("solved", None, None))
+
+    def test_an_attempt_with_no_changes_has_a_verdict_only_on_a_run_with_judges(self):
+        def failing(name, *_):
+            return {"passed": False, "timed_out": False, "output": "", "summary": "1 failed"}
+        for panel, verdict in ((None, None), (SimpleNamespace(), "fail")):
+            with tempfile.TemporaryDirectory() as d, sandboxes(tests=failing), \
+                    mock.patch.object(runner, "capture_patch", return_value=("", "")):
+                the_task = task(Path(d))
+                trial = runner.trial_runner([MODEL], runner.Settings(judge=panel), "run-one")
+                result = trial((the_task, MODEL, 1, Path(d) / "trials" / runner.trial_name(the_task, MODEL, 1)))
+            self.assertEqual((result["outcome"], (result.get("judge") or {}).get("verdict")), ("failed", verdict))
+
+
 class TriesTests(unittest.TestCase):
     """An attempt the model fails is tried again from scratch, up to the run's tries, and pays for every try."""
 

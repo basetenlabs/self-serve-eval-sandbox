@@ -34,7 +34,6 @@ export interface Checks {
   /** Whose GitHub login the `gh` CLI on this machine uses. */
   gh_login?: string | null;
   image: boolean;
-  judge: { label: string; chair?: string | null; effort?: string | null; ok: boolean; problem?: string | null };
 }
 
 export type Phase = "collecting" | "checking" | "running" | "judging" | "reporting" | "done" | "stopped" | "failed" | string;

@@ -134,7 +134,7 @@ class App:
     def state(self, viewing: str = "", user: str | None = None) -> dict:
         for child in list(self.children.values()):
             child.poll()
-        catalog, judge = config.load(self.models_config)
+        catalog, _ = config.load(self.models_config)
         everyone = self.everyone()
         admin = self.admin(user)
         runs = []
@@ -156,7 +156,7 @@ class App:
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "maker": m.maker, "model": m.model,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
-        return {"checks": self.checks(judge), "models": models, "runs": runs,
+        return {"checks": self.checks(), "models": models, "runs": runs,
                 "quick": quick_sample(), "tries": pipeline.DEFAULT_TRIES,
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 # Which PRs can be tasks, for the page's guidance: a repository's list keeps PRs up to `lines`,
@@ -245,25 +245,24 @@ class App:
             return child.pid
         return (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
 
-    def checks(self, judge: config.Panel) -> dict:
+    def checks(self) -> dict:
         """Baseten Sandboxes, the trial image and GitHub. The remote checks take seconds, so only the
         first waits for them: after that the page gets the last answer, and one older than 15 seconds
         is checked again in the background."""
         when, cached = self.checked
         if not cached:
             with self.checking:
-                cached = self.checked[1] or self.check(judge)
+                cached = self.checked[1] or self.check()
         elif time.monotonic() - when > 15 and self.checking.acquire(blocking=False):
             def refresh():
                 try:
-                    self.check(judge)
+                    self.check()
                 finally:
                     self.checking.release()
             threading.Thread(target=refresh, daemon=True).start()
-        return {**cached, "judge": {"label": judge.label, "chair": judge.chair.name if judge.chair else None,
-                                    "effort": judge.judges[0].effort, "ok": not cached["judge"], "problem": cached["judge"]}}
+        return {**cached}
 
-    def check(self, judge: config.Panel) -> dict:
+    def check(self) -> dict:
         problem = None
         image = False
         try:
@@ -278,7 +277,7 @@ class App:
         except (RuntimeError, SystemExit, subprocess.SubprocessError):
             gh_login = None
         checked = {"sandboxes": problem is None, "sandboxes_problem": problem,
-                   "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
+                   "gh": gh, "gh_login": gh_login, "image": image}
         self.checked = (time.monotonic(), checked)
         return checked
 
@@ -515,12 +514,10 @@ class App:
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
             return {"error": "Choose at least one model."}
-        try:  # the judges were checked with the page's other checks, a few seconds ago: asking them again took seconds
+        try:  # the models' keys: the page's runs are graded on their hidden tests alone, so no judge is asked
             pipeline.preflight(keys, "none", self.models_config)
         except SystemExit as exc:
             return {"error": str(exc.code)}
-        if checks["judge"]["problem"]:
-            return {"error": checks["judge"]["problem"]}
         try:
             limit = int(form.get("limit") or pipeline.DEFAULT_LIMIT)
         except ValueError:
@@ -552,7 +549,7 @@ class App:
             run_id = f"{named}-{n}"
         argv = [f"{name}#{n}" for name, numbers in pulls.items() for n in numbers] or ([repo] if repo else [])
         argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else [] if pulls else ["--limit", str(limit)]
-        argv += ["--models", ",".join(keys), "--name", run_id, "--judges-checked"]
+        argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         if user:  # whose run it is: only they see it, and it counts toward their limits
@@ -981,8 +978,8 @@ def watch_spending(page: App) -> None:
 def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
     page = App(jobs_dir)
-    # Check the sandboxes, GitHub and the judge while the server starts, so the first visit doesn't wait.
-    threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
+    # Check the sandboxes and GitHub while the server starts, so the first visit doesn't wait.
+    threading.Thread(target=page.checks, daemon=True).start()
     # Delete the private clones and task folders left by runs whose process died, such as when the page last
     # restarted, and private runs' transcripts once they're past keeping; again every hour while the page runs.
     threading.Thread(target=sweep_hourly, args=(jobs_dir,), daemon=True).start()

@@ -274,14 +274,12 @@ def public_to_anyone(repo: str) -> bool:
         return False
 
 
-def preflight(model_keys: list[str], judge_choice: str = "default",
-              models_config: Path = config.DEFAULT_MODELS, *, judges_checked: bool = False,
-              ) -> tuple[list[config.Model], config.Panel | None]:
+def preflight(model_keys: list[str], judge_choice: str = "none",
+              models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Panel | None]:
     """The models and judges for a run, or SystemExit saying what is missing.
 
-    `judge_choice` is "default" for the configured panel, "none" for tests only, or one
-    judge's model id or label to grade with that judge alone. `judges_checked` doesn't ask the
-    judges' providers again: the page checked them a moment before it started the run.
+    `judge_choice` is "none" for the hidden tests alone, "default" for the configured panel,
+    or one judge's model id or label to grade with that judge alone.
     """
     catalog, judge = config.load(models_config)
     if retired := [k for k in model_keys if k in RETIRED and k not in catalog]:
@@ -296,7 +294,7 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
         return models, None
     if judge_choice != "default":
         judge = judge.only(judge_choice)
-    if not judges_checked and (problem := judge.problem()):
+    if problem := judge.problem():
         raise SystemExit(problem)
     return models, judge
 
@@ -593,10 +591,13 @@ def resumed_models(meta: dict, requested: list[str] | None) -> tuple[list[str], 
     return have + added, added
 
 
-def resumed_judge(meta: dict, choice: str) -> str:
-    """The judge a resumed run started with, unless --judge names one, so a tests-only run stays tests only."""
-    if choice != "default" or "judge" not in meta:
+def resumed_judge(meta: dict, choice: str | None) -> str:
+    """The judge a resumed run started with, unless --judge was given, so a tests-only run stays tests only
+    and a judged one keeps its judges."""
+    if choice is not None:
         return choice
+    if "judge" not in meta:  # a run from before judges were recorded: the panel graded it
+        return "default"
     judge = meta["judge"]
     if not judge:
         return "none"

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from eval_sandbox import app, cli, config, pipeline, runner
+from eval_sandbox import app, cli, pipeline, runner
 
 
 class FlowTest(unittest.TestCase):
@@ -190,50 +190,45 @@ class FlowTest(unittest.TestCase):
             self.assertEqual([c.args for c in cleanup.call_args_list][-1], ("validate-1",))
 
     def test_page_reports_connection_problem_instead_of_docker(self):
-        judge = config.Panel([config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")])
         with tempfile.TemporaryDirectory() as root, \
-                mock.patch.object(judge, "problem", return_value="missing key"), \
                 mock.patch.object(app.runtime, "check_connection", side_effect=app.runtime.RuntimeError("no key set")), \
                 mock.patch.object(app.runtime, "image_exists") as image_exists:
-            checks = app.App(Path(root)).checks(judge)
+            checks = app.App(Path(root)).checks()
         self.assertFalse(checks["sandboxes"])
         self.assertEqual(checks["sandboxes_problem"], "no key set")
         self.assertFalse(checks["image"])
         image_exists.assert_not_called()
-        for gone in ("docker", "blaxel", "bl_cli"):
+        for gone in ("docker", "blaxel", "bl_cli", "judge"):  # the page's runs have no judges to check
             self.assertNotIn(gone, checks)
 
     def test_page_checks_need_no_cli_for_the_sandboxes(self):
-        judge = config.Panel([config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")])
         with tempfile.TemporaryDirectory() as root, \
-                mock.patch.object(judge, "problem", return_value=None), \
                 mock.patch.object(app.runtime, "check_connection"), \
                 mock.patch.object(app.runtime, "image_exists", return_value=True), \
                 mock.patch.object(app.shutil, "which", return_value=None):
-            checks = app.App(Path(root)).checks(judge)
+            checks = app.App(Path(root)).checks()
         self.assertTrue(checks["sandboxes"])
         self.assertTrue(checks["image"])
 
     def test_page_answers_from_the_last_check_while_it_checks_again(self):
-        judge = config.Panel([config.Judge(model="test", base_url="https://example.invalid", api_key_env="TEST_JUDGE_KEY")])
         with tempfile.TemporaryDirectory() as root:
             page = app.App(Path(root))
             page.checked = (0.0, {"sandboxes": True, "sandboxes_problem": None, "gh": True,
-                                  "gh_login": "before", "image": True, "judge": None})  # long out of date
+                                  "gh_login": "before", "image": True})  # long out of date
             go = threading.Event()
 
-            def slow(_judge):
+            def slow():
                 go.wait(5)
                 page.checked = (app.time.monotonic(), {**page.checked[1], "gh_login": "after"})
                 return page.checked[1]
 
             with mock.patch.object(page, "check", side_effect=slow) as check:
-                self.assertEqual(page.checks(judge)["gh_login"], "before")  # no waiting on GitHub or Baseten
-                self.assertEqual(page.checks(judge)["gh_login"], "before")  # and one check at a time
+                self.assertEqual(page.checks()["gh_login"], "before")  # no waiting on GitHub or Baseten
+                self.assertEqual(page.checks()["gh_login"], "before")  # and one check at a time
                 go.set()
                 with page.checking:  # the check in the background has finished
                     pass
-                self.assertEqual(page.checks(judge)["gh_login"], "after")
+                self.assertEqual(page.checks()["gh_login"], "after")
             self.assertEqual(check.call_count, 1)
 
     def test_page_does_not_start_a_run_it_has_no_sandboxes_for(self):

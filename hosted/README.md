@@ -112,9 +112,9 @@ stay shared in `/data/app`). Then it ships the release only if it works end to e
 1. **Smoke test before release.** The release's own page and key meter start beside the live ones (a
    second meter preview, "meter-next"), and one real attempt runs from it: the quick sample's largest
    task (a PostHog pull request, a ~207 MB source) with the cheapest default model (DeepSeek V4.1 Flash
-   1017), graded by the default judges. Its sandboxes start, the source uploads, the dependencies
-   install, the agent changes code (it stops at 6 minutes, as at any time limit), the hidden tests run on
-   that change and the judges answer; whether the model solved it doesn't matter. On a fail, the page stays on its release and the deploy exits 1
+   1017), in one try, graded on its hidden tests as the page's runs are. Its sandboxes start, the source
+   uploads, the dependencies install, the agent changes code (it stops at 6 minutes, as at any time limit)
+   and the hidden tests run on that change; whether the model solved it doesn't matter. On a fail, the page stays on its release and the deploy exits 1
    with the attempt's cause.
 2. **Switch.** `/data/app/current` points at the release, both processes restart on it, and the deploy
    checks the signed-out answers (sign-in page 200, page 303, API 401, meter 401).
