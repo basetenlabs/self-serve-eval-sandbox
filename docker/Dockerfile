@@ -1,4 +1,4 @@
-# One image for every trial: the coding agent (Claude Code), the model relay and the jail
+# One image for every trial: the coding agents (Pi, and Claude Code for runs that ask for it), the model relay and the jail
 # that keeps the agent off the network (Python), and the toolchains the sample repos need
 # (Python via uv, Node + pnpm, Go).
 # Repo dependencies are installed per trial, before the agent starts, so one image
@@ -8,6 +8,7 @@ FROM ghcr.io/astral-sh/uv:0.9 AS uv
 
 FROM node:24-bookworm
 ARG CLAUDE_CODE_VERSION=2.1.296
+ARG PI_VERSION=1.6.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv ripgrep jq less curl ca-certificates \
@@ -17,7 +18,7 @@ COPY --from=go /usr/local/go /usr/local/go
 COPY --from=uv /uv /uvx /usr/local/bin/
 # The sandbox API server every Baseten Sandboxes image starts as its entrypoint (docs.baseten.co/sandboxes/manage-images).
 COPY --from=ghcr.io/blaxel-ai/sandbox:latest /sandbox-api /usr/local/bin/sandbox-api
-RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && corepack enable
 
 # Claude Code refuses to skip permission prompts as root; the agent runs as `agent`.

@@ -33,6 +33,8 @@ class Model:
     # Models whose past runs estimate this one's cost and time until it has its own: the first with a run counts.
     estimate_from: list[str] = field(default_factory=list)
     maker: str | None = None  # a closed model's maker, for the report's "Anthropic's Claude Opus 5.5"
+    # For a model Pi's catalog doesn't list yet: {context_window, max_tokens}, what Pi needs to run it.
+    pi: dict | None = None
 
     def price(self, usage: dict[str, dict]) -> float | None:
         """USD for Claude Code's per-model usage, priced from our own table.

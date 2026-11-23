@@ -303,14 +303,14 @@ def preflight(model_keys: list[str], judge_choice: str = "none",
 
 def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
             tries: int = DEFAULT_TRIES, name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
-            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1") -> Job:
+            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1", harness: str = runner.pi.NAME) -> Job:
     run_id = name or default_name(request)
     path = jobs_dir / run_id
     if (path / "run.json").exists():
         raise SystemExit(f"{path} exists: pass --resume {path} to finish it, or choose another --name")
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
     write_json(path / "run.json", {
-        "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
+        "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": harness,
         "harness_version": None, "backend": "baseten", "image": image, "region": region,
         "attempts": attempts, "tries": tries, "models": [m.as_dict() for m in models],
         "judge": judge.as_dict() if judge else None,
@@ -561,8 +561,9 @@ def progress_printer(job: Job):
         print(f"[{done}/{total}] {result['trial']}: {result['outcome']}{reason}"
               + (f" ${cost:.3f}" if cost is not None else "")
               + (f": {result['cause']}" if result.get("cause") else ""), flush=True)
-        if not job.meta.get("harness_version") and (version := (result.get("agent") or {}).get("claude_code_version")):
-            job.meta["harness_version"] = version  # the image's Claude Code, as its first agent reported it
+        agent = result.get("agent") or {}
+        if not job.meta.get("harness_version") and (version := agent.get("harness_version") or agent.get("claude_code_version")):
+            job.meta["harness_version"] = version  # the image's coding agent, as its first attempt reported it
             job.save()
         if time.monotonic() - last_build > 30:
             last_build = time.monotonic()
@@ -579,10 +580,14 @@ def rebuild_quietly(job: Job) -> None:
 
 
 def restore_execution(meta: dict, settings: runner.Settings) -> None:
-    """Keep resumed work on its original image, region and sandbox size."""
+    """Keep resumed work on its original coding agent, image, region and sandbox size."""
     if meta.get("backend") != "baseten" or not meta.get("image"):
         raise SystemExit("This run's sandboxes ran somewhere pr-eval no longer uses (trials run on Baseten Sandboxes "
                          "now), so it can't be resumed: start a new run on the same pull requests instead.")
+    # Every run records its harness; one from before Pi ran Claude Code.
+    settings.harness = meta.get("harness") or runner.CLAUDE_CODE
+    if settings.harness not in runner.HARNESSES:
+        raise SystemExit(f"This run's coding agent ({settings.harness}) isn't one pr-eval runs any more.")
     settings.image = meta["image"]
     settings.region = meta.get("region", "us-pdx-1")
     # Disk grows with memory, so a resume never shrinks the run's sandboxes; a larger --memory raises them.

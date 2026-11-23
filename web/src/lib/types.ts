@@ -352,6 +352,8 @@ export interface Report {
     /** Tries per attempt; missing on runs from before tries, which had one. */
     tries?: number;
     tasks?: string[];
+    /** "pi", or "claude-code" (every run from before Pi). */
+    harness?: string;
     harness_version?: string;
     judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;
     note?: string | null;

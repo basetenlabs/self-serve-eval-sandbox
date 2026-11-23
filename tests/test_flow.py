@@ -34,6 +34,16 @@ class FlowTest(unittest.TestCase):
         pipeline.restore_execution(meta, settings)
         self.assertEqual((settings.image, settings.region), ("original-image", "us-pdx-1"))
 
+    def test_resume_keeps_the_runs_coding_agent(self):
+        """A run from before Pi ran Claude Code, and goes on in it; a new run says which it uses."""
+        for meta, harness in (({"backend": "baseten", "image": "i"}, runner.CLAUDE_CODE),
+                              ({"backend": "baseten", "image": "i", "harness": "pi"}, "pi")):
+            settings = runner.Settings()
+            pipeline.restore_execution(meta, settings)
+            self.assertEqual(settings.harness, harness)
+        with self.assertRaisesRegex(SystemExit, "isn't one pr-eval runs"):
+            pipeline.restore_execution({"backend": "baseten", "image": "i", "harness": "aider"}, runner.Settings())
+
     def test_resume_keeps_the_sandbox_size_the_run_started_with(self):
         with mock.patch.dict(os.environ):
             new = {"backend": "baseten", "image": "image"}
