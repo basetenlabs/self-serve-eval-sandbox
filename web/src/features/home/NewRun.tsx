@@ -192,7 +192,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                 <p id="pulls-help" className="ev-small">
                   Paste a repository URL to browse its merged PRs, with a mix of security changes, fixes and features chosen for you,
                   {" "}or paste individual pull request URLs to use those PRs.
-                  {" "}Each PR must be merged and include a test change.
+                  {" "}A PR can be a task when it is merged, changes both code and tests, and has at most
+                  {" "}{(state.pr_size?.lines ?? 1000).toLocaleString()} changed lines ({(state.pr_size?.pasted_lines ?? 3000).toLocaleString()} for one you paste);
+                  {" "}a greyed-out PR says which of these it misses. Models finish PRs under about 300 lines most often, so start there.
                   {hosted ? " This page runs public repositories only." : " A private repository needs a GitHub CLI login here that can read it."}
                 </p>
                 <textarea
