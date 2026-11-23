@@ -17,12 +17,10 @@ import sys
 import threading
 import time
 import tomllib
-import urllib.error
-import urllib.request
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from . import causes, config, meter, pipeline, report, runner, runtime, tasks, trace
 from .pipeline import alive, repo_of
@@ -43,19 +41,13 @@ FONT_FILE = re.compile(r"/fonts/(BeausiteClassic-(?:350|400|500)\.woff2)")
 MAX_LIMIT = 50
 PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
 QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
-# Hosted, people can sign in with GitHub (device flow: a GitHub App's client id, no secret). The app
-# reads only Contents, Pull requests and Metadata, and only on the repositories each person installs
-# it on. Their token, kept in memory only, reads and clones those private repositories for them.
-# Hosted, every run is its starter's alone to see, whatever the repository. The sign-in server in front of the hosted
-# page (@blaxel/sign-in) names who is asking in USER_HEADER, after dropping any value the browser
-# sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
-GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
-GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the page that adds repositories to it
-# Hosted, the page reads public repositories with its own token: a fine-grained token that can read public
-# repositories only, so nobody needs to sign in with GitHub for them. A person's own GitHub sign-in is for
-# their private repositories. Without the token, every run reads with its starter's own sign-in.
+# The sign-in server in front of the hosted page (@blaxel/sign-in) names who is asking in USER_HEADER, after
+# dropping any value the browser sent itself; locally there is no sign-in and no header, and the `gh` login
+# reads everything. Hosted (see hosted()), the page runs public repositories only and nobody signs in with
+# GitHub: it reads them with its own token, a fine-grained token that can read public repositories and nothing
+# else. Without that token, the hosted page runs the quick sample only.
 PAGE_GITHUB_TOKEN = os.environ.get("PR_EVAL_GITHUB_TOKEN")
-SIGN_IN_FIRST = "Sign in with GitHub to start a run: the eval reads repositories with your own GitHub login."
+NO_PAGE_TOKEN = "This page runs the quick sample only: it has no GitHub token for public repositories yet."
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
@@ -96,6 +88,11 @@ def quick_scope() -> str:
     return ",".join(sorted(r.lower() for r in tasks.sample(True)))
 
 
+def hosted() -> bool:
+    """Whether this is the hosted page (`hosted/deploy.py` sets PR_EVAL_PUBLIC_REPOS_ONLY): public repositories only."""
+    return bool(os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"))
+
+
 def internal(email: str | None) -> bool:
     if not isinstance(email, str):
         return False
@@ -126,8 +123,6 @@ class App:
         self.task_info: dict[Path, dict] = {}
         self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
         self.repos: dict[str, tuple[float, dict]] = {}  # GitHub's answer about each repository, kept a minute
-        self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
-        self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
         self.claims: dict[str, set[str] | None] = {}  # repositories of each run started here, before its run.json
         self.halted: dict[str, int] = {}  # runs stopped for spending, and the process each was told to stop
         self.favorites_file = jobs_dir.parent / "data" / "favorites.json"
@@ -166,7 +161,8 @@ class App:
                 "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
-                "github": self.github_state(user), "favorites": self.favorites(user), "admin": admin}
+                "github": {"hosted": hosted(), "public": bool(PAGE_GITHUB_TOKEN)},
+                "favorites": self.favorites(user), "admin": admin}
 
     def everyone(self) -> list[tuple[Path, dict]]:
         """Every run, whoever may see it, but the deploy's smoke tests (hosted/deploy.py): no one's to see or limit."""
@@ -272,7 +268,7 @@ class App:
             image = runtime.image_exists(runner.DEFAULT_IMAGE)
         except RuntimeError as exc:
             problem = str(exc)
-        gh = not GITHUB_CLIENT_ID and bool(shutil.which("gh")) \
+        gh = not hosted() and bool(shutil.which("gh")) \
             and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
         try:
             gh_login = tasks.gh("user").get("login") if gh else None
@@ -429,33 +425,23 @@ class App:
         repo = parse_repo(text)
         if not repo:
             return {"error": "Use owner/repo or a GitHub link."}
-        token = self.reader(user)
-        if GITHUB_CLIENT_ID and not token:
-            return {"repo": repo, "error": f"Sign in with GitHub so the eval can read {repo}."}
-        own = token == self.token(user)  # their own sign-in, not the page's public-only token
+        if hosted() and not PAGE_GITHUB_TOKEN:
+            return {"repo": repo, "error": NO_PAGE_TOKEN}
         # The page asks about a repository several times as it's picked (its pull requests, the saved
-        # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept: after
-        # adding the repository to the GitHub App, the person comes back and the page looks again.
-        key = f"{user if own else ''}|{repo.lower()}"
+        # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept.
+        key = repo.lower()
         when, data = self.repos.get(key, (0.0, None))
         if not data or time.monotonic() - when > 60:
             try:
-                data = tasks.gh(f"repos/{repo}", token)
+                data = tasks.gh(f"repos/{repo}", PAGE_GITHUB_TOKEN)
             except (RuntimeError, SystemExit) as exc:
-                if not own:  # the page's token reads public repositories only: a private one reads as missing
-                    return {"repo": repo, "error": f"Can't read {repo}: if it's private, sign in with GitHub."}
-                if token and "HTTP 401" in str(exc):  # their sign-in ran out, or they revoked it on GitHub
-                    self.github.pop(user, None)
-                    return {"repo": repo, "error": "Your GitHub sign-in ran out. Sign in with GitHub again."}
-                if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
-                    return {"repo": repo, "install": install_url(),
-                            "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
+                if PAGE_GITHUB_TOKEN:  # it reads public repositories only: a private one reads as missing
+                    return {"repo": repo, "error": f"Can't read {repo}. This page runs public repositories only."}
                 return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
             self.repos[key] = (time.monotonic(), data)
-        # Without GitHub sign-in, a page that runs public repositories only never reads private code.
-        if data.get("private") and (os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not own) and not self.token(user):
-            return {"repo": repo, "error": "Sign in with GitHub to use a private repository." if GITHUB_CLIENT_ID
-                    else "This hosted page runs public repositories only."}
+        # A page that runs public repositories only never reads private code, even if its token could.
+        if data.get("private") and (hosted() or PAGE_GITHUB_TOKEN):
+            return {"repo": repo, "error": "This hosted page runs public repositories only."}
         language = data.get("language") or "unknown"
         try:
             tasks.recipe(repo, language, [])
@@ -469,8 +455,8 @@ class App:
         finds for these words, or the latest `count` merged."""
         repo, wanted = parse_repo(text), [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
         latest = min(max(int(count) if count.isdigit() else PICK_COUNT, 1), MAX_PICK_COUNT)
-        token = self.reader(user)
-        key = f"{user if self.token(user) else ''}|{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
+        token = PAGE_GITHUB_TOKEN
+        key = f"{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
         when, found = self.browsed.get(key, (0.0, None))
         if found and time.monotonic() - when < 300:  # a listing found a moment ago: GitHub isn't asked at all
             return found
@@ -516,11 +502,11 @@ class App:
         repo = None if quick or pulls else parse_repo(str(form.get("repo") or ""))
         if not (quick or pulls or repo):
             return {"error": "Enter a GitHub repository as owner/repo, or paste pull request links."}
-        # The quick sample's tasks, once collected, are only read: a run of them needs no GitHub sign-in. Public
-        # repositories need none either when the page has its own token; the checks below refuse a private one.
-        if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):
-            return {"error": SIGN_IN_FIRST}
-        if not GITHUB_CLIENT_ID and not checks["gh"]:
+        # The quick sample's tasks, once collected, are only read: a run of them needs nothing from GitHub. Hosted,
+        # public repositories are read with the page's own token; the checks below refuse a private one.
+        if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
+            return {"error": NO_PAGE_TOKEN}
+        if not hosted() and not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
@@ -569,7 +555,7 @@ class App:
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
             (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
         self.claims[run_id] = claim
-        self.spawn(run_id, argv, self.reader(user))
+        self.spawn(run_id, argv)
         return {"id": run_id}
 
     def taken(self, claim: set[str] | None, resuming: str | None = None) -> str | None:
@@ -665,12 +651,12 @@ class App:
         scope = quick_scope() if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
         if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user)):
             return {"error": problem}
-        if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):
-            return {"error": "Sign in with GitHub to resume a run: the eval reads repositories with your own GitHub login."}
-        if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
-            return {"error": "Sign in with GitHub to resume a run on a private repository."}
+        if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
+            return {"error": NO_PAGE_TOKEN}
+        if hosted() and read_json(self.jobs_dir / run_id / ACCESS).get("private"):
+            return {"error": "This run is on a private repository, and this page runs public repositories only now."}
         (self.jobs_dir / run_id / OVER_LIMIT).unlink(missing_ok=True)
-        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.reader(user))
+        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)])
         return {"id": run_id}
 
     def manageable_run(self, run_id: str, user: str | None = None) -> dict | None:
@@ -689,10 +675,10 @@ class App:
         admins = read_json(self.access_file).get("admins") if user else None
         return isinstance(admins, list) and user.strip().lower() in {str(a).strip().lower() for a in admins}
 
-    def spawn(self, run_id: str, argv: list[str], github_token: str | None = None) -> None:
+    def spawn(self, run_id: str, argv: list[str]) -> None:
         """`pr-eval run` in a process of its own, so it outlives the page and the server.
 
-        With a visitor's GitHub token, the run reads and clones with it instead of the local `gh` login.
+        With the page's own GitHub token, the run reads and clones with it instead of the local `gh` login.
         """
         with self.lock:
             job_dir = self.jobs_dir / run_id
@@ -700,83 +686,8 @@ class App:
             with open(job_dir / "log.txt", "ab") as log:
                 self.children[run_id] = subprocess.Popen(
                     [sys.executable, "-m", "eval_sandbox", "run", *argv, "--jobs", str(self.jobs_dir)], cwd=pipeline.ROOT,
-                    env={**os.environ, "GH_TOKEN": github_token} if github_token else None,
+                    env={**os.environ, "GH_TOKEN": PAGE_GITHUB_TOKEN} if PAGE_GITHUB_TOKEN else None,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-
-    # ---------- GitHub sign-in (hosted) ----------
-
-    # GitHub's deadlines follow the clock, not time.monotonic(): the hosted sandbox sleeps when nobody
-    # uses it, and monotonic time stands still while it does.
-
-    def token(self, user: str | None) -> str | None:
-        signed_in = self.github.get(user) if user else None
-        if signed_in and time.time() > signed_in["until"]:  # GitHub's tokens for the page last 8 hours
-            self.github.pop(user, None)
-            return None
-        return signed_in and signed_in["token"]
-
-    def reader(self, user: str | None) -> str | None:
-        """The GitHub token that reads for this person: their own sign-in, else the page's public-only token."""
-        return self.token(user) or PAGE_GITHUB_TOKEN
-
-    def github_state(self, user: str | None) -> dict:
-        """Who reads GitHub for this person: their own sign-in, or the page's login."""
-        device = self.devices.get(user) if user else None
-        waiting = device and time.time() < device["until"]
-        return {"sign_in": bool(GITHUB_CLIENT_ID and user), "public": bool(PAGE_GITHUB_TOKEN),
-                "login": self.github[user]["login"] if self.token(user) else None,
-                **({"install": install_url()} if GITHUB_APP and self.token(user) else {}),
-                # a sign-in still waiting for GitHub, so a reloaded page shows its code again
-                **({"device": device["shown"]} if waiting else {})}
-
-    def github_device(self, user: str | None) -> dict:
-        """Start a sign-in: a code the person enters on GitHub, approving this page's read of the
-        repositories they install the app on. A GitHub App takes no scope: its permissions are its own."""
-        if not (GITHUB_CLIENT_ID and user):
-            return {"error": "GitHub sign-in isn't set up on this page."}
-        try:
-            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID})
-        except (OSError, ValueError) as exc:
-            return {"error": f"GitHub didn't answer ({exc})."}
-        if not got.get("device_code"):
-            return {"error": got.get("error_description") or "GitHub refused to start a sign-in."}
-        interval = int(got.get("interval") or 5)
-        shown = {"user_code": got["user_code"], "verification_uri": got["verification_uri"], "interval": interval}
-        self.devices[user] = {"code": got["device_code"], "interval": interval, "shown": shown,
-                              "until": time.time() + int(got.get("expires_in") or 900)}
-        return shown
-
-    def github_poll(self, user: str | None) -> dict:
-        """Whether the person has approved the sign-in yet; the page asks every few seconds."""
-        device = self.devices.get(user) if user else None
-        if not device or time.time() > device["until"]:
-            self.devices.pop(user, None)
-            return {"error": "The sign-in code expired. Start again."}
-        try:
-            got = github_form("https://github.com/login/oauth/access_token", {
-                "client_id": GITHUB_CLIENT_ID, "device_code": device["code"],
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
-        except (OSError, ValueError):
-            return {"pending": True, "interval": device["interval"]}  # asked again at the next poll
-        if got.get("error") in ("authorization_pending", "slow_down"):
-            if got["error"] == "slow_down":
-                device["interval"] += 5
-            return {"pending": True, "interval": device["interval"]}
-        self.devices.pop(user, None)
-        if not got.get("access_token"):
-            return {"error": got.get("error_description") or "GitHub didn't sign you in."}
-        try:
-            login = tasks.gh("user", got["access_token"]).get("login")
-        except (RuntimeError, SystemExit):
-            login = None
-        self.github[user] = {"token": got["access_token"], "login": login,
-                             "until": time.time() + int(got.get("expires_in") or 8 * 3600) - 60}
-        return {"login": login}
-
-    def github_sign_out(self, user: str | None) -> dict:
-        self.github.pop(user, None)
-        self.devices.pop(user, None)
-        return {"ok": True}
 
     # ---------- favorite pull requests ----------
 
@@ -888,21 +799,6 @@ def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
     return cost
 
 
-def install_url() -> str:
-    """Where a person picks the repositories the GitHub App may read."""
-    return f"https://github.com/apps/{GITHUB_APP}/installations/new"
-
-
-def github_form(url: str, form: dict) -> dict:
-    """POST a form to GitHub's sign-in endpoints and read the JSON answer."""
-    request = urllib.request.Request(url, data=urlencode(form).encode(), headers={"accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:  # its answer still says why
-        return json.loads(exc.read() or b"{}")
-
-
 def again(meta: dict) -> dict | None:
     """What Run again puts back in the form: the run's pull requests (the ones its check kept, so a
     repository's latest merges stay the same PRs), its models and its commands."""
@@ -998,12 +894,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self.app.stop(run_id, user) if action == "stop" else self.app.resume(run_id, user))
         if path == "/api/favorites":
             return self.send_json(self.app.favorite(body, user))
-        if path == "/api/github/device":
-            return self.send_json(self.app.github_device(user))
-        if path == "/api/github/poll":
-            return self.send_json(self.app.github_poll(user))
-        if path == "/api/github/sign-out":
-            return self.send_json(self.app.github_sign_out(user))
         return self.send_error(404)
 
     def with_fonts(self, html: bytes) -> bytes:

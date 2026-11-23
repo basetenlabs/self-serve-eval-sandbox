@@ -98,7 +98,7 @@ Stop with Ctrl-C and continue with `pr-eval run --resume jobs/<run>`. On a finis
 
 ## Models
 
-`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic API. GPT models use OpenAI Responses for tool calls through the same Claude Code harness. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
+`configs/models.toml` lists the models and their prices: `claude-opus`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna`, `claude-sonnet`, `claude-haiku`, `glm-5.3`, `kimi-k3`, `kimi-k3.1-pro`, `muse-spark`, `deepseek-v4.1-flash` (DeepSeek V4.1 Flash 1017), `nemotron-3.5-super`. Claude models use the Anthropic API. GPT models use OpenAI Responses for tool calls through the same Claude Code harness. To add a model, copy an entry for its provider and set its model id and prices; `estimate_from` lists models whose past runs estimate a new one's cost and time until it has its own. The Fast variants (`glm-5.3-fast`, `deepseek-v4.1-flash-1017-fast`) are no longer offered: past runs with them keep their reports, and Run again picks the standard model.
 
 ## Development
 

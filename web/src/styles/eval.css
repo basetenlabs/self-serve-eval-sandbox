@@ -138,7 +138,6 @@ textarea.bt-input.ev-pulls { min-block-size: 36px; max-block-size: 192px; resize
 
 /* The chosen source's own controls, under the cards: content on hairlines, no box. */
 .ev-panel { display: flex; flex-direction: column; gap: 24px; margin-top: 12px; }
-.ev-panel-head { padding-bottom: 16px; border-bottom: 1px solid var(--color-lightGrey2); }
 
 /* A folding line: the site's small triangle turns down when open. */
 .ev-details > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; list-style: none; inline-size: fit-content; font: 400 14px/1.4 var(--beausite); letter-spacing: .01em; color: var(--color-black); }
@@ -195,9 +194,6 @@ label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
   .ev-pull .actions { flex-basis: 100%; margin-inline-start: -10px; }
   .ev-pull:has(> .ev-check, > .ev-check-off) .actions { margin-inline-start: 18px; }
 }
-
-/* GitHub device code: the code in mono on Light Grey 1, large enough to read across the room. */
-.ev-code-out { padding: 4px 12px; background: var(--color-lightGrey1); font: 400 24px/32px var(--geist-mono); letter-spacing: .16em; user-select: all; font-variant-numeric: tabular-nums; }
 
 /* Environment checks: a 16px square (Black with a tick, Dark Pink with a cross, Light Grey 2 waiting) and the line. */
 .ev-checks { margin: 0; padding: 0; list-style: none; }

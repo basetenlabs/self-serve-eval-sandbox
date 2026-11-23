@@ -29,7 +29,7 @@ from . import causes, meter, runtime
 from . import judge as judge_mod
 from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
 from .rundir import charge, now, write_json
-from .tasks import TEST_FILE, Task, signatures, snapshot
+from .tasks import AGENT_SECONDS, TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
@@ -630,7 +630,8 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
               "agent_sandbox": container, "verifier_sandbox": verifier}
     if rerun_after:
         result["rerun_after"] = rerun_after
-    agent_timeout = settings.agent_timeout or int(task.meta["agent"].get("timeout_sec", 1800))
+    # Tasks collected before the limit went up to an hour keep their old 30 minutes in task.toml: the hour applies to them too.
+    agent_timeout = settings.agent_timeout or max(int(task.meta["agent"].get("timeout_sec", 0)), AGENT_SECONDS)
     memory = sandbox_memory(task, settings)
     alive = [container, verifier]  # reconcile by exact name even if allocation times out
     created = threading.Event()

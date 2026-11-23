@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useFocusCount } from "./hooks";
 import type { AppState, Favorite, PullList, RepoInfo, Report, Trace } from "./types";
 
 // The page polls quickly while a run is going and slowly otherwise. Every action goes through
@@ -35,8 +34,6 @@ export const repoInfo = (name: string, signal?: AbortSignal) =>
 export function usePulls(repo: string | null, numbers?: number[], count?: number, words?: string) {
   const url = repo ? `/api/prs?repo=${encodeURIComponent(repo)}${numbers?.length ? `&numbers=${numbers.join(",")}` : ""}${count ? `&count=${count}` : ""}${words ? `&q=${encodeURIComponent(words)}` : ""}` : null;
   const [got, setGot] = useState<{ url: string; repo: string; list: PullList } | null>(null);
-  // Back from adding the repository to the GitHub App: look again.
-  const focused = useFocusCount(!!(got && got.url === url && got.list.install));
   useEffect(() => {
     if (!url) return;
     const abort = new AbortController();
@@ -46,7 +43,7 @@ export function usePulls(repo: string | null, numbers?: number[], count?: number
       .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }) as PullList)
       .then((list) => { if (!abort.signal.aborted) setGot({ url, repo: repo!, list }); });
     return () => abort.abort();
-  }, [url, repo, focused]);
+  }, [url, repo]);
   const list = got && got.url === url ? got.list : null;
   // While a longer list of the same repository loads, the shorter one stays on screen.
   const shown = list ?? (got && got.repo === repo && !got.list.error ? got.list : null);

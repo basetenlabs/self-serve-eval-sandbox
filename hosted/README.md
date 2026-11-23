@@ -38,20 +38,14 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   like the agent's own. It refuses a call with no live ticket, from a run with no owner or one
   stopped for spending, for another provider, for a model with no price, or to an endpoint whose
   usage it can't read. A ticket ends when its attempt's agent stops.
-- **GitHub:** public repositories and the quick sample need no GitHub sign-in. The page reads
-  public repositories with its own fine-grained token, which can read public repositories only
+- **GitHub:** the hosted page runs public repositories only, and nobody signs in with GitHub. It
+  reads them with its own fine-grained token, which can read public repositories only
   (`PR_EVAL_GITHUB_TOKEN`, from the Keychain item `pr-eval-host-github-token`; create it on
-  GitHub with "Public repositories" access and no permissions). Without that token, every run but
-  the quick sample needs the person's own GitHub sign-in. The quick sample's task folders are on
-  the volume (`deploy.py` copies the missing ones), and its runs only read them. A run on a private
-  repository needs the person's own **Sign in with GitHub**: GitHub's device flow through
-  the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
-  (read-only Contents, Pull requests and Metadata; no webhooks; its client id is in `deploy.py`,
-  and the page needs no secret). Private repositories need the app added to them: a
-  repository it can't read yet shows **Add it on GitHub**, and the page looks again when they
-  come back. Their token lives in the page's memory
-  only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. In
-  an organization, an owner installs the app, or approves the person's request to.
+  GitHub with "Public repositories" access and no permissions), and refuses a private repository
+  even if that token could read it. Without that token, the page runs the quick sample only. The
+  quick sample's task folders are on the volume (`deploy.py` copies the missing ones), and its runs
+  only read them. Private repositories are for running pr-eval yourself, where your own `gh` login
+  reads them.
 - **Who sees a run:** people signed in with a baseten.co or blaxel.ai address can open runs started
   by anyone at either domain, including runs on private repositories. The run list names the starter.
   Guests see only their own runs. Admins see every run, including older runs without a recorded owner.

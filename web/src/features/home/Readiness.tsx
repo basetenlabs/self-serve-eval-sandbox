@@ -8,23 +8,22 @@ type Item = { ok: boolean | null; label: string; fix: string; action?: React.Rea
 
 /** What a run needs, each with the one thing to do when it's missing. Locally that's this machine's setup.
  * Hosted, visitors have no terminal and see none of the plumbing: the page's own setup is one line its admins
- * fix, and GitHub is the visitor's own sign-in, needed only for their own repos, so it's never a thing to fix. */
+ * fix, and the page reads public repositories itself, so GitHub is never a thing for a visitor to fix. */
 export function readiness(state: AppState): Item[] {
   const c = state.checks;
-  const hosted = state.github.sign_in;
+  const hosted = state.github.hosted;
   const baseten = state.models.find((m) => m.provider === "baseten");
   const gpt = state.models.find((m) => m.provider === "openai");
   const claude = state.models.find((m) => m.provider === "anthropic");
   const host = (local: string, problem?: string | null) =>
     hosted ? `${problem ? `${problem}. ` : ""}The page's admins need to fix this.` : problem ? `${problem}, then restart pr-eval serve` : local;
-  const login = state.github.login;
-  const github: Item = hosted
-    ? { ok: login ? true : null, label: login ? `GitHub: signed in as @${login}` : "GitHub: needed only for your own repos",
-        fix: state.github.public ? "Public repos and the quick sample need no sign-in." : state.quick.ready ? "The quick sample needs no sign-in." : "Sign in under New run to start a run." }
-    : { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
+  const github: Item = { ok: c.gh, label: "GitHub access", fix: "Run gh auth login in a terminal, then reload this page" };
   if (hosted) {
     const ready = c.sandboxes && !!baseten && !baseten.missing && !!claude && !claude.missing && !gpt?.missing && c.judge.ok;
-    return [github, { ok: ready, label: ready ? "Models and judges ready" : "This page isn't ready to run", fix: "Its admins are fixing it." }];
+    return [
+      ...(state.github.public ? [] : [{ ok: null, label: "GitHub: the quick sample only", fix: "The page's admins can turn on public repos." }]),
+      { ok: ready, label: ready ? "Models and judges ready" : "This page isn't ready to run", fix: "Its admins are fixing it." },
+    ];
   }
   return [
     { ok: c.sandboxes, label: "Baseten Sandboxes, where attempts run",
@@ -49,7 +48,7 @@ export function Readiness({ state }: { state: AppState }) {
         <details className="ev-details">
           <summary>
             <Chevron />
-            {state.github.sign_in ? "Ready to run" : "Sandboxes, keys and judges are ready"}
+            {state.github.hosted ? "Ready to run" : "Sandboxes, keys and judges are ready"}
           </summary>
           <div className="mt-3"><Checks items={items} /></div>
         </details>
@@ -59,7 +58,7 @@ export function Readiness({ state }: { state: AppState }) {
   return (
     <Column heading="Environment" aside={<Badge variant="danger">{missing} to fix</Badge>}>
       <Checks items={items} />
-      {!state.github.sign_in && (
+      {!state.github.hosted && (
         <p className="ev-small mt-6">
           Each attempt runs in sandboxes of its own on Baseten, deleted when it ends. Keys are read from the environment, never saved to a file.
         </p>

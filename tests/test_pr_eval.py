@@ -1187,52 +1187,39 @@ class AppTest(unittest.TestCase):
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}):
             self.assertNotIn("error", page.repo_info("o/r"))
-            with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+            with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
                 self.assertIn("public repositories only", page.repo_info("o/r")["error"])
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh", return_value={"private": False, "language": "Go"}), \
-                mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
             self.assertNotIn("error", page.repo_info("o/r"))
 
     def test_github_is_asked_about_a_repository_once_while_it_is_picked(self):
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")) as gh:
             self.assertIn("error", page.repo_info("o/r"))
-            self.assertIn("error", page.repo_info("o/r"))  # a failure isn't kept: added on GitHub, it's asked again
+            self.assertIn("error", page.repo_info("o/r"))  # a failure isn't kept: it's asked again
         self.assertEqual(gh.call_count, 2)
         with mock.patch.object(app.tasks, "gh", return_value={"private": False, "language": "Go"}) as gh, \
                 mock.patch.object(app.tasks, "browse", return_value=[{"number": 7}]) as browse:
             self.assertEqual(page.repo_info("o/r")["language"], "Go")
             self.assertEqual(page.pulls("o/r")["prs"], [{"number": 7}])
             self.assertEqual(page.pulls("o/r")["prs"], [{"number": 7}])  # the listing found a moment ago
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            page.repo_info("o/r", "a@x.co")  # signed in with GitHub: asked again, with their token
-        self.assertEqual([c.args for c in gh.call_args_list], [("repos/o/r", None), ("repos/o/r", "tok-a")])
+            page.repo_info("o/r", "a@x.co")  # anyone else picking it gets the same answer
+        self.assertEqual([c.args for c in gh.call_args_list], [("repos/o/r", None)])
         self.assertEqual(browse.call_count, 1)
 
-    def test_signing_in_with_github_reads_private_repositories_for_that_person(self):
+    def test_the_hosted_page_without_its_own_token_runs_the_quick_sample_only(self):
         page = app.App(Path("/nonexistent"))
-        with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}) as gh, \
-                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
-            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "a@x.co")["error"])
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            self.assertNotIn("error", page.repo_info("o/r", "a@x.co"))
-            self.assertEqual(gh.call_args.args, ("repos/o/r", "tok-a"))
-            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "b@x.co")["error"])  # only for the one who signed in
-            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "public": False, "login": "ana"})
-            page.github["a@x.co"]["until"] = 0  # GitHub's token expired
-            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "public": False, "login": None})
-
-    def test_the_hosted_page_reads_github_only_with_the_visitors_own_sign_in(self):
-        page = app.App(Path("/nonexistent"))
-        with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+        with mock.patch.object(app.tasks, "gh") as gh, mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
+                mock.patch.object(app, "PAGE_GITHUB_TOKEN", None), \
                 mock.patch.object(page, "state", return_value={"checks": {"sandboxes": True, "gh": False}}):
-            self.assertIn("Sign in with GitHub", page.repo_info("o/public", "a@x.co")["error"])  # public ones too
+            self.assertEqual(page.repo_info("o/public", "a@x.co")["error"], app.NO_PAGE_TOKEN)
             with mock.patch.object(app, "quick_collected", return_value=False):  # the quick sample isn't collected yet
-                self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
+                self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.NO_PAGE_TOKEN)
         gh.assert_not_called()  # the page has no GitHub login of its own to fall back on
 
-    def test_the_pages_own_token_reads_public_repositories_without_a_github_sign_in(self):
+    def test_the_pages_own_token_reads_public_repositories(self):
         jobs = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, jobs, True)
         page = app.App(jobs)
@@ -1242,73 +1229,59 @@ class AppTest(unittest.TestCase):
             if endpoint not in answers:
                 raise RuntimeError("gh api: HTTP 404")  # a public-only token can't see a private repository
             return answers[endpoint]
-        with mock.patch.object(app.tasks, "gh", side_effect=gh) as asked, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+        with mock.patch.object(app.tasks, "gh", side_effect=gh) as asked, \
                 mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
                 mock.patch.object(page, "spawn") as spawn, mock.patch.object(app.pipeline, "preflight"), \
                 mock.patch.object(page, "state", return_value={"blocked": None, "quick": {"tasks": 10}, "checks": {
                     "sandboxes": True, "gh": False, "judge": {"problem": None}}}):
             self.assertEqual(page.repo_info("o/public", "a@x.co")["language"], "Go")
             self.assertEqual(asked.call_args.args, ("repos/o/public", "page-tok"))
-            self.assertIn("if it's private, sign in with GitHub", page.repo_info("o/private", "a@x.co")["error"])
-            self.assertTrue(page.github_state("a@x.co")["public"])
+            self.assertIn("public repositories only", page.repo_info("o/private", "a@x.co")["error"])
             self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co"), {"id": mock.ANY})
-            self.assertEqual(spawn.call_args.args[2], "page-tok")
-            self.assertIn("private", page._start({"repo": "o/private", "models": ["a"]}, "b@x.co")["error"])
+            spawn.assert_called_once()
+            self.assertIn("public repositories only", page._start({"repo": "o/private", "models": ["a"]}, "b@x.co")["error"])
             answers["repos/o/secret"] = {"private": True, "language": "Go"}  # even if the token could read one
-            self.assertIn("private repository", page.repo_info("o/secret", "a@x.co")["error"])
+            self.assertIn("public repositories only", page.repo_info("o/secret", "a@x.co")["error"])
 
-    def test_the_quick_sample_starts_without_github_once_its_tasks_are_collected(self):
-        page = app.App(Path("/nonexistent"))
-        with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
-                mock.patch.object(app, "quick_collected", return_value=True), \
-                mock.patch.object(page, "state", return_value={"checks": {"sandboxes": True, "gh": False}}):
-            self.assertNotEqual(page._start({"quick": True, "models": []}, "a@x.co")["error"], app.SIGN_IN_FIRST)
-            self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
-        gh.assert_not_called()  # its tasks are only read: nothing asks GitHub
+    def test_a_run_reads_and_clones_with_the_pages_own_token(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app.subprocess, "Popen") as popen:
+            page = app.App(Path(d))
+            page.spawn("r1", ["o/a"])
+            self.assertIsNone(popen.call_args.kwargs["env"])  # locally: the `gh` login
+            with mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
+                page.spawn("r2", ["o/a"])
+            self.assertEqual(popen.call_args.kwargs["env"]["GH_TOKEN"], "page-tok")
 
-    def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
-        page = app.App(Path("/nonexistent"))
-        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-        install = "https://github.com/apps/eval-app/installations/new"
-        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")), \
-                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
-            self.assertEqual(page.repo_info("o/r", "a@x.co")["install"], install)
-            self.assertNotIn("install", page.repo_info("o/r", "b@x.co"))  # not signed in: the page's own login missed it
-            self.assertEqual(page.github_state("a@x.co")["install"], install)  # where to add more
+    def test_the_hosted_page_offers_no_github_sign_in(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d) / "jobs")
+            handler = type("H", (app.Handler,), {"app": page})
+            server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                for path in ("/api/github/device", "/api/github/poll", "/api/github/sign-out"):
+                    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+                    conn.request("POST", path, body="{}", headers={"content-type": "application/json",
+                                                                   "x-forwarded-email": "a@x.co"})
+                    self.assertEqual(conn.getresponse().status, 404, path)
+            finally:
+                server.shutdown()
 
-    def test_a_github_sign_in_that_ran_out_asks_to_sign_in_again(self):
-        page = app.App(Path("/nonexistent"))
-        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Bad credentials (HTTP 401)")), \
-                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
-            info = page.repo_info("o/r", "a@x.co")
-        self.assertIn("Sign in with GitHub again", info["error"])
-        self.assertNotIn("install", info)  # nothing to add on GitHub: the repository may well be there
-        self.assertIsNone(page.token("a@x.co"))
-
-    def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
-        page = app.App(Path("/nonexistent"))
-        answers = [{"device_code": "dev", "user_code": "AB-12", "verification_uri": "https://github.com/login/device",
-                    "interval": 5, "expires_in": 900},
-                   {"error": "authorization_pending"}, {"error": "slow_down"},
-                   {"access_token": "tok", "expires_in": 28800}]
-        with mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
-                mock.patch.object(app, "github_form", side_effect=answers) as form, \
-                mock.patch.object(app.tasks, "gh", return_value={"login": "ana"}):
-            self.assertEqual(page.github_device("a@x.co")["user_code"], "AB-12")
-            self.assertEqual(form.call_args.args[1], {"client_id": "client"})  # a GitHub App: its own permissions
-            self.assertEqual(page.github_state("a@x.co")["device"]["user_code"], "AB-12")  # a reloaded page shows it again
-            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 5})
-            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down
-            self.assertEqual(page.github_poll("a@x.co"), {"login": "ana"})
-        self.assertEqual(page.token("a@x.co"), "tok")
-        self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "public": False, "login": "ana"})  # no code waiting; no client id here
-        self.assertIn("expired", page.github_poll("a@x.co")["error"])  # nothing is waiting any more
-        with mock.patch.object(app.time, "time", return_value=app.time.time() + 8 * 3600):
-            self.assertIsNone(page.token("a@x.co"))  # 8 hours by the clock, however long the sandbox slept
-        page.github_sign_out("a@x.co")
-        self.assertIsNone(page.token("a@x.co"))
-        self.assertIn("isn't set up", page.github_device("a@x.co")["error"])  # locally: no client id, gh's login reads
+    def test_the_hosted_page_does_not_resume_a_private_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            (Path(d) / "r1").mkdir()
+            (Path(d) / "r1" / "run.json").write_text(json.dumps({"request": {"repos": ["o/a"]}, "tasks": []}))
+            (Path(d) / "r1" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
+            run = {"resumable": True, "models": [], "progress": {"total": 0, "done": 0}, "lost": 0}
+            with mock.patch.object(page, "manageable_run", return_value=run), mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(page, "state", return_value={"blocked": None}), \
+                    mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
+                with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                    self.assertIn("public repositories only", page._resume("r1", "a@x.co")["error"])
+                spawn.assert_not_called()
+                self.assertEqual(page._resume("r1", "a@x.co"), {"id": "r1"})  # locally the `gh` login reads it
 
     def test_a_guests_private_run_is_seen_only_by_who_started_it(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1476,7 +1449,6 @@ class AppTest(unittest.TestCase):
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
             ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
@@ -1484,7 +1456,7 @@ class AppTest(unittest.TestCase):
                 started = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
             access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
-        self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
+        spawn.assert_called_once()
 
     def test_starting_a_run_takes_the_judges_check_from_the_page(self):
         with tempfile.TemporaryDirectory() as d:
