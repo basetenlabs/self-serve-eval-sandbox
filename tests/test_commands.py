@@ -167,6 +167,10 @@ class LoopTest(unittest.TestCase):
         with self.assertRaises(commands.Unsolved) as caught:
             commands.loop("c", ask=ask, run=None, read=None, prove=lambda s, t: Proof(False, "setup", "boom"), tries=2)
         self.assertEqual(len(caught.exception.tried), 2)
+        ask, _ = self.model(*[{"action": "try", "setup": "a", "test": "b"}] * 3)
+        with self.assertRaisesRegex(commands.Unsolved, "sandbox failed") as caught:  # no tries spent on it
+            commands.loop("c", ask=ask, run=None, read=None, prove=lambda s, t: Proof(False, "sandbox", "gone"))
+        self.assertEqual(len(caught.exception.tried), 1)
         ask, _ = self.model(*[{"action": "read", "path": "x"}] * 3)
         with self.assertRaisesRegex(commands.Unsolved, "3 answers"):
             commands.loop("c", ask=ask, run=None, read=lambda p: "", prove=None, turns=3)
@@ -244,6 +248,15 @@ class SettleTest(unittest.TestCase):
         for part in ("o/r", "needs a database", "jest {test_files}", "Cannot find module", "--setup and --test"):
             self.assertIn(part, said)
         self.assertIsNone(commands.saved("o/r", self.saved))
+
+    def test_a_sandbox_failure_stops_without_asking_the_model(self):
+        mine = [make_task(self.root)]
+        ask = mock.Mock()
+        with mock.patch.object(commands, "prove", return_value=Proof(False, "sandbox", "the sandbox failed: gone")), \
+                self.assertRaises(SystemExit) as stopped:
+            self.settle(mine, ask=ask)
+        ask.assert_not_called()
+        self.assertIn("the sandbox failed", str(stopped.exception.code))
 
     def test_given_and_curated_commands_are_never_worked_out(self):
         mine = [make_task(self.root)]
