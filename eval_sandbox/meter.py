@@ -148,6 +148,27 @@ def worst_case(counts: dict, body: dict, raw: bytes) -> dict:
     return {**counts, "outputTokens": max(limit, counts.get("outputTokens") or 0)}
 
 
+def standard_responses_call(body: dict) -> bool:
+    """Whether the ticket pays for a Responses call: inference at the catalog's standard rates, with tools
+    the agent runs itself. No other service tier and none of OpenAI's own tools, which cost extra and reach
+    the network, whether named up front or added to the input along the way (as Pi does)."""
+    allowed = {"model", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls", "include",
+               "reasoning", "max_output_tokens", "store", "service_tier", "stream", "prompt_cache_key"}
+    tools = body.get("tools", [])
+    if body.keys() - allowed or body.get("store") is not False or body.get("service_tier") != "default" \
+            or not isinstance(tools, list):
+        return False
+    for item in body["input"] if isinstance(body.get("input"), list) else []:
+        kind = item.get("type") if isinstance(item, dict) else None
+        if kind == "additional_tools":
+            if not isinstance(item.get("tools"), list):
+                return False
+            tools = [*tools, *item["tools"]]
+        elif kind == "configuration_update" and item.keys() - {"type", "reasoning"}:
+            return False
+    return all(isinstance(t, dict) and t.get("type") == "function" for t in tools)
+
+
 class Usage:
     """Folds usage out of a response as it passes: a JSON body, or an SSE stream line by line."""
 
@@ -176,6 +197,10 @@ class Usage:
             if isinstance(usage, dict):
                 self.found = {**self.found, **{k: v for k, v in usage.items() if v is not None}}
                 self.final = self.final or event.get("type") == "message_delta"
+        elif self.shape == "responses":
+            # Only the last event (response.completed or .incomplete) carries the answer's usage.
+            if isinstance(usage := (event.get("response") or {}).get("usage"), dict):
+                self.found, self.final = usage, True
         elif isinstance(event.get("usage"), dict):
             self.found, self.final = event["usage"], True
 
@@ -225,12 +250,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if rates.rate_for(model_id) is None:
                     raise Refused(403, f"The meter has no price for {model_id}, so it doesn't forward the call.")
                 if shape == "responses":
-                    # The ticket pays only for inference with the standard rates in the catalog.
-                    allowed = {"model", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls",
-                               "include", "reasoning", "max_output_tokens", "store", "service_tier"}
-                    if (model_id not in rates.prices or body.keys() - allowed or body.get("store") is not False
-                            or body.get("service_tier") != "default" or not isinstance(body.get("tools", []), list)
-                            or any(not isinstance(t, dict) or t.get("type") != "function" for t in body.get("tools", []))):
+                    if "service_tier" not in body:  # left out, it is the project's own tier, not always standard
+                        body["service_tier"] = "default"
+                        raw = json.dumps(body).encode()
+                    if model_id not in rates.prices or not standard_responses_call(body):
                         raise Refused(403, "This ticket covers standard Responses calls with local function tools only.")
                 if shape == "chat" and body.get("stream"):
                     # The only way a streamed Chat Completions answer reports its tokens.
