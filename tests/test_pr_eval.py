@@ -541,6 +541,72 @@ class CollectTest(unittest.TestCase):
             self.assertEqual(tar.extractfile("other.py").read().decode(), "untouched by the PR\n")
             self.assertEqual(tar.extractfile("lib.py").read().decode(), "def double(x):\n    return 2 * x\n")
 
+    def checkout(self, setup):
+        """The agent's /workspace for a PR squash-merged after two more commits, set up locally."""
+        import subprocess
+        for n in (1, 2):
+            (self.repo / "other.py").write_text(f"older version {n}\n")
+            self.git("add", "-A")
+            self.git("commit", "-qm", f"before the PR {n}")
+        (self.repo / "lib.py").write_text("def double(x):\n    return x + x\n")
+        (self.repo / "tests" / "test_lib.py").write_text("assert double(3) == 6\n")
+        self.git("commit", "-qam", "the PR, squash-merged")
+        self.pr["merge_commit_sha"] = self.git("rev-parse", "HEAD")
+        self.git("config", "uploadpack.allowFilter", "true")
+        self.git("config", "uploadpack.allowAnySHA1InWant", "true")
+        root = Path(self.dir.name)
+        repos, work, tmp = root / "repos", root / "workspace", root / "tmp"
+        subprocess.run(["git", "clone", "-q", "--bare", "--filter=blob:none", f"file://{self.repo}",
+                        str(repos / "o__r.git")], check=True)
+        task = tasks.load(self.export(mirror=repos / "o__r.git"))
+        task.meta["environment"]["setup"] = setup
+        work.mkdir()
+        tmp.mkdir()
+
+        def local_sh(container, script, *, timeout, **_):  # the sandbox's /workspace and /tmp, here
+            script = script.replace("/tmp/", f"{tmp}/").replace("/workspace", str(work))
+            p = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True, text=True,
+                               env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull})
+            return p.returncode, p.stdout + p.stderr, False
+        history = tasks.history
+        with mock.patch.object(runner, "sh", local_sh), \
+                mock.patch.object(tasks, "HISTORY_COMMITS", 2), \
+                mock.patch.object(tasks, "history", lambda t: history(t, repos)), \
+                mock.patch.object(runner.runtime, "upload",
+                                  side_effect=lambda c, local, remote, **_: shutil.copy(local, tmp / Path(remote).name)):
+            reason, stats = runner.prepare_workspace("unused", task, root, history=True)
+        self.assertIsNone(reason)
+
+        def run(script):
+            return local_sh(None, script, timeout=9)[1].strip()
+        return run, stats, local_sh
+
+    def test_the_agents_checkout_has_the_history_before_the_pr_and_nothing_after(self):
+        run, stats, local_sh = self.checkout("echo built >'odd [name].txt' && mkdir -p build && echo x >build/out && "
+                                             "echo setup >>other.py")
+        self.assertEqual(stats["history_commits"], 2)
+        self.assertEqual(run("git log --format=%s"), "before the PR 2\nbefore the PR 1")  # stops where it should
+        self.assertEqual(run("git show HEAD~1:other.py"), "older version 1")
+        self.assertEqual(run("git for-each-ref --format='%(refname)'; git remote"), "refs/heads/main")
+        merged_lib = self.git("rev-parse", f"{self.pr['merge_commit_sha']}:lib.py")
+        for later in (self.pr["merge_commit_sha"], merged_lib):  # the PR's commit and its version of lib.py
+            self.assertIn("missing", run(f"git cat-file -e {later} 2>&1 || echo missing"))
+        # Setup's own files are out of sight, and its change to a tracked file stays uncommitted.
+        self.assertEqual(run("git status --porcelain"), "M other.py")
+        run("echo agent >lib.py")
+        with mock.patch.object(runner, "sh", local_sh), mock.patch.object(
+                runner.runtime, "download", side_effect=lambda c, remote, local, **_: local.write_bytes(
+                    Path(remote.replace("/workspace", str(Path(self.dir.name) / "workspace"))).read_bytes())):
+            patch, numstat = runner.capture_patch("unused", stats["baseline"], Path(self.dir.name) / "agent.patch")
+        self.assertIn("+agent", patch)
+        self.assertEqual(runner.diff_stats(numstat)["files"], 1)  # the agent's change alone
+
+    def test_a_source_that_differs_from_the_base_commit_gets_no_history(self):
+        (self.repo / ".gitattributes").write_text("other.py export-ignore\n")  # git archive leaves it out
+        self.git("add", ".gitattributes")
+        run, stats, _ = self.checkout("true")
+        self.assertEqual((stats["history_commits"], run("git log --format=%s")), (0, "setup\nbase"))
+
     def test_a_scan_skips_unfit_prs_by_githubs_file_list_and_reports_counts(self):
         from unittest import mock
 
