@@ -132,7 +132,6 @@ export interface AppState {
   quick: { tasks: number; repos: number; names?: string[]; ready?: boolean; at_once?: number };
   /** Tries per attempt a run started here gets: a try the model fails runs again, up to this many. */
   tries?: number;
-  default_limit: number;
   max_limit: number;
   pr_size?: { lines: number; pasted_lines: number; files: number };
   /** Some run is going, anyone's: the page polls faster. */
