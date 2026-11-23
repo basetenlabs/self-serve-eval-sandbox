@@ -4,7 +4,7 @@ import type { AppState } from "../src/lib/types";
 
 const state = (hosted: boolean, pub = true): AppState => ({
   checks: { sandboxes: true, gh: false, image: true },
-  models: [], runs: [], quick: { tasks: 6, repos: 3, ready: true }, default_limit: 5, max_limit: 40, busy: false,
+  models: [], runs: [], quick: { tasks: 6, repos: 3, ready: true }, max_limit: 40, busy: false,
   github: { hosted, public: pub }, favorites: [],
 });
 
