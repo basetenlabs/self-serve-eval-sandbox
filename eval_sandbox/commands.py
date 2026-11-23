@@ -386,6 +386,8 @@ def loop(context: str, *, ask, run, read, prove, fixed: dict | None = None, say=
                 tried.append((setup, test, proof))
                 if proof.passed:
                     return {"setup": setup, "test": test, "tried": tried, "spent": spent}
+                if proof.step == "sandbox":  # not the commands' fault: another try would fail the same way
+                    raise Unsolved("the sandbox failed, not the commands", tried, spent)
                 if len(tried) >= tries:
                     raise Unsolved(f"none of its {tries} tries passed", tried, spent)
                 reply = f"That failed at {proof.step} ({tries - len(tried)} tries left):\n{proof.output}"
@@ -520,6 +522,8 @@ def settle(job_path: Path, repo: str, mine: list[tasks.Task], settings: runner.S
         first = (*guessed, proof)
         if proof.passed:
             found = guessed
+        elif proof.step == "sandbox":  # nothing a model could fix
+            raise SystemExit(failure(repo, pr, [first], "the sandbox failed, not the commands"))
     if not found:
         catalog, _ = config.load()
         model = catalog[MODEL]
