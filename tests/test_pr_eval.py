@@ -210,6 +210,26 @@ class AgentScriptTest(unittest.TestCase):
             runner.sh("trial", "pytest -q", timeout=9)
 
 
+class FirstMessageTest(unittest.TestCase):
+    def test_the_first_message_says_how_the_change_is_checked_without_naming_the_tests(self):
+        for test, files in (("python -m pytest -q tests/test_parser.py 'tests/test_more.py'",
+                             ["tests/test_parser.py", "tests/test_more.py"]),
+                            ("go test -count=1 ./parser ./more", ["parser/parser_test.go", "more/more_test.go"])):
+            task = SimpleNamespace(instruction="Fix the parser.\n\n## Names the tests use\n- `Parse`\n",
+                                   meta={"task": {"repo": "public/example"},
+                                         "verifier": {"test": test, "test_files": files}})
+            with self.subTest(test):
+                message = runner.first_message(task, 3600)
+                self.assertIn("a checkout of the public/example repository: the current directory", message)
+                self.assertIn(f"\n    {test.split(' ')[0]} ", message)
+                self.assertEqual(message.count("<the pull request's tests>"), 1)
+                for hidden in ("parser.py", "test_more", "./parser", "./more"):
+                    self.assertNotIn(hidden, message)
+                for said in ("There is no network", "You have an hour", "Nobody is available", "Names the tests use"):
+                    self.assertIn(said, message)
+        self.assertEqual(runner.duration(1800), "30 minutes")
+
+
 class ParsingTest(unittest.TestCase):
     def test_diff_stats(self):
         self.assertEqual(runner.diff_stats("3\t1\tsrc/a.py\n-\t-\tlogo.png\n10\t0\ttests/t.py\n"),

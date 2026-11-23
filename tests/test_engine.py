@@ -23,7 +23,7 @@ MODEL = SimpleNamespace(key="model", model="model", provider="anthropic", max_co
 
 def task(d: Path, task_id: str = "public-task"):
     return SimpleNamespace(id=task_id, instruction="Fix the public example.", path=d,
-                           meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {}})
+                           meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}})
 
 
 def no_such_device() -> runtime.RuntimeError:

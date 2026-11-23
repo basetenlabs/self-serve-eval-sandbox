@@ -525,7 +525,7 @@ class ModelKeyTests(unittest.TestCase):
             with self.subTest(provider), tempfile.TemporaryDirectory() as d:
                 d = Path(d)
                 task = SimpleNamespace(id="public-task", instruction="Fix it.", path=d,
-                                       meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}})
+                                       meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}})
                 model = SimpleNamespace(key="m", model="m", effort="high", provider=provider)
                 ran, started, order = [], [], []
 
@@ -600,7 +600,7 @@ class TrialBoundaryTests(unittest.TestCase):
     def trial(self, d, events, prepare, on_delete=lambda name: None, agent=None, trial_dir=None):
         """run_trial with every sandbox step mocked; the agent's sandbox is "agent", the verifier "verifier"."""
         task = SimpleNamespace(id="public-task", instruction="Fix the public example.",
-                               meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}}, path=d)
+                               meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}}, path=d)
         model = SimpleNamespace(key="model", model="model", provider="anthropic", prices={"model": {"input": 1, "output": 1}})
 
         def finished(name, model, placeholder_env, relay_headers, path, timeout, *_):

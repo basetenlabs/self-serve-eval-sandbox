@@ -39,12 +39,33 @@ PROXY_PORT = 18787
 # so `--resume` runs them again.
 STOPPING = threading.Event()
 
-PROMPT = """You are working in a checkout of the {repo} repository (the current directory).
-Make the code change requested below, the way a contributor would for a pull request.
-You can read the code, run the existing tests and add tests of your own. Nobody is
-available to answer questions, so make reasonable decisions and finish the change.
+# The agent's first message; the harness's own system prompt stays as it is. It says what a contributor
+# knows before starting: the repository, the request, how the change will be checked, and what this machine allows.
+FIRST_MESSAGE = """You are in a checkout of the {repo} repository: the current directory, a git repository at \
+the commit this pull request starts from. Make the change it asks for, the way a contributor would.
 
-{instruction}"""
+<pull-request>
+{instruction}
+</pull-request>
+
+How your change is checked: when you stop, the pull request's own tests, which you can't see, are added \
+to the repository and run with
+
+    {test}
+
+Your change passes if they pass.{names} Changes you make to test files are set aside for this run, so \
+it checks your change to the code.
+
+Your environment:
+- There is no network. Dependencies are already installed; nothing else can be downloaded, and GitHub \
+can't be reached.
+- You have {limit}. Whatever is in the working tree when you stop, or when time runs out, is what gets \
+checked.
+- Nobody is available to answer questions, so make reasonable decisions and finish the change.
+
+You are done when the change is in the working tree (committing it is up to you) and the repository's \
+existing tests still pass."""
+NAMED = ' They call the code by the names listed under "Names the tests use", so keep those exactly.'
 
 # Claude Code's own settings that belong to the harness, not the model: every model driven
 # by Claude Code runs under the same ceilings, whoever hosts it.
@@ -123,6 +144,36 @@ def sh(container: str, script: str, *, timeout: int, network: bool = False) -> t
 
 def trial_name(task: Task, model: Model, attempt: int) -> str:
     return f"{task.id}__{model.key}__{attempt}"
+
+
+def first_message(task: Task, seconds: int) -> str:
+    """What the agent is asked: the request, and how the change will be checked."""
+    instruction = task.instruction.strip()
+    return FIRST_MESSAGE.format(repo=task.meta["task"]["repo"], instruction=instruction, test=shown_test(task),
+                                names=NAMED if "## Names the tests use" in instruction else "",
+                                limit=duration(seconds))
+
+
+def shown_test(task: Task) -> str:
+    """The hidden tests' command as the agent sees it: the PR's test files (Grafana: their packages) said to
+    be there, not named. Only the names the tests call reach the agent, never which tests they are."""
+    paths = task.meta["verifier"].get("test_files") or []
+    hidden = set(paths) | {"./" + os.path.dirname(p) for p in paths if os.path.dirname(p)}
+    words, shown = [], False
+    for word in task.meta["verifier"]["test"].split(" "):
+        if word.strip("'\"") in hidden:
+            if not shown:
+                words.append("<the pull request's tests>")
+            shown = True
+        else:
+            words.append(word)
+    return " ".join(words)
+
+
+def duration(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return "an hour" if seconds == 3600 else f"{seconds // 3600} hours"
+    return f"{round(seconds / 60)} minutes"
 
 
 def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, dict[str, str]]:
@@ -787,7 +838,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         if reason:
             return finish("invalid", reason)
         step = "upload"
-        prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
+        prompt = first_message(task, agent_timeout)
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         step = "agent"

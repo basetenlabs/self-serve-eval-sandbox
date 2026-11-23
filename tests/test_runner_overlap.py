@@ -69,7 +69,7 @@ class FakeRuntime:
 
 def public_task(d: Path, task_id: str = "public-task"):
     return SimpleNamespace(id=task_id, instruction="Fix the public example.", path=d,
-                           meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {}})
+                           meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}})
 
 
 class OverlapTests(unittest.TestCase):
