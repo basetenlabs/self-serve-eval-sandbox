@@ -40,7 +40,7 @@ It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then
 
 1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes) or **Your pull requests**: paste links, or type a repository and pick from its merges.
 2. Choose the models to compare (Claude Opus 5.5, DeepSeek V4.1 Flash 1017 and GLM-5.3 to start).
-3. Press **Start run**. When it finishes, **Open report** shows solve rate, cost per solved task and time per task, with every attempt's diff, trace, test output and the judges' verdicts.
+3. Press **Start run**. When it finishes, **Open report** opens on the **Simple** view: PRs solved, cost per solved task and time per task for each model, and a chart of share solved against cost. **Detailed** adds every attempt's diff, trace, test output and the judges' verdicts. The page remembers your choice; add `?view=detail` or `?view=simple` to a report's link to open it on that view.
 
 The first run builds the trial image on Baseten, which takes a few minutes once. Private repositories work through your `gh` login.
 
