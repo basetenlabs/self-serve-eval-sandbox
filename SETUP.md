@@ -8,8 +8,8 @@ The finished setup runs the page at http://127.0.0.1:8765, where you pick merged
 
 ## What it costs and what it touches
 
-- **Model calls** go to Anthropic (Claude models and one judge), Baseten Model APIs (the open models, and one judge) and OpenAI (GPT models and one judge). The quick sample, 10 PostHog pull requests with two models, costs about $12 and takes about 35 minutes.
-- **Compute** runs in Baseten Sandboxes, in the team of the Baseten key from step 4. Nothing runs in Docker on your machine.
+- **Model calls** go to Anthropic (Claude models), Baseten Model APIs (the open models) and OpenAI (GPT models). A run with `--judge` also asks one judge at each. The quick sample, 10 PostHog pull requests with the three default models, costs about $11 and takes about 35 minutes, longer when a model needs a second or third try.
+- **Compute** runs in Baseten Sandboxes, in the team of the Baseten key from step 4. The coding agent, Pi, is in the trial image there, so there is nothing to install for it. Nothing runs in Docker on your machine.
 - **Your code**: repository clones stay on your machine, in `data/repos/`. Each attempt uploads the code from before the change to a sandbox. The README's "Where your code goes" section has the details.
 
 ## 1. Python 3.12 or later
@@ -48,9 +48,9 @@ Ask the person for these. Keep them in the environment of the shell that starts 
 
 | Variable | What it's for | Where to get it |
 | --- | --- | --- |
-| `BASETEN_API_KEY` | the sandboxes attempts run in, open models, and the Kimi K3 judge | Baseten: Settings > API keys. A personal key, or a team creator service account key |
-| `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | Claude models, and the Claude Opus 5.5 judge | Anthropic Console, or `claude setup-token` (the person runs it) |
-| `OPENAI_API_KEY` | GPT models and the GPT-6.1 Sol judge | OpenAI platform: API keys |
+| `BASETEN_API_KEY` | the sandboxes attempts run in, open models, and, with `--judge`, the Kimi K3.1 Pro judge | Baseten: Settings > API keys. A personal key, or a team creator service account key |
+| `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | Claude models, and, with `--judge`, the Claude Opus 5.5 judge | Anthropic Console, or `claude setup-token` (the person runs it) |
+| `OPENAI_API_KEY` | GPT models, and, with `--judge`, the GPT-6.1 Sol judge | OpenAI platform: API keys |
 
 A model-only Baseten key can call models but can't create sandboxes. To keep one in `BASETEN_API_KEY`, put a key that can in `BASETEN_SANDBOX_API_KEY`. Set `BASETEN_TEAM_ID` to pin the team the sandboxes go in: a key that can't reach that team is then refused instead of running somewhere else. There is no workspace to make and no CLI to install.
 
@@ -61,9 +61,9 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://api.baseten.co/v1/token
   -H "Authorization: Bearer ${BASETEN_SANDBOX_API_KEY:-$BASETEN_API_KEY}" -H 'Content-Type: application/json' -d '{"scopes":["sandboxes"]}'
 ```
 
-An attempt uses two sandboxes at once, one for the agent and one for grading. Baseten runs 10 sandboxes at once for an organization until you ask for more ([Manage sandboxes](https://docs.baseten.co/sandboxes/manage)). The quick sample starts all 20 of its attempts together and other runs up to 8; when the count is full, a new sandbox waits for one to finish. Until the limit is raised, run from a terminal with `--concurrency` set to a quarter of it (step 6).
+An attempt uses two sandboxes at once, one for the agent and one for grading. Baseten runs 10 sandboxes at once for an organization until you ask for more ([Manage sandboxes](https://docs.baseten.co/sandboxes/manage)). The quick sample runs up to 20 attempts together and other runs up to 8; when the count is full, a new sandbox waits for one to finish. Until the limit is raised, run from a terminal with `--concurrency` set to a quarter of it (step 6).
 
-The Claude judge runs through Claude Code, so install it too: `curl -fsSL https://claude.ai/install.sh | bash` (no Node needed), or `npm install -g @anthropic-ai/claude-code`. Check: `claude --version` prints a version. On a Mac, the Claude token can live in the Keychain instead of the environment: `security add-generic-password -a "$USER" -s pr-eval-claude-code-oauth-token -w`.
+For runs with `--judge`, the Claude judge runs through Claude Code on this machine, so install it too: `curl -fsSL https://claude.ai/install.sh | bash` (no Node needed), or `npm install -g @anthropic-ai/claude-code`. Check: `claude --version` prints a version. On a Mac, the Claude token can live in the Keychain instead of the environment: `security add-generic-password -a "$USER" -s pr-eval-claude-code-oauth-token -w`.
 
 ## 5. Start the page and read its checklist
 
@@ -76,27 +76,27 @@ s = json.load(sys.stdin)
 c = s["checks"]
 print("Baseten Sandboxes:", c["sandboxes"], c["sandboxes_problem"] or "")
 print("GitHub:", c["gh"], c["gh_login"] or "", "| trial image built:", c["image"])
-print("Judges:", c["judge"]["ok"], c["judge"]["problem"] or "")
 print("Models missing a key:", [m["key"] for m in s["models"] if m["missing"]] or "none")'
 ```
 
-Check: every line says `True`, except "trial image built", which turns `True` after the first run builds the image (a few minutes, once). `pr-eval build-image` builds it ahead of time. Each problem line says what is missing.
+Check: the first two lines say `True`, except "trial image built", which turns `True` after the first run builds the image (a few minutes, once). `pr-eval build-image` builds it ahead of time. The last line names only models whose key you don't have: the default models need `BASETEN_API_KEY` and the Claude key, so without `OPENAI_API_KEY` it names the GPT models. Each problem line says what is missing.
 
 Then open http://127.0.0.1:8765. The checklist on the right of the page shows the same things.
 
 ## 6. First run
 
-Ask the person before starting a run, since it spends money. On the page, choose **Quick sample**, keep the two default models and press **Start run**. From a terminal, this does the same:
+Ask the person before starting a run, since it spends money. On the page, choose **Quick sample**, keep the three default models and press **Start run**. From a terminal, this does the same:
 
 ```bash
-.venv/bin/pr-eval run --quick --concurrency 20    # every attempt at once, as the page does
+.venv/bin/pr-eval run --quick --concurrency 20    # as the page does, for a limit of 80 sandboxes or more
+.venv/bin/pr-eval run --quick --concurrency 2     # at the starting limit of 10 sandboxes (step 4)
 ```
 
 Check: the run ends with `Finished. Report: jobs/<run>/report.html`. On the page, **Open report** shows solve rate, cost per solved task and time for each model.
 
 ## 7. Your own repository
 
-On the page, choose **Your pull requests** and type `owner/repo`, or paste links to pull requests. Star the ones that stand for your team's work: they collect under **Your eval suite**, so the next model gets the same test. **Run again** on a finished run puts its pull requests and models back in the form, ready for a new model.
+On the page, choose **Your pull requests** and type `owner/repo` to choose from its merged pull requests (a mix is ticked for you), or paste links to pull requests. Star the ones that stand for your team's work: they collect under **Your eval suite**, so the next model gets the same test. **Run again** on a finished run puts its pull requests and models back in the form, ready for a new model.
 
 From a terminal:
 
@@ -104,7 +104,7 @@ From a terminal:
 .venv/bin/pr-eval run your-org/your-repo --limit 10
 ```
 
-Go and Python repositories need nothing more. For other languages, give the install and test commands, for example `--setup "npm ci" --test "npx vitest run {test_files}"`, where `{test_files}` becomes the pull request's changed test files.
+The install and test commands are worked out when the run starts: a guess from the repository's files (Go and Python defaults, the Node package manager and test runner, Cargo), proved in a sandbox on one PR, and if that fails a short model loop on `deepseek-v4.1-flash` (spend counts toward the run). What works is kept in `data/commands.json` for the next run. Commands you give always win, for example `--setup "npm ci" --test "npx vitest run {test_files}"`, where `{test_files}` becomes the pull request's changed test files.
 
 ## When something goes wrong
 
@@ -114,9 +114,9 @@ Go and Python repositories need nothing more. For other languages, give the inst
 | The page says the Baseten key can't create sandboxes | It is a model-only key. Use a personal key or a team creator service account key, in `BASETEN_API_KEY` or `BASETEN_SANDBOX_API_KEY` (step 4), then restart `pr-eval serve`. |
 | The run's log says "Baseten's sandbox count is full" | The organization is at its sandbox limit, and the run is waiting for room. It goes on by itself; a lower `--concurrency` stops the waiting, and Baseten can raise the limit. |
 | A model shows "Needs its API key" | Export that model's key (step 4) in the shell that runs `pr-eval serve`, then restart it. |
-| A judge problem in the checklist | That judge's key is missing, or Claude Code isn't installed (step 4). `--judge none` scores on tests alone. |
+| `--judge` stops with a judge problem | That judge's key is missing, or Claude Code isn't installed (step 4). Without `--judge`, the run is graded on its tests alone. |
 | A pull request is "left out" | Its tests didn't fail before the change and pass after it, in the trial image. That's a setup problem, not the model's. |
-| Left out: "its tests need what its request never says" | The chair judge compared the PR's text with its merged diff and tests and found the tests check behavior or names the text never states. The verdict is in the task folder's `screen.json`; delete it to ask again. |
+| Left out: "its tests need what its request never says" | On a run with `--judge`, the chair judge compared the PR's text with its merged diff and tests and found the tests check behavior or names the text never states. The verdict is in the task folder's `screen.json`; delete it to ask again. |
 | A run was stopped or its process killed | **Resume** on the page, or `pr-eval run --resume jobs/<run>`. |
 
 ## Remove it

@@ -35,7 +35,7 @@ its team, so give the page a team of its own (BASETEN_TEAM_ID) where others shar
 
 Keys come from the Keychain items in SECRETS below, else from the environment. <NAME>_KEYCHAIN_ITEM names
 another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key:
-    BASETEN_API_KEY         open models and the Kimi K3 judge
+    BASETEN_API_KEY         open models and the Kimi K3.1 Pro judge
     ANTHROPIC_API_KEY       Claude models and the Opus judge
     OPENAI_API_KEY          the GPT-6.1 Sol judge
     PR_EVAL_MAIL_API_KEY    optional: a send-only Resend key (Keychain pr-eval-host-mail-api-key). With it the
@@ -46,12 +46,9 @@ another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key
     PR_EVAL_ACCESS_OWNER    optional: one existing admin email allowed to grant outside access directly.
     PR_EVAL_GITHUB_TOKEN    a fine-grained GitHub token with "Public repositories" read-only access and nothing
                             else (Keychain pr-eval-host-github-token). With it the page reads and runs public
-                            repositories for everyone, no GitHub sign-in needed; without it, every run needs one.
+                            repositories for everyone; without it, the page runs the quick sample only.
 
-For private repositories, a person signs in with GitHub through the GitHub App "Baseten Eval Sandbox"
-(device flow; read-only Contents, Pull requests and Metadata), and the run reads and clones with their
-token. Its client id is public: the app's client secret and private key never reach the page. Their tokens
-stay in the page's memory.
+The page runs public repositories only: nobody signs in with GitHub, and it never reads a private repository.
 """
 from __future__ import annotations
 
@@ -99,28 +96,27 @@ SHARED = ["jobs", "tasks", "data"]  # linked into each release, where its code l
 KEEP_RELEASES = 3  # besides the live one and any a process still runs from
 KEEP_SMOKE_RUNS = 6  # the smoke runs of the last three deploys stay on the volume, with their logs
 # The smoke test: one real attempt end to end, on the quick sample's largest task with the cheapest default
-# model, graded by the default judges. A release must pass it before people get it and again once they have.
+# model, graded on its hidden tests as the page's runs are, in one try: a failed try isn't run again.
+# A release must pass it before people get it and again once they have.
 SMOKE_MODEL = "deepseek-v4.1-flash"
-# The agent stops after this many seconds, as at any time limit: its change so far gets the hidden tests and the
-# judges. Left to finish, it ran PostHog's tests and type checks for 21 minutes.
+# The agent stops after this many seconds, as at any time limit: its change so far gets the hidden tests.
+# Left to finish, it ran PostHog's tests and type checks for 21 minutes.
 SMOKE_AGENT_SECONDS = 360
-SMOKE_TIMEOUT = 1800  # seconds for the whole attempt: sandboxes, install, agent, hidden tests, judges
+SMOKE_TIMEOUT = 1800  # seconds for the whole attempt: sandboxes, install, agent, hidden tests
 SMOKE_OWNER = "deploy-smoke"
 LABELS = {"app": "pr-eval-host"}
-# The GitHub App's client id is public by design (device flow); it is not a secret.
-GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID", "Iv23liQbVPW7Rbr3qQJC")
-GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP", "baseten-eval-sandbox")  # its slug: github.com/apps/<slug>
 # One team's sandboxes and one set of keys serve everyone: runs going at once, in all and per person, and what runs
-# spent on models in the last 24 hours, in all and per person (a quick sample is about $12 with its judges).
+# spent on models in the last 24 hours, in all and per person (a quick sample is about $11).
 LIMITS = {name: os.environ.get(name, default) for name, default in {
     "PR_EVAL_MAX_RUNS": "2", "PR_EVAL_RUNS_PER_PERSON": "1",
     "PR_EVAL_SPEND_TOTAL": "1000", "PR_EVAL_SPEND_PER_PERSON": "500"}.items()}
 # Days a run on a private repository keeps its transcripts after it ends; unset keeps them.
 RETENTION = {name: os.environ[name] for name in ["PR_EVAL_PRIVATE_RETENTION_DAYS"] if os.environ.get(name)}
 # The release: everything the page and its runs read from the repository.
-# The sign-in server (hosted/public.mjs) serves the app's own stylesheet and texture before sign-in.
+# The sign-in server (hosted/public.mjs) serves the app's own stylesheet, textures and arrow icon before sign-in.
 RELEASE = ["eval_sandbox", "configs", "docker", "hosted", "pyproject.toml",
-           "web/src/styles/baseten.css", "web/src/styles/texture.png"]
+           "web/src/styles/baseten.css", "web/src/styles/texture.png", "web/src/styles/texture-dark.png",
+           "web/src/styles/icons/external-link.svg"]
 # A run's summary reaches the hosted page, and each attempt's condensed, redacted trace:
 # no raw transcripts or logs.
 SEED_FILES = ["run.json", "report.json", "report.html"]
@@ -140,7 +136,7 @@ SECRETS = {
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
 ACCESS_TOKEN = ("PR_EVAL_ACCESS_TOKEN", "pr-eval-host-access-token")
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
-# Optional: the page's own public-only GitHub token. Without it, public repositories need a GitHub sign-in too.
+# Optional: the page's own public-only GitHub token. Without it, the page runs the quick sample only.
 GITHUB_TOKEN = ("PR_EVAL_GITHUB_TOKEN", "pr-eval-host-github-token")
 MAIL_FROM = os.environ.get("PR_EVAL_MAIL_FROM", "Eval Sandbox <eval-sandbox@notifications.blaxel.ai>")
 LEAK = trace.SECRET
@@ -301,7 +297,7 @@ def release_files() -> dict[str, bytes]:
 
 def copy_quick_tasks(sandbox) -> str:
     """The quick sample's task folders, collected here first where missing (with the local `gh` login). On the
-    page they let a signed-in person with no GitHub account run the quick sample: its runs only read them.
+    page they let the quick sample run without reading GitHub: its runs only read them.
     Each holds its repository's source (about 200 MB for a large one), so only folders the page lacks go,
     one at a time. Returns the task with the largest source, which the smoke test runs."""
     have = set(run(sandbox, f"mkdir -p {APP}/tasks && cd {APP}/tasks && ls -d */task.toml 2>/dev/null | cut -d/ -f1 || true").split())
@@ -356,8 +352,7 @@ def page_env(keys: dict[str, str], origin: str, meter: str, meter_port: int | No
     # The key the page's runs create their trial sandboxes with: the deploy's own.
     sandboxes = {"BASETEN_SANDBOX_API_KEY": client().key, **({"BASETEN_TEAM_ID": client().team} if client().team else {})}
     env = {**keys, **sandboxes,
-           "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "PR_EVAL_GITHUB_CLIENT_ID": GITHUB_CLIENT_ID,
-           "PR_EVAL_GITHUB_APP": GITHUB_APP, "APP_ORIGIN": origin, **LIMITS, **RETENTION,
+           "PR_EVAL_PUBLIC_REPOS_ONLY": "1", "APP_ORIGIN": origin, **LIMITS, **RETENTION,
            "PR_EVAL_METER_URL": meter, "HOME": "/data/home", "PYTHONUNBUFFERED": "1"}
     if meter_port:
         env["PR_EVAL_METER_PORT"] = str(meter_port)
@@ -386,7 +381,7 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     sign_in_env = {"PORT": str(PORT), "PR_EVAL_PORT": str(PAGE_PORT), "APP_ORIGIN": origin, "BLAXEL_ENV": "prod",
                    "AUTH_STATE_DIR": AUTH, "AUTH_ACCESS_FILE": ACCESS, "BL_SANDBOX_API": "http://localhost:8080", "NODE_ENV": "production"}
     name, service = GITHUB_TOKEN
-    print(f'Public repositories without a GitHub sign-in: {"on" if name in env else "off (no " + service + ")"}')
+    print(f'Public repositories: {"on" if name in env else "off, quick sample only (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
         sign_in_env["PR_EVAL_ADMINS"] = admins
     if owner := os.environ.get("PR_EVAL_ACCESS_OWNER"):
@@ -504,7 +499,7 @@ def remote_json(sandbox, path: str) -> dict:
 def verdict(meta: dict, result: dict, error: str = "", log: str = "") -> str | None:
     """Why the smoke attempt failed, in plain words, or None when it went end to end: its sandboxes started,
     the task's source went up, the dependencies installed, the agent worked and changed code, the hidden
-    tests ran on that change, and the judges answered. Whether the model solved the task doesn't matter."""
+    tests ran on that change. Whether the model solved the task doesn't matter."""
     status = meta.get("status") or {}
     if not result:
         return (f"the run ended ({status.get('phase') or 'no status'}) without an attempt result: "
@@ -520,10 +515,7 @@ def verdict(meta: dict, result: dict, error: str = "", log: str = "") -> str | N
     if not result.get("tests"):
         return "the hidden tests didn't run"
     if not (result.get("diff") or {}).get("files"):
-        return "the agent changed no files, so the judges weren't reached"
-    judge = result.get("judge") or {}
-    if judge.get("verdict") not in ("pass", "fail"):
-        return f"the judges didn't answer: {judge.get('error') or json.dumps(judge)[:300]}"
+        return "the agent changed no files"
     return None
 
 
@@ -539,7 +531,7 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
     # An owner, so the meter prices its calls; marked, so the page lists it nowhere and leaves it out of its limits.
     run(sandbox, f"mkdir -p {job} && printf %s {shlex.quote(json.dumps({'owner': SMOKE_OWNER, 'smoke': True}))} > {job}/access.json")
     command = (f"/opt/venv/bin/python -m eval_sandbox run --task {task} --models {SMOKE_MODEL} --name {run_id} "
-               f"--agent-timeout {SMOKE_AGENT_SECONDS} "
+               f"--agent-timeout {SMOKE_AGENT_SECONDS} --tries 1 "
                f"--jobs {APP}/jobs >> {job}/log.txt 2>&1")
     name = f"pr-eval-{run_id}"
     began = time.time()
@@ -572,8 +564,8 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
     took = f"{(time.time() - began) / 60:.1f} min, ${spent:.2f} on models"
     if why:
         raise SmokeFailed(f"{why}\n(run {job} on the volume; {took})")
-    print(f"smoke ok: {result['outcome']}, hidden tests {'passed' if result['tests'].get('passed') else 'failed'}, "
-          f"judges {result['judge']['verdict']}; {took}", flush=True)
+    print(f"smoke ok: {result['outcome']}, hidden tests {'passed' if result['tests'].get('passed') else 'failed'}; "
+          f"{took}", flush=True)
 
 
 def roll_back(sandbox, origin: str, meter: str, keys: dict[str, str], previous: str) -> None:

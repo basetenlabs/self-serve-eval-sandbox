@@ -38,6 +38,8 @@ def wanted(args) -> tuple[list[str], dict[str, list[int]]]:
 
 
 def cmd_run(args) -> int:
+    if args.tries is not None and args.tries < 1:
+        sys.exit("--tries is at least 1 (1 means no second try)")
     if args.resume:
         # A resumed run keeps its own tasks. --attempts may grow it and --models may add
         # models, so a new model is compared on the same tasks without rerunning the others.
@@ -51,18 +53,21 @@ def cmd_run(args) -> int:
             raise
         job.meta["models"] += [m.as_dict() for m in models if m.key in added]
         job.meta["attempts"] = max(args.attempts or 0, job.meta.get("attempts", 1))
+        # A run keeps its tries (one, for runs from before tries were recorded) unless --tries raises them.
+        job.meta["tries"] = max(args.tries or 0, job.meta.get("tries", 1))
         job.save()
     else:
         repos, pulls = wanted(args)
-        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge, args.models_config,
-                                           judges_checked=args.judges_checked)
+        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge or "none", args.models_config)
         if args.quick and (args.repos or args.task):
             sys.exit("--quick is the quick sample; it doesn't take repositories or --task")
         request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
                                    test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task,
                                    quick=args.quick)
-        job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1, name=args.name,
-                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region)
+        job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1,
+                               tries=args.tries or pipeline.DEFAULT_TRIES, name=args.name,
+                               jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region,
+                               harness=args.harness)
     print(f"run {job.id} -> {job.path}")
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
                                region=args.region, agent_timeout=args.agent_timeout,
@@ -90,9 +95,9 @@ def cmd_collect(args) -> int:
 def cmd_validate(args) -> int:
     pipeline.ensure_image(args.image)
     selected = tasks.discover(args.tasks, args.task)
-    # The panel's chair also checks that each request says enough to pass its tests.
+    # With --judge, the panel's chair also checks that each request says enough to pass its tests.
     settings = runner.Settings(image=runtime.resolve_image(args.image), concurrency=args.concurrency,
-                               judge=config.load()[1])
+                               judge=config.load()[1] if args.judge else None)
     counts: dict[str, int] = {}
 
     def checked(record, done, total):
@@ -159,8 +164,9 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--limit", type=int, default=pipeline.DEFAULT_LIMIT, help=limit_help)
     p.add_argument("--pr", type=int, action="append", help="this PR number; repeatable (one repository)")
     p.add_argument("--since", help="only PRs merged on or after this date (YYYY-MM-DD)")
-    p.add_argument("--setup", help="command that installs dependencies (Go and Python have a default)")
-    p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files")
+    p.add_argument("--setup", help="command that installs dependencies (default: worked out when the run starts)")
+    p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files "
+                                  "(default: worked out when the run starts)")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
     p.add_argument("--quick", action="store_true", help="the quick sample: ten PostHog pull requests (configs/quick_tasks.toml)")
     p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
@@ -182,12 +188,19 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--models", type=csv, help=f"comma-separated keys from configs/models.toml (default "
                    f"{','.join(pipeline.DEFAULT_MODELS)}; with --resume, models to add to the run)")
     r.add_argument("--attempts", type=int, help="attempts per task and model (default 1; on --resume, raises the run's count)")
+    r.add_argument("--tries", type=int, help=f"tries per attempt: a try the model fails is run again from scratch, and "
+                   f"the attempt is solved if any try solves it; every model gets the same (default {pipeline.DEFAULT_TRIES}; "
+                   "1 = no second try; on --resume, raises the run's count)")
     r.add_argument("--resume", type=Path, help="finish a stopped run in this job directory")
+    r.add_argument("--harness", choices=runner.HARNESSES, default=runner.pi.NAME,
+                   help="the coding agent every model runs in (default pi; a resumed run keeps its own)")
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
-    r.add_argument("--judge", default="default", help="'none' to score on tests only, or one judge's model id to grade with it alone")
-    # The page passes it: it checked the judges just before, and asking again held up each start by 1.6-3.5 s.
-    r.add_argument("--judges-checked", action="store_true", help=argparse.SUPPRESS)
+    # Off by default, so the hidden tests alone decide and no judge is paid for.
+    r.add_argument("--judge", nargs="?", const="default", metavar="MODEL",
+                   help="also grade with the LLM judges: alone, the configured panel and its chair; with a judge's model "
+                        "id, that judge alone; 'none' for none (default: the hidden tests alone decide; on --resume, "
+                        "the run's own)")
     r.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY,
                    help=f"attempts and checks at once (default {runner.DEFAULT_CONCURRENCY})")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
@@ -215,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--task", action="append")
     v.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY)
     v.add_argument("--image", default=runner.DEFAULT_IMAGE)
+    v.add_argument("--judge", action="store_true", help="also have the judges' chair check that each request says enough to pass its tests")
     v.set_defaults(func=cmd_validate)
 
     j = sub.add_parser("rejudge", help="grade a finished run again (new judge model or prompt) without re-running agents")

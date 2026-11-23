@@ -47,20 +47,14 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   like the agent's own. It refuses a call with no live ticket, from a run with no owner or one
   stopped for spending, for another provider, for a model with no price, or to an endpoint whose
   usage it can't read. A ticket ends when its attempt's agent stops.
-- **GitHub:** public repositories and the quick sample need no GitHub sign-in. The page reads
-  public repositories with its own fine-grained token, which can read public repositories only
+- **GitHub:** the hosted page runs public repositories only, and nobody signs in with GitHub. It
+  reads them with its own fine-grained token, which can read public repositories only
   (`PR_EVAL_GITHUB_TOKEN`, from the Keychain item `pr-eval-host-github-token`; create it on
-  GitHub with "Public repositories" access and no permissions). Without that token, every run but
-  the quick sample needs the person's own GitHub sign-in. The quick sample's task folders are on
-  the volume (`deploy.py` copies the missing ones), and its runs only read them. A run on a private
-  repository needs the person's own **Sign in with GitHub**: GitHub's device flow through
-  the GitHub App [Baseten Eval Sandbox](https://github.com/apps/baseten-eval-sandbox)
-  (read-only Contents, Pull requests and Metadata; no webhooks; its client id is in `deploy.py`,
-  and the page needs no secret). Private repositories need the app added to them: a
-  repository it can't read yet shows **Add it on GitHub**, and the page looks again when they
-  come back. Their token lives in the page's memory
-  only, for 8 hours or until they sign out or the page restarts, and their runs clone with it. In
-  an organization, an owner installs the app, or approves the person's request to.
+  GitHub with "Public repositories" access and no permissions), and refuses a private repository
+  even if that token could read it. Without that token, the page runs the quick sample only. The
+  quick sample's task folders are on the volume (`deploy.py` copies the missing ones), and its runs
+  only read them. Private repositories are for running pr-eval yourself, where your own `gh` login
+  reads them.
 - **Who sees a run:** people signed in with a baseten.co or blaxel.ai address can open runs started
   by anyone at either domain, including runs on private repositories. The run list names the starter.
   Guests see only their own runs. Admins see every run, including older runs without a recorded owner.
@@ -126,10 +120,10 @@ stay shared in `/data/app`). Then it ships the release only if it works end to e
 
 1. **Smoke test before release.** The release's own page and key meter start beside the live ones (a
    second meter preview, "meter-next"), and one real attempt runs from it: the quick sample's largest
-   task (a PostHog pull request, a ~207 MB source) with the cheapest default model (DeepSeek V4.1 Flash
-   1017), graded by the default judges. Its sandboxes start, the source uploads, the dependencies
-   install, the agent changes code (it stops at 6 minutes, as at any time limit), the hidden tests run on
-   that change and the judges answer; whether the model solved it doesn't matter. On a fail, the page stays on its release and the deploy exits 1
+   task (a PostHog pull request, a ~222 MB source) with the cheapest default model (DeepSeek V4.1 Flash
+   1017), in one try, graded on its hidden tests as the page's runs are. Its sandboxes start, the source
+   uploads, the dependencies install, the agent changes code (it stops at 6 minutes, as at any time limit)
+   and the hidden tests run on that change; whether the model solved it doesn't matter. On a fail, the page stays on its release and the deploy exits 1
    with the attempt's cause.
 2. **Switch.** `/data/app/current` points at the release, both processes restart on it, and the deploy
    checks the signed-out answers (sign-in page 200, page 303, API 401, meter 401).

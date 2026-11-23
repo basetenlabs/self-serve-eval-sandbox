@@ -1,4 +1,4 @@
-import { dur, elapsed, pct, usd } from "@/lib/format";
+import { dur, elapsed, harness, pct, usd } from "@/lib/format";
 import type { Model, Report } from "@/lib/types";
 
 /** The ranking as a Markdown table, for pasting into a doc or a PR. */
@@ -6,7 +6,8 @@ export function benchMarkdown(report: Report, ranked: Model[]): string {
   const S = report.summary, run = report.run;
   const repos = new Set(report.tasks.map((t) => t.repo)).size;
   const multi = (run.attempts || 1) > 1;
-  const cols = ["Model", "Solved / pass rate", ...(multi ? [`Solved in ${run.attempts} tries (pass@${run.attempts})`] : []),
+  const tries = run.tries ?? 1;
+  const cols = ["Model", "Solved / pass rate", ...(multi ? [`Solved in ${run.attempts} attempts (pass@${run.attempts})`] : []),
     "Time per task (median)", "Total wall clock", "Cost per solved task"];
   const rows = ranked.map((m) => {
     const s = S[m.key];
@@ -19,8 +20,9 @@ export function benchMarkdown(report: Report, ranked: Model[]): string {
     `| ${cols.map(() => "----").join(" | ")} |`,
     ...rows.map((r) => `| ${r.join(" | ")} |`),
     "",
-    `Claude Code ${run.harness_version || ""}, ${report.tasks.length} merged PRs from ${repos} ${repos === 1 ? "repo" : "repos"}, ` +
-      `${run.attempts} attempt(s) each. Time per task: median agent time. Total wall clock: start to last result, ` +
-      "leaving out time the run sat stopped before a resume. Cost: all valid attempts / solved attempts.",
+    `${harness(run)}, ${report.tasks.length} merged PRs from ${repos} ${repos === 1 ? "repo" : "repos"}, ` +
+      `${run.attempts} attempt(s) each${tries > 1 ? `, up to ${tries} tries per attempt (a failed try runs again from scratch; solved if any try solves it)` : ""}. ` +
+      `Time per task: median agent time${tries > 1 ? " over every try" : ""}. Total wall clock: start to last result, ` +
+      `leaving out time the run sat stopped before a resume. Cost: all valid attempts${tries > 1 ? ", every try," : ""} / solved attempts.`,
   ].join("\n").replace(/ {2,}/g, " ");
 }

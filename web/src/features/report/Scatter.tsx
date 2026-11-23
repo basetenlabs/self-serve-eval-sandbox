@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Column } from "@/components/brand";
-import { usd } from "@/lib/format";
+import { pct, usd } from "@/lib/format";
 import type { Swatch } from "@/lib/models";
-import { takeaway } from "@/lib/stats";
+import { frontier, solvedShare, takeaway } from "@/lib/stats";
 import type { Model, Summary } from "@/lib/types";
 
 const H = 400, L = 56, R = 32, T = 40, B = 48;
@@ -32,16 +32,16 @@ function useWidth(): [(el: HTMLDivElement | null) => void, number] {
   return [setEl, width];
 }
 
-/** Tasks solved against cost per solved task, one point per model. Top left is best; the pink chip
- *  is the cost chip of the side by side: the open model that costs least against the closed comparison,
- *  from the side of the cheaper one. */
+/** Share of PRs solved against cost per solved task (the report's headline cost), one point per model. Top left is
+ *  best, and a line joins the frontier: the models no other model beats on both. The pink chip is the cost chip of
+ *  the side by side: the open model that costs least against the closed comparison, from the side of the cheaper one. */
 export function Scatter({ models, S, colors }: { models: Model[]; S: Record<string, Summary>; colors: Record<string, Swatch> }) {
   const [hover, setHover] = React.useState<string | null>(null);
   const [box, width] = useWidth();
   const W = width || 480; // the column's own width, phones included: never drawn wider and scaled down
   const pts = models
-    .map((m) => ({ m, s: S[m.key] }))
-    .filter((p) => p.s?.pass_at_1 != null && p.s.cost_per_solved != null);
+    .map((m) => ({ m, s: S[m.key], share: solvedShare(S[m.key]) ?? 0 }))
+    .filter((p) => solvedShare(p.s) != null && p.s.cost_per_solved != null);
   // A model with scored attempts but no cost per solved task has no place on the cost axis: named under the chart.
   const off = models.filter((m) => S[m.key]?.valid && !pts.some((p) => p.m.key === m.key))
     .map((m) => `${m.label} (${S[m.key].tasks_solved ? "cost not measured" : "solved none"})`);
@@ -57,12 +57,20 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   const maxX = Math.max(...pts.map((p) => p.s.cost_per_solved!)) * 1.15 || 1;
   const step = niceStep(maxX, W < 560 ? 2 : 4), xMax = Math.ceil(maxX / step) * step;
   const x = (v: number) => L + (v / xMax) * (W - L - R);
-  const yStep = Math.max(1, Math.ceil(Math.max(...pts.map((p) => p.s.tasks_solved)) / 4)), yMax = yStep * 4;
+  // Percent solved, from zero to a round top tick at or above the best model, never past 100%.
+  const top = Math.max(...pts.map((p) => p.share)) * 100 || 1;
+  const yStep = niceStep(top), yMax = Math.min(100, Math.ceil(top / yStep - 1e-9) * yStep);
+  const yTicks: number[] = [];
+  for (let v = 0; v <= yMax + 1e-9; v += yStep) yTicks.push(+v.toFixed(1));
   const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
   const fmtX = (v: number) => (v === 0 ? "$0" : step >= 1 ? `$${v.toFixed(0)}` : step >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`);
   const xTicks: number[] = [];
   for (let v = 0; v <= xMax + 1e-9; v += step) xTicks.push(v);
-  const at = (p: (typeof pts)[number]) => ({ cx: x(p.s.cost_per_solved!), cy: y(p.s.tasks_solved) });
+  const at = (p: (typeof pts)[number]) => ({ cx: x(p.s.cost_per_solved!), cy: y(p.share * 100) });
+  // The frontier, cheapest first: one line through the models no other model beats on both cost and share solved.
+  const front = frontier(pts.map((p) => ({ key: p.m.key, cost: p.s.cost_per_solved!, share: p.share })));
+  const onFront = new Set(front);
+  const line = front.map((k) => at(pts.find((p) => p.m.key === k)!));
 
   // The cost chip, drawn: a connector from the dearer of the two across to the cheaper (an elbow when they
   // solved different counts), with how much cheaper on its level run.
@@ -89,7 +97,9 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
 
   // Name chips sit above-right of their point; a chip moves only if it would collide.
   const dots: Box[] = pts.map((p) => { const { cx, cy } = at(p); return { x0: cx - 9, x1: cx + 9, y0: cy - 9, y1: cy + 9 }; });
-  const placed: Box[] = [...dots, ...(gap ? [gap.chip, ...gap.runs] : [])];
+  // The y-axis title sits above the plot's top left, where a chip on the best-solving model would land.
+  const yTitle = { x0: 0, x1: "PRs solved".length * CHAR + 4, y0: T - 30, y1: T - 12 };
+  const placed: Box[] = [...dots, yTitle, ...(gap ? [gap.chip, ...gap.runs] : [])];
   const chips = pts.map((p, i) => {
     const { cx, cy } = at(p);
     const w = p.m.label.length * CHAR + 16, h = 22;
@@ -110,12 +120,12 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
   return (
     <Column heading="Quality against cost" aside={<span className="label-mono text-muted-foreground">Up and to the left is better</span>}>
       <div ref={box} className="relative w-full">
-        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block max-w-full" role="img" aria-label="Tasks solved against cost per solved task, one point per model">
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block max-w-full" role="img" aria-label="Share of PRs solved against cost per solved task, one point per model, with a line joining the frontier">
           <rect x={L} y={T} width={W - L - R} height={H - T - B} fill="var(--color-white)" />
-          {[0, 1, 2, 3, 4].map((i) => i * yStep).map((v) => (
+          {yTicks.map((v) => (
             <g key={v}>
               <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="var(--color-lightGrey3)" strokeDasharray="4 4" />
-              <text x={L - 10} y={y(v) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[11px]">{v}</text>
+              <text x={L - 10} y={y(v) + 4} textAnchor="end" className="fill-muted-foreground font-mono text-[11px]">{v}%</text>
             </g>
           ))}
           {xTicks.map((v) => (
@@ -126,14 +136,20 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
           ))}
           <line x1={L} x2={L} y1={T} y2={H - B} stroke="var(--color-darkGrey3)" />
           <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="var(--color-darkGrey3)" />
-          <text x={0} y={T - 18} className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Solved</text>
+          <text x={0} y={T - 18} className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">PRs solved</text>
           <text x={W - R} y={H - 6} textAnchor="end" className="fill-foreground font-mono text-[11px] uppercase tracking-[0.06em]">Cost per solved task</text>
+          {line.length > 1 && (
+            <path d={line.map((p, i) => `${i ? "L" : "M"} ${p.cx} ${p.cy}`).join(" ")} fill="none" stroke="var(--color-black)" strokeWidth={1.5} aria-hidden />
+          )}
           {gap && (
             <g aria-hidden>
               <path d={gap.d} fill="none" stroke="var(--color-darkGrey2)" />
               <path d={gap.head} fill="none" stroke="var(--color-darkGrey2)" />
-              <rect x={gap.chip.x0} y={gap.chip.y0} width={gap.chip.x1 - gap.chip.x0} height={gap.chip.y1 - gap.chip.y0} fill="var(--color-pink)" />
-              <text x={(gap.chip.x0 + gap.chip.x1) / 2} y={gap.chip.y0 + 16} textAnchor="middle" className="fill-black font-sans text-[14px]">{gap.text}</text>
+              {/* The pink chip keeps its Black text in the dark theme: light inside, like the delta chip. */}
+              <g className="scheme-light">
+                <rect x={gap.chip.x0} y={gap.chip.y0} width={gap.chip.x1 - gap.chip.x0} height={gap.chip.y1 - gap.chip.y0} fill="var(--color-pink)" />
+                <text x={(gap.chip.x0 + gap.chip.x1) / 2} y={gap.chip.y0 + 16} textAnchor="middle" className="fill-black font-sans text-[14px]">{gap.text}</text>
+              </g>
             </g>
           )}
           {pts.map((p, i) => {
@@ -144,7 +160,7 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
                 key={p.m.key}
                 tabIndex={0}
                 role="img"
-                aria-label={`${p.m.label}: ${p.s.tasks_solved} solved, ${usd(p.s.cost_per_solved)} per solved task`}
+                aria-label={`${p.m.label}: ${p.s.tasks_solved} of ${p.s.tasks} PRs solved (${pct(p.share)}), ${usd(p.s.cost_per_solved)} per solved task${onFront.has(p.m.key) ? ", on the frontier" : ""}`}
                 onPointerEnter={() => setHover(p.m.key)}
                 onPointerLeave={() => setHover(null)}
                 onFocus={() => setHover(p.m.key)}
@@ -169,12 +185,22 @@ export function Scatter({ models, S, colors }: { models: Model[]; S: Record<stri
             style={{ left: at(active).cx, top: at(active).cy - 14 }}
           >
             <div className="label-mono mb-1">{active.m.label}</div>
-            {([["Solved", String(active.s.tasks_solved)], ["Cost per solved task", usd(active.s.cost_per_solved)]] as const).map(([k, v]) => (
+            {([["PRs solved", `${active.s.tasks_solved} of ${active.s.tasks} (${pct(active.share)})`], ["Cost per solved task", usd(active.s.cost_per_solved)]] as const).map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4"><span className="opacity-75">{k}</span><b className="num font-medium">{v}</b></div>
             ))}
           </div>
         )}
       </div>
+      {pts.length > 1 && (
+        <div className="flex items-baseline gap-3 border-t border-lightGrey2 pt-3 text-[14px] leading-5 text-muted-foreground">
+          {line.length > 1 && <span aria-hidden className="inline-block h-[1.5px] w-6 shrink-0 -translate-y-1 bg-black" />}
+          <span>
+            {line.length > 1
+              ? "The line is the frontier: the models no other model beats on both cost and share of PRs solved."
+              : `${pts.find((p) => p.m.key === front[0])?.m.label} is the best trade-off: no other model costs less per solved task or solves a larger share.`}
+          </span>
+        </div>
+      )}
       {off.length > 0 && <div className="label-xs border-t border-lightGrey2 pt-3 text-muted-foreground">Not on the chart: {off.join(", ")}</div>}
     </Column>
   );

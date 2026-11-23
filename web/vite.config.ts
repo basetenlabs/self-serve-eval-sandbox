@@ -38,6 +38,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss(), viteSingleFile({ removeViteModuleLoader: true }), ...(TARGETS[mode] ? [ship(mode)] : [])],
     resolve: { alias: { "@": path.join(WEB, "src") } },
     build: {
+      // cssTarget: browsers with native light-dark(), which src/styles/baseten.css's dark theme is built on. Below them the
+      // minifier rewrites light-dark() into a polyfill that settles every token at the page root, so the blocks the
+      // theme keeps light inside (the delta chips, Base fills) would turn their Black text White.
+      cssTarget: ["chrome123", "edge123", "firefox120", "safari17.5"],
       outDir: path.join("dist", mode),
       emptyOutDir: true,
       assetsInlineLimit: 1_000_000,

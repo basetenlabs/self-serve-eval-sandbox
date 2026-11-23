@@ -1,20 +1,24 @@
 # Models `pr-eval run --models` can name, and what each costs.
 #
-# Prices are USD per million tokens. Claude Code prices every model at Anthropic list
-# rates, so open models are priced from this table. Claude models take Claude Code's own
-# figure, which knows the 1-hour cache writes its usage report doesn't break out; their
-# rates here price attempts stopped at the time limit, which never report a cost.
+# Prices are USD per million tokens. Attempts in Pi are priced from this table, call by call.
+# Under Claude Code (runs started with --harness claude-code), which prices every model at
+# Anthropic list rates, open models are priced from this table and Claude models take Claude
+# Code's own figure, which knows the 1-hour cache writes its usage report doesn't break out.
 # Check the numbers before quoting a cost:
 #   OpenAI     https://developers.openai.com/api/docs/pricing (Standard, 30-minute cache)
 #   Anthropic  https://www.anthropic.com/pricing (API list rates)
 #   Baseten    https://www.baseten.co/pricing/ (Model APIs)
 #
-# provider = "anthropic": Claude Code talks to the Anthropic API directly, authenticated
-#   by ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
-# provider = "openai": Claude Code uses the relay to call the OpenAI Responses API with OPENAI_API_KEY.
-# provider = "baseten": Claude Code talks to the translating proxy inside the trial
-#   container, which forwards to Baseten Model APIs' Chat Completions endpoint with
-#   BASETEN_API_KEY and sets the same `effort` on every request.
+# Each model speaks its provider's own API from Pi, through the model relay in the trial's
+# sandbox, which adds the key; `effort` is Pi's thinking level, sent as each API expects it.
+# provider = "anthropic": the Anthropic Messages API, authenticated by ANTHROPIC_API_KEY or
+#   CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
+# provider = "openai": the OpenAI Responses API, with OPENAI_API_KEY.
+# provider = "baseten": Baseten Model APIs' Chat Completions endpoint, with BASETEN_API_KEY.
+# Under Claude Code the relay translates the Anthropic API for OpenAI and Baseten models, and
+#   sets the same `effort` on every Baseten request.
+# pi (optional) tells Pi about a model its catalog doesn't list yet: its context window and
+#   longest answer, in tokens.
 # max_concurrent (optional) caps how many attempts of one model run at once, for a
 #   provider that rate-limits the key. Time spent in retry backoff is excluded from the
 #   report's wall clock either way.
@@ -22,7 +26,7 @@
 #   time per attempt until it has runs of its own.
 # maker names who makes a closed model. The report says who serves each model it compares:
 #   "Baseten's GLM-5.3" for an open model, "Anthropic's Claude Opus 5.5" for a closed one.
-# The Fast variants (GLM-5.3 Fast, DeepSeek V4.1 Flash 1017 Fast) are no longer offered:
+# The Fast variants (GLM-5.3 Fast, DeepSeek V4.1 Flash 1017 Fast) and Kimi K3 are no longer offered:
 #   pipeline.RETIRED names what replaced each. Past runs keep their own models in run.json.
 
 [defaults]
@@ -51,6 +55,15 @@ maker = "OpenAI"
 provider = "openai"
 model = "gpt-6.2-astra"
 prices."gpt-6.2-astra" = { input = 8.00, cached_input = 0.40, cache_write = 10.00, output = 40.00 }
+estimate_from = ["gpt-6.2-sol", "claude-opus"]
+
+[models."gpt-6-luna"]
+label = "GPT-6 Luna"
+kind = "closed"
+maker = "OpenAI"
+provider = "openai"
+model = "gpt-6-luna"
+prices."gpt-6-luna" = { input = 0.10, cached_input = 0.01, cache_write = 0.125, output = 0.50 }
 estimate_from = ["gpt-6.2-sol", "claude-opus"]
 
 [models.claude-sonnet]
@@ -85,15 +98,6 @@ provider = "baseten"
 model = "zai-org/GLM-5.3"
 prices."zai-org/GLM-5.3" = { input = 1.40, cached_input = 0.14, output = 4.40 }
 
-[models.kimi-k3]
-label = "Kimi K3"
-kind = "open"
-provider = "baseten"
-model = "moonshotai/Kimi-K3"
-# Stays within the key's rate limit.
-max_concurrent = 2
-prices."moonshotai/Kimi-K3" = { input = 3.00, cached_input = 0.30, output = 15.00 }
-
 [models."kimi-k3.1-pro"]
 label = "Kimi K3.1 Pro"
 kind = "open"
@@ -101,15 +105,18 @@ provider = "baseten"
 model = "moonshotai/Kimi-K3.1-Pro"
 # Baseten list rates (baseten.co/pricing, 2026-11-04).
 prices."moonshotai/Kimi-K3.1-Pro" = { input = 2.00, cached_input = 0.20, output = 10.00 }
+estimate_from = ["glm-5.3"]
 
 [models.muse-spark]
 label = "Muse Spark Open"
 kind = "open"
 provider = "baseten"
 model = "meta-models/muse-spark-open"
+pi = { context_window = 1048576, max_tokens = 262144 }
 # Stays within the key's rate limit.
 max_concurrent = 2
 prices."meta-models/muse-spark-open" = { input = 1.25, cached_input = 0.15, output = 4.25 }
+estimate_from = ["glm-5.3"]
 
 [models."deepseek-v4.1-flash"]
 # The 1017 release, which Baseten serves beside an undated DeepSeek-V4.1-Flash: the label says which.
@@ -124,7 +131,9 @@ label = "Nemotron 3.5 Super"
 kind = "open"
 provider = "baseten"
 model = "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B"
+pi = { context_window = 1048576, max_tokens = 262144 }
 prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_input = 0.04, output = 0.50 }
+estimate_from = ["deepseek-v4.1-flash", "glm-5.3"]
 
 # The judges grade every attempt the hidden tests have run on. Each reads the request,
 # the merged diff and the agent's diff on its own; then the chair reads the same evidence
@@ -139,7 +148,7 @@ prices."nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B" = { input = 0.20, cached_
 #   names. `effort` is sent as reasoning_effort, or as Claude Code's --effort.
 [judge]
 effort = "high"
-chair = "moonshotai/Kimi-K3"
+chair = "moonshotai/Kimi-K3.1-Pro"
 
 [[judge.panel]]
 label = "Claude Opus 5.5"
@@ -156,10 +165,10 @@ api_key_env = "OPENAI_API_KEY"
 prices = { input = 2.00, cached_input = 0.10, output = 10.00 }
 
 [[judge.panel]]
-label = "Kimi K3"
-model = "moonshotai/Kimi-K3"
+label = "Kimi K3.1 Pro"
+model = "moonshotai/Kimi-K3.1-Pro"
 base_url = "https://inference.baseten.co/v1"
 api_key_env = "BASETEN_API_KEY"
-prices = { input = 3.00, cached_input = 0.30, output = 15.00 }
+prices = { input = 2.00, cached_input = 0.20, output = 10.00 }
 # It also chairs, so it grades twice per attempt; the cap keeps it within the key's rate limit.
 max_concurrent = 4

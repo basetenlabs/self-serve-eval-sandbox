@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Tip } from "@/components/ui/tooltip";
-import type { Swatch as SwatchT } from "@/lib/models";
+import { INK_BLACK, type Swatch as SwatchT } from "@/lib/models";
 import type { Model, Report, Task, Trial } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { TaskSheet } from "./TaskSheet";
@@ -149,7 +149,7 @@ export function TasksTable({ report, ranked, colors, openId: given, onOpen }: {
                     <TD key={m.key}>
                       <div className="flex gap-0.5">
                         {ts.map((r) => (
-                          <Tip key={r.attempt} content={`Attempt ${r.attempt}: ${r.outcome === "invalid" ? `not scored${r.cause || r.invalid_reason ? ` (${r.cause || r.invalid_reason})` : ""}` : r.outcome === "solved" ? "solved" : "not solved"}`}>
+                          <Tip key={r.attempt} content={`Attempt ${r.attempt}: ${r.outcome === "invalid" ? `not scored${r.cause || r.invalid_reason ? ` (${r.cause || r.invalid_reason})` : ""}` : r.outcome === "solved" ? "solved" : "not solved"}${(r.try ?? 1) > 1 ? (r.outcome === "solved" ? ` on try ${r.try}` : ` after ${r.try} tries`) : ""}`}>
                             <span><Pip outcome={r.outcome} fill={colors[m.key]?.fill} ink={colors[m.key]?.ink} /></span>
                           </Tip>
                         ))}
@@ -184,7 +184,7 @@ export function Pip({ outcome, fill, ink, small }: { outcome?: keyof typeof GLYP
         outcome === "failed" && "bg-node text-muted-foreground",
         outcome === "invalid" && "bg-lightGold text-black",
       )}
-      style={outcome === "solved" ? { background: fill ?? "var(--color-green)", color: ink ?? "var(--color-black)" } : undefined}
+      style={outcome === "solved" ? { background: fill ?? "var(--color-green)", color: ink ?? INK_BLACK } : undefined}
     >
       {outcome ? GLYPH[outcome] : ""}
     </span>

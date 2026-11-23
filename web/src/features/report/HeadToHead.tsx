@@ -2,7 +2,7 @@ import type * as React from "react";
 import { Column, DeltaChip } from "@/components/brand";
 import { Chevron } from "@/components/brand/icons";
 import { dur, pct, plural, usd } from "@/lib/format";
-import { isOpen, type Swatch } from "@/lib/models";
+import { INK_BLACK, isOpen, type Swatch } from "@/lib/models";
 import { Count, Scramble } from "@/lib/motion";
 import { type Lead, type Paired, solvedBy, type Takeaway, wilson } from "@/lib/stats";
 import type { Model, Summary, Task, Trial } from "@/lib/types";
@@ -12,7 +12,7 @@ type Metric = { key: "pass_at_1" | "cost_per_solved" | "median_seconds"; name: s
 
 // The brand's head-to-head: Baseten's side is Green, the comparison Blue. Each model keeps the colour
 // it has in the table and the chart under this, so a second open model is Dark Green, not Green again.
-const GREEN = "var(--color-green)", BLUE = "var(--color-blue)", BLACK = "var(--color-black)";
+const GREEN = "var(--color-green)", BLUE = "var(--color-blue)";
 
 type Side = { m: Model; fill: string; ink: string };
 
@@ -23,15 +23,15 @@ type Side = { m: Model; fill: string; ink: string };
  * The chip names the better of the best open model and the closed one, who serves it and by how much
  * ("Baseten's DeepSeek V4.1 Flash is 71% cheaper"); the line under it says what the chip leaves out.
  */
-export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onOpen, sample }: {
+export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, tries = 1, onOpen, sample }: {
   t: Takeaway; S: Record<string, Summary>; ranked: Model[]; colors: Record<string, Swatch>; trials: Trial[];
-  judged: boolean; attempts: number; onOpen?: (taskId: string) => void; sample?: string | null;
+  judged: boolean; attempts: number; tries?: number; onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   const grid = !!t.pairs?.n;
   const scored = ranked.filter((m) => S[m.key]?.valid);
   if (scored.length < 2) return null;
   const sides: Side[] = [...scored.filter(isOpen), ...scored.filter((m) => !isOpen(m))]
-    .map((m) => ({ m, fill: colors[m.key]?.fill ?? (isOpen(m) ? GREEN : BLUE), ink: colors[m.key]?.ink ?? BLACK }));
+    .map((m) => ({ m, fill: colors[m.key]?.fill ?? (isOpen(m) ? GREEN : BLUE), ink: colors[m.key]?.ink ?? INK_BLACK }));
   const many = sides.length > 2;
   const fills = (open: boolean) => [...new Set(sides.filter((s) => isOpen(s.m) === open).map((s) => s.fill))];
   const metrics: Metric[] = [
@@ -54,7 +54,7 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, onO
       }
     >
       <div>
-        {grid && <Solved p={t.pairs!} sides={sides} by={solvedBy(trials)} S={S} judged={judged} attempts={attempts} onOpen={onOpen} sample={sample} />}
+        {grid && <Solved p={t.pairs!} sides={sides} by={solvedBy(trials)} S={S} judged={judged} attempts={attempts} tries={tries} onOpen={onOpen} sample={sample} />}
         {metrics.map((metric) => {
           const values = sides.map((s) => S[s.m.key]?.[metric.key] ?? null);
           const max = metric.max ?? (Math.max(...values.map((v) => v ?? 0)) || 1);
@@ -110,13 +110,15 @@ const CARDS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "
 
 /** What each model solved on the headline's PRs, big, with its cost per solved task. The solve rate,
  *  its 95% range and each PR's result stay in a details row under it. */
-function Solved({ p, sides: shown, by, S, judged, attempts, onOpen, sample }: {
-  p: Paired; sides: Side[]; by: Map<string, Map<string, boolean>>; S: Record<string, Summary>; judged: boolean; attempts: number;
+function Solved({ p, sides: shown, by, S, judged, attempts, tries, onOpen, sample }: {
+  p: Paired; sides: Side[]; by: Map<string, Map<string, boolean>>; S: Record<string, Summary>; judged: boolean; attempts: number; tries: number;
   onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   // How to read the rates, said only once someone opens them.
   const notes: [string, string][] = [
-    ["Single pass", "Read these rates as a floor. Each attempt is one pass with no second try and no human review, and the agent never sees the PR's tests or reaches GitHub or package registries. In real work a developer reviews the change, runs the tests and sends the agent back for another pass."],
+    tries > 1
+      ? [`Up to ${tries} tries`, `Read these rates as a floor. An attempt the model fails runs again from scratch, up to ${tries} tries, and is solved if any try solves it; its cost and time include every try. The agent never learns why a try failed, gets no human review, and never sees the PR's tests or reaches GitHub or package registries. In real work a developer reviews the change, runs the tests and tells the agent what to fix.`]
+      : ["Single pass", "Read these rates as a floor. Each attempt is one pass with no second try and no human review, and the agent never sees the PR's tests or reaches GitHub or package registries. In real work a developer reviews the change, runs the tests and sends the agent back for another pass."],
     ...(sample ? [["Small sample", sample] as [string, string]] : []),
   ];
   // Solved by both of the headline's models first, then by one, so the list reads like the figures above it.

@@ -1,4 +1,4 @@
-"""Run Claude Code trials in Baseten sandboxes.
+"""Run coding-agent trials in Baseten sandboxes: Pi (pi.py) by default, or Claude Code.
 
 A trial is one (task, model, attempt). Setup installs dependencies with the
 network open. Everything after it runs in a jail with no network (docker/jail.py):
@@ -6,9 +6,10 @@ the agent's only way out is the model relay, a process outside its jail that it
 reaches through one socket and that calls the model provider and nothing else.
 The agent's patch is saved and its entire sandbox deleted. A second sandbox,
 set up the same way while the agent works, then gets the patch and the hidden
-tests. The reference patch is used only by separate validation sandboxes and
-the host-side judge. On a task still being checked, an attempt's own sandbox is
-set up alongside the check, and its agent starts only once the check passes.
+tests. The reference patch is used only by separate validation sandboxes and,
+on a run with judges, the host-side judges. On a task still being checked, an
+attempt's own sandbox is set up alongside the check, and its agent starts only
+once the check passes.
 """
 from __future__ import annotations
 
@@ -25,11 +26,11 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import causes, meter, runtime
+from . import causes, meter, pi, runtime, tasks
 from . import judge as judge_mod
 from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
-from .rundir import charge, now, write_json
-from .tasks import TEST_FILE, Task, signatures, snapshot
+from .rundir import charge, now, read_json, write_json
+from .tasks import AGENT_SECONDS, TEST_FILE, Task, signatures, snapshot
 from .tasks import load as load_task
 
 DEFAULT_IMAGE = runtime.DEFAULT_IMAGE
@@ -38,12 +39,36 @@ PROXY_PORT = 18787
 # so `--resume` runs them again.
 STOPPING = threading.Event()
 
-PROMPT = """You are working in a checkout of the {repo} repository (the current directory).
-Make the code change requested below, the way a contributor would for a pull request.
-You can read the code, run the existing tests and add tests of your own. Nobody is
-available to answer questions, so make reasonable decisions and finish the change.
+CLAUDE_CODE = "claude-code"
+HARNESSES = (pi.NAME, CLAUDE_CODE)
 
-{instruction}"""
+# The agent's first message; the harness's own system prompt stays as it is. It says what a contributor
+# knows before starting: the repository, the request, how the change will be checked, and what this machine allows.
+FIRST_MESSAGE = """You are in a checkout of the {repo} repository: the current directory, a git repository at \
+the commit this pull request starts from. Make the change it asks for, the way a contributor would.
+
+<pull-request>
+{instruction}
+</pull-request>
+
+How your change is checked: when you stop, the pull request's own tests, which you can't see, are added \
+to the repository and run with
+
+    {test}
+
+Your change passes if they pass.{names} Changes you make to test files are set aside for this run, so \
+it checks your change to the code.
+
+Your environment:
+- There is no network. Dependencies are already installed; nothing else can be downloaded, and GitHub \
+can't be reached.
+- You have {limit}. Whatever is in the working tree when you stop, or when time runs out, is what gets \
+checked.
+- Nobody is available to answer questions, so make reasonable decisions and finish the change.
+
+You are done when the change is in the working tree (committing it is up to you) and the repository's \
+existing tests still pass."""
+NAMED = ' They call the code by the names listed under "Names the tests use", so keep those exactly.'
 
 # Claude Code's own settings that belong to the harness, not the model: every model driven
 # by Claude Code runs under the same ceilings, whoever hosts it.
@@ -79,8 +104,10 @@ DISALLOWED_TOOLS = "WebFetch,WebSearch"
 CACHES = ("__pycache__/", "*.py[co]", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/")
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Claude Code says "API Error: ..."; Pi gives the provider's status first ("400: {...}").
 PROVIDER_ERROR = re.compile(r"API Error|authentication|unauthori[sz]ed|invalid api key|credit balance|"
-                            r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed", re.I)
+                            r"rate limit|overloaded|\b(?:401|403|429|5\d\d)\b|ECONNREFUSED|fetch failed|"
+                            r"^[45]\d\d: |Connection error", re.I)
 
 
 def stage(path: Path, name: str, **extra) -> None:
@@ -102,6 +129,7 @@ class Settings:
     memory: int = 4096                 # MB; a task that needs more says so (memory_mb)
     region: str = "us-pdx-1"
     agent_timeout: int | None = None   # overrides the task's own
+    harness: str = pi.NAME             # or "claude-code"; a resumed run keeps its own (pipeline.restore_execution)
     judge: Panel | None = None
     keep_sandboxes: bool = False
 
@@ -124,12 +152,55 @@ def trial_name(task: Task, model: Model, attempt: int) -> str:
     return f"{task.id}__{model.key}__{attempt}"
 
 
-def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, dict[str, str]]:
-    """The shell that starts the model relay, the shell that starts Claude Code for this model in its jail,
-    and the non-secret env Claude Code needs. With `meter_url`, the relay calls the provider through the key
+def first_message(task: Task, seconds: int) -> str:
+    """What the agent is asked: the request, and how the change will be checked."""
+    instruction = task.instruction.strip()
+    return FIRST_MESSAGE.format(repo=task.meta["task"]["repo"], instruction=instruction, test=shown_test(task),
+                                names=NAMED if "## Names the tests use" in instruction else "",
+                                limit=duration(seconds))
+
+
+def shown_test(task: Task) -> str:
+    """The hidden tests' command as the agent sees it: the PR's test files (Grafana: their packages) said to
+    be there, not named. Only the names the tests call reach the agent, never which tests they are."""
+    paths = task.meta["verifier"].get("test_files") or []
+    hidden = set(paths) | {"./" + os.path.dirname(p) for p in paths if os.path.dirname(p)}
+    words, shown = [], False
+    for word in task.meta["verifier"]["test"].split(" "):
+        if word.strip("'\"") in hidden:
+            if not shown:
+                words.append("<the pull request's tests>")
+            shown = True
+        else:
+            words.append(word)
+    return " ".join(words)
+
+
+def duration(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return "an hour" if seconds == 3600 else f"{seconds // 3600} hours"
+    return f"{round(seconds / 60)} minutes"
+
+
+# Run first in the agent's script: wait for the relay's socket, which the jail's one port leads to.
+RELAY_WAIT = (f"for i in $(seq 1 100); do [ -S {RELAY_SOCKET} ] && break; sleep 0.1; done\n"
+              f"[ -S {RELAY_SOCKET} ] || {{ echo 'pr-eval: the model relay did not start' >&2; exit {RELAY_MISSING}; }}\n")
+
+
+def agent_script(model: Model, meter_url: str | None = None,
+                 harness: str = CLAUDE_CODE) -> tuple[str, str, dict[str, str]]:
+    """The shell that starts the model relay, the shell that starts the agent for this model in its jail,
+    and the non-secret env the agent needs. With `meter_url`, the relay calls the provider through the key
     meter instead (see meter.py)."""
-    env = dict(HARNESS_ENV)
     upstream = meter.base_url(meter_url, model.provider) if meter_url else PROVIDER_URLS[model.provider]
+    if harness == pi.NAME:
+        # Pi speaks each provider's own API, so the relay only signs each call and passes it on.
+        relay = (f"rm -f {RELAY_SOCKET}; exec python3 /opt/eval/proxy.py --upstream {shlex.quote(upstream)} "
+                 f"--socket {RELAY_SOCKET} --log-file /logs/proxy.log")
+        before, command = pi.launch(model, f"http://127.0.0.1:{PROXY_PORT}")
+        script = f"{RELAY_WAIT}{before}exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {command}\n"
+        return relay, script, dict(pi.ENV)
+    env = dict(HARNESS_ENV)
     # Translated calls use the selected effort. Native Claude requests pass through.
     effort = f"--effort {shlex.quote(model.effort)} " if model.provider in API_KEYS else ""
     program = "python3 /opt/eval/proxy.py"
@@ -157,24 +228,22 @@ def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, 
         signs_in = f'export ANTHROPIC_AUTH_TOKEN="${key_name}"; unset {key_name}\n'
     else:
         env["ANTHROPIC_MODEL"] = model.model
-    script = (
-        f"for i in $(seq 1 100); do [ -S {RELAY_SOCKET} ] && break; sleep 0.1; done\n"
-        f"[ -S {RELAY_SOCKET} ] || {{ echo 'pr-eval: the model relay did not start' >&2; exit {RELAY_MISSING}; }}\n"
-        f"{signs_in}"
-        f"exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {claude}\n")
+    script = f"{RELAY_WAIT}{signs_in}exec {JAIL} --net none --bridge {PROXY_PORT}={RELAY_SOCKET} -- {claude}\n"
     return relay, script, env
 
 
 def run_agent(container: str, model: Model, placeholder_env: dict, relay_headers: dict, log_path: Path, timeout: int,
-              meter_url: str | None = None) -> dict:
-    """Run Claude Code remotely and collect the durable stream log.
+              meter_url: str | None = None, harness: str = CLAUDE_CODE) -> dict:
+    """Run the agent remotely and collect the durable stream log.
 
     `placeholder_env` holds the attempt's placeholder credential, never a real key. `relay_headers` is
     what the model relay signs each call with, the key or the attempt's meter ticket (see
     config.sandbox_credential and meter.admit): the relay runs outside the agent's jail, and is the only
     process in the sandbox that ever has it.
     """
-    relay, script, env_vars = agent_script(model, meter_url)
+    relay, script, env_vars = agent_script(model, meter_url, harness)
+    if harness == pi.NAME:
+        placeholder_env = pi.credential_env(placeholder_env)
     with at("network"):
         runtime.start(container, RELAY, relay, env={"PROXY_UPSTREAM_HEADERS": json.dumps(relay_headers)},
                       timeout=timeout + 120, log=RELAY_LOG)
@@ -195,9 +264,15 @@ def run_agent(container: str, model: Model, placeholder_env: dict, relay_headers
     runtime.download(container, "/logs/agent.jsonl", log_path)  # streamed: the log can be tens of MB
     for path in (log_path, log_path.with_suffix(".stderr")):
         redact_file(path)
-    compact_stream(log_path)
+    if harness == pi.NAME:
+        pi.compact(log_path)
+        summary = pi.summarize(log_path, model)
+        summary["tokens"] = token_totals(summary["model_usage"])
+    else:
+        compact_stream(log_path)
+        summary = summarize_stream(log_path)
     return {"exit_code": result.code, "timed_out": result.timed_out,
-            "seconds": round(time.monotonic() - started, 1), **summarize_stream(log_path)}
+            "seconds": round(time.monotonic() - started, 1), **summary}
 
 
 def summarize_stream(path: Path) -> dict:
@@ -448,22 +523,59 @@ def sandbox_memory(task: Task, settings: Settings) -> int:
     return max(settings.memory, int(task.meta["environment"].get("memory_mb", 0)))
 
 
-def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "the agent's") -> tuple[str | None, dict]:
-    """Base source in /workspace, dependencies installed, both committed as the baseline.
+# Hides what setup left untracked from `git status`, as patterns anchored to it, with the
+# characters .gitignore treats as special escaped.
+HIDE_UNTRACKED = r"""git ls-files -z --others --exclude-standard --directory | python3 -c 'import re, sys
+sys.stdout.writelines("/" + re.sub(r"[][*?\\ ]", lambda m: "\\" + m[0], p) + "\n" for p in sys.stdin.read().split("\0") if p)' >>.git/info/exclude"""
+COMMIT = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
+HISTORY_ADDED = "pr-eval: history added"
+
+
+def add_history(past: tasks.History) -> str:
+    """Shell that turns the unpacked source into a clone at the base commit: its history's objects, main
+    at the base commit, and where the history stops. Only when the source is exactly the base commit's
+    files (git archive can leave some out); otherwise the base is a commit of its own, as without history."""
+    shallow = f"printf '%s\\n' {' '.join(past.shallow)} >.git/shallow && " if past.shallow else ""
+    return (f"git index-pack --stdin </tmp/history.pack >/dev/null && rm /tmp/history.pack && git add -A && "
+            f'if [ "$(git write-tree)" = "$(git rev-parse -q --verify {past.base}^{{tree}})" ]; then '
+            f"{shallow}git update-ref refs/heads/main {past.base} && echo '{HISTORY_ADDED}'; else {COMMIT} base; fi")
+
+
+def recent_history(task: Task) -> tasks.History | None:
+    try:
+        return tasks.history(task)
+    except Exception as exc:  # noqa: BLE001 - the checkout works without history, as it did before it had any
+        print(f"({task.id}: no git history for the agent: {str(exc)[-300:]})", flush=True)
+        return None
+
+
+def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "the agent's",
+                      history: bool = False) -> tuple[str | None, dict]:
+    """Base source in /workspace, dependencies installed, both in the baseline commit.
 
     Returns (invalid reason or None, setup stats); its log is log_dir/setup.log. A sandbox error
     raises StepFailed, naming the step. The baseline includes whatever setup wrote outside
     .gitignore and CACHES, so the agent's diff is only the agent's.
+
+    With `history` (the agent's sandbox) /workspace is, where the task's repository clone is here, a
+    git repository at the base commit with the commits before it and no others, like a developer's
+    clone. Setup's changes then stay out of its history: untracked files it wrote are hidden from
+    `git status`, changes to tracked files are left uncommitted, and the baseline is a commit no
+    branch points to. Otherwise "base" and "setup" are the repository's only commits.
     """
-    commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
+    past = None
     with at("upload", whose):
         runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
+        if history and (past := recent_history(task)):
+            runtime.upload(container, past.pack, "/tmp/history.pack")
         code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
                                      f"git init -q -b main && printf '%s\\n' {' '.join(map(shlex.quote, CACHES))} "
-                                     f">>.git/info/exclude && git add -A && {commit} base", timeout=300)
+                                     f">>.git/info/exclude && "
+                                     + (add_history(past) if past else f"git add -A && {COMMIT} base"), timeout=300)
     if code != 0:
         (log_dir / "setup.log").write_text(out)
         return "workspace-error", {}
+    cloned = past is not None and out.strip().endswith(HISTORY_ADDED)
     started = time.monotonic()
     timeout = int(task.meta["environment"].get("setup_timeout_sec", 900))
     logs = []
@@ -475,16 +587,26 @@ def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "t
                 break
             time.sleep(wait)
         (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
-        stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
+        stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1),
+                 "history_commits": past.commits if cloned else 0}
         if code != 0:
             return ("setup-timeout" if timed_out else "setup-error"), stats
-        code, out, timed_out = sh(container, f"git add -A && {commit} setup", timeout=120)
+        if cloned:
+            code, out, timed_out = sh(container, f"{HIDE_UNTRACKED} && git add -A && if git diff --cached --quiet HEAD; "
+                                                 "then baseline=$(git rev-parse --verify HEAD); else baseline=$(git -c "
+                                                 "user.name=eval -c user.email=eval@localhost commit-tree "
+                                                 '"$(git write-tree)" -p HEAD -m setup); fi && git reset -q && '
+                                                 'echo "$baseline"', timeout=120)
+        else:
+            code, out, timed_out = sh(container, f"git add -A && {COMMIT} setup", timeout=120)
         if code or timed_out:
             return "setup-commit-error", stats
-        code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
-        if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
+        if not cloned:
+            code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
+        baseline = out.strip().rsplit("\n", 1)[-1]
+        if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", baseline):
             return "workspace-error", stats
-    stats["baseline"] = out.strip()
+    stats["baseline"] = baseline
     return None, stats
 
 
@@ -553,14 +675,51 @@ def run_tests(container: str, task: Task, log_path: Path) -> dict:
             "seconds": round(time.monotonic() - started, 1), "summary": test_summary(out), "output": out}
 
 
+# In an attempt's folder: the tries its model already failed, one folder each (tries/1, tries/2, ...).
+TRIES = "tries"
+# What the attempt's result keeps of each earlier try, for the report and the page.
+TRY_AGENT = ("seconds", "retry_wait_seconds", "cost_usd", "cost_source", "timed_out", "num_turns", "tokens",
+             "rate_limited_retries")
+
+
 def fresh_folder(trial_dir: Path) -> str | None:
-    """Empty an attempt's folder. Returns why its last try was invalid, if it was."""
-    # An attempt starts in a clean folder: one cut short or lost to infrastructure leaves files behind.
-    earlier = trial_dir / "result.json"
-    rerun_after = json.loads(earlier.read_text()).get("invalid_reason") if earlier.is_file() else None
-    shutil.rmtree(trial_dir, ignore_errors=True)
-    trial_dir.mkdir(parents=True)
-    return rerun_after
+    """Empty an attempt's folder for its next try. Returns why its last try was invalid, if it was.
+
+    A try the model failed moves to tries/<n>/ and stays part of the attempt: its cost and time count.
+    Anything else left behind, a try cut short or lost to infrastructure, is deleted."""
+    earlier = read_json(trial_dir / "result.json")
+    kept = trial_dir / TRIES
+    if earlier.get("outcome") == "failed":
+        target = kept / str(earlier.get("try") or 1)
+        shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True)
+        for path in list(trial_dir.iterdir()):
+            if path.name != TRIES:
+                path.rename(target / path.name)
+        return None
+    for path in list(trial_dir.iterdir()) if trial_dir.is_dir() else []:
+        if path.name == TRIES:
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    return earlier.get("invalid_reason")
+
+
+def earlier_tries(trial_dir: Path) -> list[dict]:
+    """The tries of this attempt its model already failed, oldest first, each in brief."""
+    found = []
+    for path in (trial_dir / TRIES).glob("*/result.json"):
+        r = read_json(path)
+        if r.get("outcome") == "failed" and path.parent.name.isdigit():
+            found.append({"try": int(path.parent.name), "outcome": "failed", "started_at": r.get("started_at"),
+                          "finished_at": r.get("finished_at"),
+                          "agent": {k: (r.get("agent") or {}).get(k) for k in TRY_AGENT},
+                          "diff": r.get("diff"), "tests": {k: (r.get("tests") or {}).get(k) for k in ("passed", "summary")},
+                          "judge": {k: (r.get("judge") or {}).get(k) for k in ("verdict", "reason")} if r.get("judge") else None})
+    return sorted(found, key=lambda t: t["try"])
 
 
 @dataclass
@@ -589,7 +748,7 @@ def prepare_trial(task: Task, trial_dir: Path, run_id: str, settings: Settings) 
         with at("boot"):
             start_container(ready.container, run_id, settings, memory)
         stage(live, "setup", started_at=ready.started_at)
-        ready.reason, ready.setup = prepare_workspace(ready.container, task, trial_dir)
+        ready.reason, ready.setup = prepare_workspace(ready.container, task, trial_dir, history=True)
     except Exception as exc:  # noqa: BLE001 - an attempt's errors are run_trial's to record
         ready.error = exc
     return ready
@@ -619,18 +778,23 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     when trying it again could go differently.
     """
     rerun_after = ready.rerun_after if ready else fresh_folder(trial_dir)
+    earlier = earlier_tries(trial_dir)
     container = ready.container if ready else container_name(run_id)
     verifier = container_name(run_id)
     verify_dir = trial_dir / "verification"
     verify_dir.mkdir(exist_ok=True)
     result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
-              "model_id": model.model, "attempt": attempt, "started_at": ready.started_at if ready else now(),
-              "outcome": None,
+              "model_id": model.model, "attempt": attempt, "try": len(earlier) + 1,
+              "started_at": ready.started_at if ready else now(), "outcome": None,
               "invalid_reason": None, **environment_identity(settings),
               "agent_sandbox": container, "verifier_sandbox": verifier}
     if rerun_after:
         result["rerun_after"] = rerun_after
-    agent_timeout = settings.agent_timeout or int(task.meta["agent"].get("timeout_sec", 1800))
+    if earlier:  # the tries the model failed before this one: the attempt's cost and time include them
+        result["earlier_tries"] = earlier
+    since = {"started_at": result["started_at"], **({"try": result["try"]} if earlier else {})}  # for the live view
+    # Tasks collected before the limit went up to an hour keep their old 30 minutes in task.toml: the hour applies to them too.
+    agent_timeout = settings.agent_timeout or max(int(task.meta["agent"].get("timeout_sec", 0)), AGENT_SECONDS)
     memory = sandbox_memory(task, settings)
     alive = [container, verifier]  # reconcile by exact name even if allocation times out
     created = threading.Event()
@@ -686,33 +850,34 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         if ready and ready.error:
             raise ready.error
         if not ready:
-            stage(live, "sandboxes", started_at=result["started_at"])
+            stage(live, "sandboxes", **since)
         verifier_ready = helper.submit(ready_verifier)
         if ready:
             reason, result["setup"] = ready.reason, ready.setup
         else:
             start_container(container, run_id, settings, memory)
-            stage(live, "setup", started_at=result["started_at"])
-            reason, result["setup"] = prepare_workspace(container, task, trial_dir)
+            stage(live, "setup", **since)
+            reason, result["setup"] = prepare_workspace(container, task, trial_dir, history=True)
         if reason:
             return finish("invalid", reason)
         step = "upload"
-        prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
+        prompt = first_message(task, agent_timeout)
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         step = "agent"
-        stage(live, "agent", started_at=result["started_at"])
+        stage(live, "agent", **since)
         # The agent ran, so it spent: charged below, or unpriced in `finally` if this ends first. Through
         # the meter every call is in the ledger already.
         charged = ticket is not None
         agent = run_agent(container, model, placeholder_env, relay_headers, trial_dir / "agent.jsonl", agent_timeout,
-                          meter_url)
+                          meter_url, settings.harness)
         if ticket:
             ticket.unlink(missing_ok=True)
         runtime.download(container, "/logs/proxy.log", trial_dir / "proxy.log", optional=True)
         redact_file(trial_dir / "proxy.log")
-        result["agent"] = add_proxy_waits(price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log"),
-                                          trial_dir / "proxy.log")
+        if settings.harness != pi.NAME:  # Pi's summary priced each call already
+            agent = price_agent(agent, model, trial_dir / "agent.jsonl", trial_dir / "proxy.log")
+        result["agent"] = add_proxy_waits(agent, trial_dir / "proxy.log")
         if not ticket:
             charge(trial_dir, "agent", model.key, result["agent"].get("cost_usd"))
         charged = True
@@ -729,7 +894,7 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         # A finished top-level process is not proof its detached children stopped.
         # Destroy the entire agent VM BEFORE any hidden tests leave this host.
         step = "tests"
-        stage(live, "tests", started_at=result["started_at"], diff=result["diff"])
+        stage(live, "tests", **since, diff=result["diff"])
         runtime.delete(container)
         alive.remove(container)
         reason, result["verifier_setup"] = verifier_ready.result()
@@ -777,11 +942,12 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
     if result.get("cleanup_error"):
         return finish("invalid", "sandbox-cleanup-error", log="error.log")
     if not patch.strip():
-        result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
+        if settings.judge is not None:  # a run with judges says why they weren't asked
+            result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
         return finish("failed")
     if settings.judge is None:
         return finish("solved" if tests["passed"] else "failed")
-    stage(live, "judge", started_at=result["started_at"], diff=result["diff"], tests_passed=tests["passed"])
+    stage(live, "judge", **since, diff=result["diff"], tests_passed=tests["passed"])
     result["judge"], outcome, reason = judge_attempt(settings.judge, task, patch, tests, test_output, trial_dir)
     return finish(outcome, reason)
 
@@ -990,22 +1156,33 @@ def lost_trials(job_dir: Path) -> int:
     return sum(lost(json.loads(p.read_text())) for p in (job_dir / "trials").glob("*/result.json"))
 
 
-def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path) -> list[tuple]:
-    """Trials not finished in `job_dir`, or lost to infrastructure, attempt-major, so a stopped run is balanced."""
+def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, tries: int = 1) -> list[tuple]:
+    """Trials not finished in `job_dir`, lost to infrastructure, or failed with tries left (a stop between
+    tries, or a resume that raised --tries), attempt-major, so a stopped run is balanced."""
     pending = []
     for attempt in range(1, attempts + 1):
         for task in tasks:
             for model in models:
                 path = job_dir / "trials" / trial_name(task, model, attempt)
                 done = path / "result.json"
-                if not done.is_file() or lost(json.loads(done.read_text())):
+                result = json.loads(done.read_text()) if done.is_file() else None
+                if not result or lost(result) or tries_left(result, tries):
                     pending.append((task, model, attempt, path))
     return pending
 
 
-def trial_runner(models: list[Model], settings: Settings, run_id: str):
+def tries_left(result: dict, tries: int) -> bool:
+    """Whether an attempt the model failed may still be tried again under the run's `tries`."""
+    return result.get("outcome") == "failed" and (result.get("try") or 1) < tries
+
+
+def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: int = 1):
     """Runs one pending trial within its model's own limit, and once more if it was lost to something
-    passing (causes.transient). A broken trial is saved, never raised."""
+    passing (causes.transient). A broken trial is saved, never raised.
+
+    A try the model fails (tests fail, judges on a run with them say no, it gave up or ran out of time) is
+    followed by another from scratch, up to `tries` in all, the same for every model; the first that solves
+    it ends the attempt. A try lost to infrastructure isn't one of them: it keeps the handling above."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
 
     def once(job, ready: Ready | None) -> dict:
@@ -1023,16 +1200,24 @@ def trial_runner(models: list[Model], settings: Settings, run_id: str):
                 write_json(path / "result.json", result)
             return result
 
+    def one_try(job, ready: Ready | None) -> dict:
+        result = once(job, ready)
+        if result.get("transient") and not STOPPING.is_set():
+            first = {k: result.get(k) for k in ("invalid_reason", "step", "cause")}
+            print(f"  {result['trial']}: {result['cause']} Trying it once more.", flush=True)
+            result = once(job, None)
+            result["first_try"] = first
+            if result.get("outcome") != "interrupted":
+                write_json(job[3] / "result.json", result)
+        return result
+
     def trial(job, ready: Ready | None = None) -> dict:
         with limits[job[1].key]:
-            result = once(job, ready)
-            if result.get("transient") and not STOPPING.is_set():
-                first = {k: result.get(k) for k in ("invalid_reason", "step", "cause")}
-                print(f"  {result['trial']}: {result['cause']} Trying it once more.", flush=True)
-                result = once(job, None)
-                result["first_try"] = first
-                if result.get("outcome") != "interrupted":
-                    write_json(job[3] / "result.json", result)
+            result = one_try(job, ready)
+            while tries_left(result, tries) and not STOPPING.is_set():
+                print(f"  {result['trial']}: not solved on try {result.get('try') or 1} of {tries}. "
+                      "Trying again from scratch.", flush=True)
+                result = one_try(job, None)
             return result
 
     return trial
@@ -1117,10 +1302,10 @@ def fit(requested: int, free_mb: int | None = None) -> tuple[int, int, int | Non
 
 
 def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-        run_id: str, on_result=None) -> None:
+        run_id: str, on_result=None, tries: int = 1) -> None:
     """Run every trial not already finished in `job_dir`, a few at a time. Raises Halted if they all fail alike."""
-    pending = pending_trials(tasks, models, attempts, job_dir)
-    in_parallel(pending, trial_runner(models, settings, run_id), settings.concurrency, run_id, on_result,
+    pending = pending_trials(tasks, models, attempts, job_dir, tries)
+    in_parallel(pending, trial_runner(models, settings, run_id, tries), settings.concurrency, run_id, on_result,
                 halt=SameFailure())
 
 
@@ -1143,7 +1328,7 @@ class Verdict:
 
 
 def check_and_run(candidates: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-                  run_id: str, on_checked=None, on_result=None) -> None:
+                  run_id: str, on_checked=None, on_result=None, tries: int = 1) -> None:
     """Check the tasks and run the models on each one as soon as its own check passes.
 
     Checks and trials share the run's sandboxes, checks first, so a slow check holds up
@@ -1154,7 +1339,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
     total)` every trial, where total counts the trials of tasks that have passed so far.
     """
     todo = [t for t in candidates if needs_check(t, settings)]
-    trial = trial_runner(models, settings, run_id)
+    trial = trial_runner(models, settings, run_id, tries)
     verdicts = {t.id: Verdict() for t in todo}
     unchecked, trials_done, trials_total = len(candidates), 0, 0
 
@@ -1165,7 +1350,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
             on_checked(task, status, unchecked)
         if status != "valid":
             return []
-        trials = pending_trials([task], models, attempts, job_dir)
+        trials = pending_trials([task], models, attempts, job_dir, tries)
         trials_total += len(trials)
         return trials
 
@@ -1173,7 +1358,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
     for task in candidates:
         if task not in todo:
             jobs += [("trial", t) for t in checked(task, validation_status(task, settings))]
-    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir)]
+    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir, tries)]
 
     def check(task: Task) -> dict:
         status = None

@@ -1,7 +1,7 @@
 """An attempt's trace: what the agent read, ran, thought and said, step by step.
 
-Claude Code's log of an attempt (agent.jsonl, stream-json) is large and mostly streaming
-noise. The page shows a condensed copy: each message, tool call and tool result in order,
+The agent's log of an attempt (agent.jsonl: Pi's JSON events, or Claude Code's stream-json)
+is large and mostly streaming noise. The page shows a condensed copy: each message, tool call and tool result in order,
 long outputs clipped, and anything that looks like a credential masked. A hosted page
 gets the same condensed copy (trace.json) instead of the log itself.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config
@@ -47,9 +47,17 @@ def short(path: str) -> str:
     return path.removeprefix(WORKSPACE) if isinstance(path, str) else str(path)
 
 
+# Pi's tools take what Claude Code's do, under other names.
+PI_TOOLS = {"bash": "Bash", "read": "Read", "edit": "MultiEdit", "write": "Write"}
+
+
 def describe(tool: str, args: dict) -> tuple[str, str | None]:
     """A tool call as a one-line title and, when there is more to it, the detail."""
     a = args if isinstance(args, dict) else {}
+    if tool in PI_TOOLS:
+        a = {**a, "file_path": a.get("path"), "edits": [{"old_string": e.get("oldText", ""), "new_string": e.get("newText", "")}
+                                                      for e in a.get("edits") or [] if isinstance(e, dict)]}
+        tool = PI_TOOLS[tool]
     if tool == "Bash":
         command = str(a.get("command", ""))
         first = command.strip().splitlines()[0] if command.strip() else ""
@@ -103,6 +111,25 @@ def agent_seconds(trial_dir: Path) -> float | None:
         return None
 
 
+def as_stream_json(event: dict) -> dict:
+    """A Pi event as Claude Code would have logged it: a finished answer as an assistant message, a tool's
+    result as a user message. Everything else stays as it is."""
+    message = event.get("message") if event.get("type") == "message_end" else None
+    if not isinstance(message, dict):
+        return event
+    if message.get("role") == "assistant":
+        blocks = [{"type": "tool_use", "id": b.get("id"), "name": b.get("name", ""), "input": b.get("arguments") or {}}
+                  if b.get("type") == "toolCall" else b for b in message.get("content") or [] if isinstance(b, dict)]
+        return {"type": "assistant", "message": {"content": blocks}}
+    if message.get("role") == "toolResult":
+        stamp = message.get("timestamp")
+        return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": message.get("toolCallId"),
+                                                         "content": message.get("content"), "is_error": message.get("isError")}]},
+                "timestamp": datetime.fromtimestamp(stamp / 1000, timezone.utc).isoformat()
+                if isinstance(stamp, (int, float)) else None}
+    return event
+
+
 def condense(trial_dir: Path) -> dict | None:
     """The condensed, redacted trace of one attempt, or None before its log exists."""
     log = trial_dir / "agent.jsonl"
@@ -112,6 +139,7 @@ def condense(trial_dir: Path) -> dict | None:
     calls: dict[str, dict] = {}
     hidden = dropped = 0
     finished = None
+    answers, stopped = 0, None  # Pi's: it reports no result, only that the agent ended
     times: list[tuple[dict, datetime]] = []
     with log.open(errors="replace") as lines:
         for line in lines:
@@ -119,6 +147,16 @@ def condense(trial_dir: Path) -> dict | None:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "agent_end":
+                failed = stopped in ("error", "aborted")
+                finished = {"turns": answers, "seconds": agent_seconds(trial_dir), "error": failed,
+                            "subtype": "error" if failed else "success"}
+                continue
+            if event.get("type") == "message_end" and (event.get("message") or {}).get("role") == "assistant":
+                answers, stopped = answers + 1, event["message"].get("stopReason")
+            event = as_stream_json(event)
             kind, nested = event.get("type"), bool(event.get("parent_tool_use_id"))
             if kind == "result":
                 finished = {"turns": event.get("num_turns"), "seconds": (event.get("duration_ms") or 0) / 1000 or None,

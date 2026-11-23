@@ -17,14 +17,12 @@ import sys
 import threading
 import time
 import tomllib
-import urllib.error
-import urllib.request
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from . import causes, config, meter, pipeline, report, runner, runtime, tasks, trace
+from . import causes, commands, config, meter, pipeline, report, runner, runtime, tasks, trace
 from .pipeline import alive, repo_of
 from .rundir import ACCESS, OVER_LIMIT, SPEND_LEDGER, read_json
 
@@ -42,20 +40,14 @@ BEAUSITE = {w: f"BeausiteClassic-{w}.woff2" for w in ("350", "400", "500")}
 FONT_FILE = re.compile(r"/fonts/(BeausiteClassic-(?:350|400|500)\.woff2)")
 MAX_LIMIT = 50
 PICK_COUNT, MAX_PICK_COUNT = 30, 90  # latest merges the picker lists at first, and at most
-QUICK_CONCURRENCY = 20  # every attempt of the quick sample with two models starts at once
-# Hosted, people can sign in with GitHub (device flow: a GitHub App's client id, no secret). The app
-# reads only Contents, Pull requests and Metadata, and only on the repositories each person installs
-# it on. Their token, kept in memory only, reads and clones those private repositories for them.
-# Hosted, every run is its starter's alone to see, whatever the repository. The sign-in server in front of the hosted
-# page (@blaxel/sign-in) names who is asking in USER_HEADER, after dropping any value the browser
-# sent itself; locally there is no sign-in and no header, and the `gh` login reads everything.
-GITHUB_CLIENT_ID = os.environ.get("PR_EVAL_GITHUB_CLIENT_ID")
-GITHUB_APP = os.environ.get("PR_EVAL_GITHUB_APP")  # the app's slug, for the page that adds repositories to it
-# Hosted, the page reads public repositories with its own token: a fine-grained token that can read public
-# repositories only, so nobody needs to sign in with GitHub for them. A person's own GitHub sign-in is for
-# their private repositories. Without the token, every run reads with its starter's own sign-in.
+QUICK_CONCURRENCY = 20  # quick-sample attempts at once; with three models, the rest start as the first end
+# The sign-in server in front of the hosted page (@blaxel/sign-in) names who is asking in USER_HEADER, after
+# dropping any value the browser sent itself; locally there is no sign-in and no header, and the `gh` login
+# reads everything. Hosted (see hosted()), the page runs public repositories only and nobody signs in with
+# GitHub: it reads them with its own token, a fine-grained token that can read public repositories and nothing
+# else. Without that token, the hosted page runs the quick sample only.
 PAGE_GITHUB_TOKEN = os.environ.get("PR_EVAL_GITHUB_TOKEN")
-SIGN_IN_FIRST = "Sign in with GitHub to start a run: the eval reads repositories with your own GitHub login."
+NO_PAGE_TOKEN = "This page runs the quick sample only: it has no GitHub token for public repositories yet."
 USER_HEADER = "x-forwarded-email"
 # Hosted: the public origin. The sign-in server has checked a write's Origin against it before passing it on.
 APP_ORIGIN = os.environ.get("APP_ORIGIN")
@@ -69,8 +61,8 @@ RUNS_PER_PERSON = int(os.environ.get("PR_EVAL_RUNS_PER_PERSON") or 1)
 SPEND_TOTAL = float(os.environ.get("PR_EVAL_SPEND_TOTAL") or 0) or None
 SPEND_PER_PERSON = float(os.environ.get("PR_EVAL_SPEND_PER_PERSON") or 0) or None
 SPEND_WINDOW = timedelta(days=1)
-# What a run's attempt with a model no earlier run priced counts toward those limits: this, or the dearest
-# attempt any model has cost so far if that's more. Guessing low would let an unpriced model run past them.
+# What a run's try with a model no earlier run priced counts toward those limits: this, or the dearest
+# try any model has cost so far if that's more. Guessing low would let an unpriced model run past them.
 UNKNOWN_ATTEMPT_COST = 5.0
 # What one judge's answer with no price counts: well over any measured so far (about $0.05 to $0.15).
 UNKNOWN_JUDGE_COST = 0.25
@@ -94,6 +86,11 @@ def parse_repo(text: str) -> str | None:
 def quick_scope() -> str:
     """The quick sample's repositories as an estimate's scope: lower case, sorted, comma-joined."""
     return ",".join(sorted(r.lower() for r in tasks.sample(True)))
+
+
+def hosted() -> bool:
+    """Whether this is the hosted page (`hosted/deploy.py` sets PR_EVAL_PUBLIC_REPOS_ONLY): public repositories only."""
+    return bool(os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"))
 
 
 def internal(email: str | None) -> bool:
@@ -126,8 +123,6 @@ class App:
         self.task_info: dict[Path, dict] = {}
         self.browsed: dict[str, tuple[float, dict]] = {}  # PR listings, kept a few minutes
         self.repos: dict[str, tuple[float, dict]] = {}  # GitHub's answer about each repository, kept a minute
-        self.github: dict[str, dict] = {}  # signed-in person: their GitHub token and login, never on disk
-        self.devices: dict[str, dict] = {}  # GitHub sign-ins waiting for the person to approve them
         self.claims: dict[str, set[str] | None] = {}  # repositories of each run started here, before its run.json
         self.halted: dict[str, int] = {}  # runs stopped for spending, and the process each was told to stop
         self.favorites_file = jobs_dir.parent / "data" / "favorites.json"
@@ -139,7 +134,7 @@ class App:
     def state(self, viewing: str = "", user: str | None = None) -> dict:
         for child in list(self.children.values()):
             child.poll()
-        catalog, judge = config.load(self.models_config)
+        catalog, _ = config.load(self.models_config)
         everyone = self.everyone()
         admin = self.admin(user)
         runs = []
@@ -161,12 +156,16 @@ class App:
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "maker": m.maker, "model": m.model,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
-        return {"checks": self.checks(judge), "models": models, "runs": runs,
-                "quick": quick_sample(),
-                "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
+        return {"checks": self.checks(), "models": models, "runs": runs,
+                "quick": quick_sample(), "tries": pipeline.DEFAULT_TRIES,
+                "max_limit": MAX_LIMIT,
+                # Which PRs can be tasks, for the page's guidance: a repository's list keeps PRs up to `lines`,
+                # a PR named by its link may go up to `pasted_lines`.
+                "pr_size": {"lines": tasks.DEFAULT_MAX_LINES, "pasted_lines": tasks.MAX_LINES, "files": tasks.MAX_FILES},
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
-                "github": self.github_state(user), "favorites": self.favorites(user), "admin": admin}
+                "github": {"hosted": hosted(), "public": bool(PAGE_GITHUB_TOKEN)},
+                "favorites": self.favorites(user), "admin": admin}
 
     def everyone(self) -> list[tuple[Path, dict]]:
         """Every run, whoever may see it, but the deploy's smoke tests (hosted/deploy.py): no one's to see or limit."""
@@ -232,11 +231,11 @@ class App:
         return stopped
 
     def unpriced(self, everyone: list[tuple[Path, dict]]) -> dict[str, float]:
-        """What an agent attempt that ran but has no price counts, by model: its latest cost per attempt, else
-        UNKNOWN_ATTEMPT_COST or the dearest attempt seen, whichever is more. Key "" is that fallback."""
+        """What an agent try that ran but has no price counts, by model: its latest cost per try, else
+        UNKNOWN_ATTEMPT_COST or the dearest try seen, whichever is more. Key "" is that fallback."""
         found = self.estimates(sorted((r for _, r in everyone), key=lambda r: r["active_at"], reverse=True))
-        each = {key: e["cost_per_attempt"] for key, e in found.items()}
-        dearest = [c for e in found.values() for c in [e["cost_per_attempt"], *(s["cost_per_attempt"] for s in e["by_scope"].values())]]
+        each = {key: e["cost_per_try"] for key, e in found.items()}
+        dearest = [c for e in found.values() for c in [e["cost_per_try"], *(s["cost_per_try"] for s in e["by_scope"].values())]]
         return {**each, "": max([UNKNOWN_ATTEMPT_COST, *dearest])}
 
     def pid(self, run_id: str) -> int | None:
@@ -246,25 +245,24 @@ class App:
             return child.pid
         return (read_json(self.jobs_dir / run_id / "run.json").get("status") or {}).get("pid")
 
-    def checks(self, judge: config.Panel) -> dict:
+    def checks(self) -> dict:
         """Baseten Sandboxes, the trial image and GitHub. The remote checks take seconds, so only the
         first waits for them: after that the page gets the last answer, and one older than 15 seconds
         is checked again in the background."""
         when, cached = self.checked
         if not cached:
             with self.checking:
-                cached = self.checked[1] or self.check(judge)
+                cached = self.checked[1] or self.check()
         elif time.monotonic() - when > 15 and self.checking.acquire(blocking=False):
             def refresh():
                 try:
-                    self.check(judge)
+                    self.check()
                 finally:
                     self.checking.release()
             threading.Thread(target=refresh, daemon=True).start()
-        return {**cached, "judge": {"label": judge.label, "chair": judge.chair.name if judge.chair else None,
-                                    "effort": judge.judges[0].effort, "ok": not cached["judge"], "problem": cached["judge"]}}
+        return {**cached}
 
-    def check(self, judge: config.Panel) -> dict:
+    def check(self) -> dict:
         problem = None
         image = False
         try:
@@ -272,14 +270,14 @@ class App:
             image = runtime.image_exists(runner.DEFAULT_IMAGE)
         except RuntimeError as exc:
             problem = str(exc)
-        gh = not GITHUB_CLIENT_ID and bool(shutil.which("gh")) \
+        gh = not hosted() and bool(shutil.which("gh")) \
             and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
         try:
             gh_login = tasks.gh("user").get("login") if gh else None
         except (RuntimeError, SystemExit, subprocess.SubprocessError):
             gh_login = None
         checked = {"sandboxes": problem is None, "sandboxes_problem": problem,
-                   "gh": gh, "gh_login": gh_login, "image": image, "judge": judge.problem()}
+                   "gh": gh, "gh_login": gh_login, "image": image}
         self.checked = (time.monotonic(), checked)
         return checked
 
@@ -342,6 +340,7 @@ class App:
             "active_at": max(last),  # ISO times in UTC sort as text
             "models": [{"key": m["key"], "label": m["label"], "kind": m.get("kind"), "model": m.get("model")} for m in models],
             "phase": phase, "detail": detail, "note": meta.get("note"), "judged": bool(meta.get("judge")),
+            "step": status.get("step") if phase == "collecting" else None, "commands": meta.get("commands") or {},
             "progress": {"done": done, "total": total},
             "checking": {"done": sum((tasks_dir / c / "validation" / "result.json").is_file() for c in candidates),
                          "total": len(candidates)},
@@ -412,7 +411,8 @@ class App:
 
     def estimates(self, runs: list[dict]) -> dict[str, dict]:
         """Cost and time per attempt for each model, from the most recent run that has them, and from the
-        most recent over each set of repositories (`by_scope`): a large repository costs far more per attempt."""
+        most recent over each set of repositories (`by_scope`): a large repository costs far more per attempt.
+        Measured per try, then counted for an attempt of up to DEFAULT_TRIES tries (see expected_tries)."""
         found: dict[str, dict] = {}
         for run in runs:  # newest first
             job_dir = self.jobs_dir / run["id"]
@@ -421,7 +421,7 @@ class App:
             scope = ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
             for key, s in (read_json(job_dir / "report.json").get("summary") or {}).items():
                 if s.get("valid") and s.get("cost_per_attempt") is not None:
-                    each = {"cost_per_attempt": s["cost_per_attempt"], "seconds_per_attempt": s["median_seconds"]}
+                    each = per_try(s)
                     found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(scope, each)
         return found
 
@@ -429,48 +429,41 @@ class App:
         repo = parse_repo(text)
         if not repo:
             return {"error": "Use owner/repo or a GitHub link."}
-        token = self.reader(user)
-        if GITHUB_CLIENT_ID and not token:
-            return {"repo": repo, "error": f"Sign in with GitHub so the eval can read {repo}."}
-        own = token == self.token(user)  # their own sign-in, not the page's public-only token
+        if hosted() and not PAGE_GITHUB_TOKEN:
+            return {"repo": repo, "error": NO_PAGE_TOKEN}
         # The page asks about a repository several times as it's picked (its pull requests, the saved
-        # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept: after
-        # adding the repository to the GitHub App, the person comes back and the page looks again.
-        key = f"{user if own else ''}|{repo.lower()}"
+        # ones, a search, the start), so GitHub's answer is kept a minute. A failure isn't kept.
+        key = repo.lower()
         when, data = self.repos.get(key, (0.0, None))
         if not data or time.monotonic() - when > 60:
             try:
-                data = tasks.gh(f"repos/{repo}", token)
+                data = tasks.gh(f"repos/{repo}", PAGE_GITHUB_TOKEN)
             except (RuntimeError, SystemExit) as exc:
-                if not own:  # the page's token reads public repositories only: a private one reads as missing
-                    return {"repo": repo, "error": f"Can't read {repo}: if it's private, sign in with GitHub."}
-                if token and "HTTP 401" in str(exc):  # their sign-in ran out, or they revoked it on GitHub
-                    self.github.pop(user, None)
-                    return {"repo": repo, "error": "Your GitHub sign-in ran out. Sign in with GitHub again."}
-                if token and GITHUB_APP:  # a private repository the app isn't installed on reads as missing
-                    return {"repo": repo, "install": install_url(),
-                            "error": f"Can't read {repo} yet: add it to Baseten Eval Sandbox on GitHub, then come back."}
+                if PAGE_GITHUB_TOKEN:  # it reads public repositories only: a private one reads as missing
+                    return {"repo": repo, "error": f"Can't read {repo}. This page runs public repositories only."}
                 return {"repo": repo, "error": f"Can't read {repo} with your GitHub login ({str(exc)[-80:]})."}
             self.repos[key] = (time.monotonic(), data)
-        # Without GitHub sign-in, a page that runs public repositories only never reads private code.
-        if data.get("private") and (os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY") or not own) and not self.token(user):
-            return {"repo": repo, "error": "Sign in with GitHub to use a private repository." if GITHUB_CLIENT_ID
-                    else "This hosted page runs public repositories only."}
+        # A page that runs public repositories only never reads private code, even if its token could.
+        if data.get("private") and (hosted() or PAGE_GITHUB_TOKEN):
+            return {"repo": repo, "error": "This hosted page runs public repositories only."}
         language = data.get("language") or "unknown"
         try:
             tasks.recipe(repo, language, [])
             defaults = True
         except tasks.Skip:
             defaults = False
-        return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults}
+        # Commands an earlier run worked out for it: the form fills them in; left empty, the run uses them anyway.
+        kept = None if commands.curated(repo) else commands.saved(repo)
+        return {"repo": repo, "language": language, "private": data.get("private"), "defaults": defaults,
+                "commands": {k: kept[k] for k in ("setup", "test", "at")} if kept else None}
 
     def pulls(self, text: str, numbers: str = "", count: str = "", words: str = "", user: str | None = None) -> dict:
         """Pull requests in a repository and which can be tasks: these numbers, the merged ones GitHub
         finds for these words, or the latest `count` merged."""
         repo, wanted = parse_repo(text), [int(n) for n in re.findall(r"\d+", numbers)][:MAX_LIMIT]
         latest = min(max(int(count) if count.isdigit() else PICK_COUNT, 1), MAX_PICK_COUNT)
-        token = self.reader(user)
-        key = f"{user if self.token(user) else ''}|{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
+        token = PAGE_GITHUB_TOKEN
+        key = f"{repo}#{','.join(map(str, wanted))}@{latest}?{words.strip().lower()}"
         when, found = self.browsed.get(key, (0.0, None))
         if found and time.monotonic() - when < 300:  # a listing found a moment ago: GitHub isn't asked at all
             return found
@@ -516,21 +509,19 @@ class App:
         repo = None if quick or pulls else parse_repo(str(form.get("repo") or ""))
         if not (quick or pulls or repo):
             return {"error": "Enter a GitHub repository as owner/repo, or paste pull request links."}
-        # The quick sample's tasks, once collected, are only read: a run of them needs no GitHub sign-in. Public
-        # repositories need none either when the page has its own token; the checks below refuse a private one.
-        if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):
-            return {"error": SIGN_IN_FIRST}
-        if not GITHUB_CLIENT_ID and not checks["gh"]:
+        # The quick sample's tasks, once collected, are only read: a run of them needs nothing from GitHub. Hosted,
+        # public repositories are read with the page's own token; the checks below refuse a private one.
+        if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
+            return {"error": NO_PAGE_TOKEN}
+        if not hosted() and not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
             return {"error": "Choose at least one model."}
-        try:  # the judges were checked with the page's other checks, a few seconds ago: asking them again took seconds
+        try:  # the models' keys: the page's runs are graded on their hidden tests alone, so no judge is asked
             pipeline.preflight(keys, "none", self.models_config)
         except SystemExit as exc:
             return {"error": str(exc.code)}
-        if checks["judge"]["problem"]:
-            return {"error": checks["judge"]["problem"]}
         try:
             limit = int(form.get("limit") or pipeline.DEFAULT_LIMIT)
         except ValueError:
@@ -547,9 +538,6 @@ class App:
             if info.get("error"):
                 return info
             private = private or bool(info.get("private"))
-            if not info["defaults"] and not (setup and test):
-                return {"error": f"{name} is {info['language']}: give the install and test commands "
-                                 "(Go and Python repositories have defaults)."}
         claim = None if quick else {name.lower() for name in repos}
         if problem := self.taken(claim) or self.over_budget(state, keys, state["quick"]["tasks"] if quick else
                                                             sum(map(len, pulls.values())) or limit,
@@ -562,14 +550,14 @@ class App:
             run_id = f"{named}-{n}"
         argv = [f"{name}#{n}" for name, numbers in pulls.items() for n in numbers] or ([repo] if repo else [])
         argv += ["--quick", "--concurrency", str(QUICK_CONCURRENCY)] if quick else [] if pulls else ["--limit", str(limit)]
-        argv += ["--models", ",".join(keys), "--name", run_id, "--judges-checked"]
+        argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         if user:  # whose run it is: only they see it, and it counts toward their limits
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
             (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
         self.claims[run_id] = claim
-        self.spawn(run_id, argv, self.reader(user))
+        self.spawn(run_id, argv)
         return {"id": run_id}
 
     def taken(self, claim: set[str] | None, resuming: str | None = None) -> str | None:
@@ -599,18 +587,21 @@ class App:
         return {name.lower() for name in [*named, *map(repo_of, meta.get("candidates") or meta.get("tasks") or [])]}
 
     @staticmethod
-    def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None) -> str | None:
-        """Why a run of `count` pull requests with these models would go over a spending limit, from each
-        model's cost per attempt as the page estimates it. A model with no earlier run counts as
-        UNKNOWN_ATTEMPT_COST or the dearest attempt seen, whichever is more."""
+    def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None,
+                    tries: int = pipeline.DEFAULT_TRIES) -> str | None:
+        """Why a run of `count` pull requests with these models, up to `tries` tries each, would go over a
+        spending limit, from each model's cost per try and how often it needed another, as the page
+        estimates them. A model with no earlier run counts as UNKNOWN_ATTEMPT_COST or the dearest try seen,
+        whichever is more, for every try."""
         if not (SPEND_TOTAL or (SPEND_PER_PERSON and user)):
             return None
         known = {m["key"]: m for m in state["models"]}
-        seen = [each["cost_per_attempt"] for m in state["models"]
-                for each in [m, *(m.get("by_scope") or {}).values()] if each.get("cost_per_attempt") is not None]
-        unknown = max([UNKNOWN_ATTEMPT_COST, *seen])
-        estimate = [((known.get(key, {}).get("by_scope") or {}).get(scope) or known.get(key, {})).get("cost_per_attempt")
-                    for key in dict.fromkeys(keys)]
+        seen = [each["cost_per_try"] for m in state["models"]
+                for each in [m, *(m.get("by_scope") or {}).values()] if each.get("cost_per_try") is not None]
+        unknown = max([UNKNOWN_ATTEMPT_COST, *seen]) * tries
+        found = [(known.get(key, {}).get("by_scope") or {}).get(scope) or known.get(key, {}) for key in dict.fromkeys(keys)]
+        estimate = [None if each.get("cost_per_try") is None else
+                    each["cost_per_try"] * expected_tries(each.get("solve_rate"), tries) for each in found]
         cost = sum(unknown if each is None else each for each in estimate) * count
         mine = state.get("spend")
         if mine and cost > mine["cap"] - mine["spent"]:
@@ -661,16 +652,19 @@ class App:
         quick = self.repos_of(self.jobs_dir / run_id) is None
         # What it has left to run must fit what's left of the limits, as a new run's would.
         keys = [m["key"] for m in run["models"]]
-        left = run["progress"]["total"] - run["progress"]["done"] + run["lost"]
+        tries = read_json(self.jobs_dir / run_id / "run.json").get("tries", 1)  # the run's own, as it resumes with them
+        # Attempts stopped between tries count too: they run again from their next try.
+        again = sum(runner.tries_left(read_json(p), tries) for p in (self.jobs_dir / run_id / "trials").glob("*/result.json"))
+        left = run["progress"]["total"] - run["progress"]["done"] + run["lost"] + again
         scope = quick_scope() if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
-        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user)):
+        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user, tries)):
             return {"error": problem}
-        if GITHUB_CLIENT_ID and not self.reader(user) and not (quick and quick_collected()):
-            return {"error": "Sign in with GitHub to resume a run: the eval reads repositories with your own GitHub login."}
-        if read_json(self.jobs_dir / run_id / ACCESS).get("private") and not self.token(user):
-            return {"error": "Sign in with GitHub to resume a run on a private repository."}
+        if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
+            return {"error": NO_PAGE_TOKEN}
+        if hosted() and read_json(self.jobs_dir / run_id / ACCESS).get("private"):
+            return {"error": "This run is on a private repository, and this page runs public repositories only now."}
         (self.jobs_dir / run_id / OVER_LIMIT).unlink(missing_ok=True)
-        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)], self.reader(user))
+        self.spawn(run_id, ["--resume", str(self.jobs_dir / run_id)])
         return {"id": run_id}
 
     def manageable_run(self, run_id: str, user: str | None = None) -> dict | None:
@@ -689,10 +683,10 @@ class App:
         admins = read_json(self.access_file).get("admins") if user else None
         return isinstance(admins, list) and user.strip().lower() in {str(a).strip().lower() for a in admins}
 
-    def spawn(self, run_id: str, argv: list[str], github_token: str | None = None) -> None:
+    def spawn(self, run_id: str, argv: list[str]) -> None:
         """`pr-eval run` in a process of its own, so it outlives the page and the server.
 
-        With a visitor's GitHub token, the run reads and clones with it instead of the local `gh` login.
+        With the page's own GitHub token, the run reads and clones with it instead of the local `gh` login.
         """
         with self.lock:
             job_dir = self.jobs_dir / run_id
@@ -700,83 +694,8 @@ class App:
             with open(job_dir / "log.txt", "ab") as log:
                 self.children[run_id] = subprocess.Popen(
                     [sys.executable, "-m", "eval_sandbox", "run", *argv, "--jobs", str(self.jobs_dir)], cwd=pipeline.ROOT,
-                    env={**os.environ, "GH_TOKEN": github_token} if github_token else None,
+                    env={**os.environ, "GH_TOKEN": PAGE_GITHUB_TOKEN} if PAGE_GITHUB_TOKEN else None,
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-
-    # ---------- GitHub sign-in (hosted) ----------
-
-    # GitHub's deadlines follow the clock, not time.monotonic(): the hosted sandbox sleeps when nobody
-    # uses it, and monotonic time stands still while it does.
-
-    def token(self, user: str | None) -> str | None:
-        signed_in = self.github.get(user) if user else None
-        if signed_in and time.time() > signed_in["until"]:  # GitHub's tokens for the page last 8 hours
-            self.github.pop(user, None)
-            return None
-        return signed_in and signed_in["token"]
-
-    def reader(self, user: str | None) -> str | None:
-        """The GitHub token that reads for this person: their own sign-in, else the page's public-only token."""
-        return self.token(user) or PAGE_GITHUB_TOKEN
-
-    def github_state(self, user: str | None) -> dict:
-        """Who reads GitHub for this person: their own sign-in, or the page's login."""
-        device = self.devices.get(user) if user else None
-        waiting = device and time.time() < device["until"]
-        return {"sign_in": bool(GITHUB_CLIENT_ID and user), "public": bool(PAGE_GITHUB_TOKEN),
-                "login": self.github[user]["login"] if self.token(user) else None,
-                **({"install": install_url()} if GITHUB_APP and self.token(user) else {}),
-                # a sign-in still waiting for GitHub, so a reloaded page shows its code again
-                **({"device": device["shown"]} if waiting else {})}
-
-    def github_device(self, user: str | None) -> dict:
-        """Start a sign-in: a code the person enters on GitHub, approving this page's read of the
-        repositories they install the app on. A GitHub App takes no scope: its permissions are its own."""
-        if not (GITHUB_CLIENT_ID and user):
-            return {"error": "GitHub sign-in isn't set up on this page."}
-        try:
-            got = github_form("https://github.com/login/device/code", {"client_id": GITHUB_CLIENT_ID})
-        except (OSError, ValueError) as exc:
-            return {"error": f"GitHub didn't answer ({exc})."}
-        if not got.get("device_code"):
-            return {"error": got.get("error_description") or "GitHub refused to start a sign-in."}
-        interval = int(got.get("interval") or 5)
-        shown = {"user_code": got["user_code"], "verification_uri": got["verification_uri"], "interval": interval}
-        self.devices[user] = {"code": got["device_code"], "interval": interval, "shown": shown,
-                              "until": time.time() + int(got.get("expires_in") or 900)}
-        return shown
-
-    def github_poll(self, user: str | None) -> dict:
-        """Whether the person has approved the sign-in yet; the page asks every few seconds."""
-        device = self.devices.get(user) if user else None
-        if not device or time.time() > device["until"]:
-            self.devices.pop(user, None)
-            return {"error": "The sign-in code expired. Start again."}
-        try:
-            got = github_form("https://github.com/login/oauth/access_token", {
-                "client_id": GITHUB_CLIENT_ID, "device_code": device["code"],
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
-        except (OSError, ValueError):
-            return {"pending": True, "interval": device["interval"]}  # asked again at the next poll
-        if got.get("error") in ("authorization_pending", "slow_down"):
-            if got["error"] == "slow_down":
-                device["interval"] += 5
-            return {"pending": True, "interval": device["interval"]}
-        self.devices.pop(user, None)
-        if not got.get("access_token"):
-            return {"error": got.get("error_description") or "GitHub didn't sign you in."}
-        try:
-            login = tasks.gh("user", got["access_token"]).get("login")
-        except (RuntimeError, SystemExit):
-            login = None
-        self.github[user] = {"token": got["access_token"], "login": login,
-                             "until": time.time() + int(got.get("expires_in") or 8 * 3600) - 60}
-        return {"login": login}
-
-    def github_sign_out(self, user: str | None) -> dict:
-        self.github.pop(user, None)
-        self.devices.pop(user, None)
-        return {"ok": True}
 
     # ---------- favorite pull requests ----------
 
@@ -809,7 +728,7 @@ def quick_sample() -> dict:
     sample = tasks.sample(True)
     left_out = quick_left_out()
     return {"tasks": sum(len(prs) for prs in sample.values()) - len(left_out), "repos": len(sample),
-            "names": list(sample), "ready": quick_collected()}
+            "names": list(sample), "ready": quick_collected(), "at_once": QUICK_CONCURRENCY}
 
 
 def quick_left_out() -> set[str]:
@@ -847,6 +766,26 @@ def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | Non
     return total, by_owner
 
 
+def per_try(s: dict) -> dict:
+    """A model's cost, time and solve rate per try from its summary in a report, and what an attempt of up to
+    DEFAULT_TRIES tries comes to. A report from before tries were recorded has one try per attempt."""
+    tries = s.get("tries") or s["valid"]
+    cost = s.get("cost_per_try", s["cost_per_attempt"])
+    seconds = s.get("median_seconds_per_try", s.get("median_seconds"))
+    rate = (s.get("solved") or 0) / tries if tries else None
+    expected = expected_tries(rate, pipeline.DEFAULT_TRIES)
+    return {"cost_per_attempt": cost * expected, "seconds_per_attempt": None if seconds is None else seconds * expected,
+            "tries_per_attempt": expected, "cost_per_try": cost, "solve_rate": rate}
+
+
+def expected_tries(solve_rate: float | None, tries: int) -> float:
+    """How many tries an attempt of up to `tries` takes on average: each one after the first runs only when
+    every try before it failed. Without a solve rate to go by, all of them."""
+    if solve_rate is None:
+        return float(tries)
+    return sum((1 - solve_rate) ** n for n in range(tries))
+
+
 def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[str, dict]:
     """A model with no runs yet takes the cost and time per attempt of the first of its `estimate_from` models that
     has them, the cost scaled by the two models' output price."""
@@ -858,7 +797,8 @@ def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[s
             if not mine or not theirs or not theirs.get("output"):
                 continue
             ratio = mine["output"] / theirs["output"]
-            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r}
+            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r,
+                                        **({"cost_per_try": e["cost_per_try"] * r} if "cost_per_try" in e else {})}
             source = found[base.key]
             found[key] = {**scale(source), "by_scope": {k: scale(v) for k, v in source["by_scope"].items()}}
             break
@@ -866,7 +806,7 @@ def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[s
 
 
 def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
-    """A run's charges since `since`. One with no price counts as `unpriced` says for an agent attempt of its
+    """A run's charges since `since`. One with no price counts as `unpriced` says for an agent try of its
     model, or UNKNOWN_JUDGE_COST for a judge's answer: a missing price never reads as free."""
     cost = 0.0
     try:
@@ -888,21 +828,6 @@ def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
     return cost
 
 
-def install_url() -> str:
-    """Where a person picks the repositories the GitHub App may read."""
-    return f"https://github.com/apps/{GITHUB_APP}/installations/new"
-
-
-def github_form(url: str, form: dict) -> dict:
-    """POST a form to GitHub's sign-in endpoints and read the JSON answer."""
-    request = urllib.request.Request(url, data=urlencode(form).encode(), headers={"accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:  # its answer still says why
-        return json.loads(exc.read() or b"{}")
-
-
 def again(meta: dict) -> dict | None:
     """What Run again puts back in the form: the run's pull requests (the ones its check kept, so a
     repository's latest merges stay the same PRs), its models and its commands."""
@@ -922,18 +847,19 @@ def again(meta: dict) -> dict | None:
 
 
 def cell(model: str, attempt: int, result: dict) -> dict:
-    """A finished attempt on the board: its outcome, time, cost, and what the tests and judge said."""
-    seconds = None
-    if result.get("started_at") and result.get("finished_at"):
-        seconds = round((datetime.fromisoformat(result["finished_at"])
-                         - datetime.fromisoformat(result["started_at"])).total_seconds())
+    """A finished attempt on the board: its outcome, time, cost (every try's), and what the tests and judge said."""
+    spans = [(x.get("started_at"), x.get("finished_at")) for x in report.tries_of(result)]
+    seconds = round(sum((datetime.fromisoformat(f) - datetime.fromisoformat(s)).total_seconds() for s, f in spans)) \
+        if all(s and f for s, f in spans) else None
+    costs = [(x.get("agent") or {}).get("cost_usd") for x in report.tries_of(result)]
     # Not scored: the step it failed at in a few words, for the cell and the live activity; the attempt's
     # sheet has the whole sentence and its log.
     return {"model": model, "attempt": attempt, "stage": result.get("outcome") or "invalid",
             "reason": causes.short(result), "seconds": seconds,
-            "cost": (result.get("agent") or {}).get("cost_usd"), "diff": result.get("diff"),
+            "cost": None if None in costs else sum(costs), "diff": result.get("diff"),
             "tests_passed": (result.get("tests") or {}).get("passed"),
-            "judge": (result.get("judge") or {}).get("verdict")}
+            "judge": (result.get("judge") or {}).get("verdict"),
+            **({"try": result["try"]} if (result.get("try") or 1) > 1 else {})}
 
 
 def usd(x: float) -> str:
@@ -998,12 +924,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self.app.stop(run_id, user) if action == "stop" else self.app.resume(run_id, user))
         if path == "/api/favorites":
             return self.send_json(self.app.favorite(body, user))
-        if path == "/api/github/device":
-            return self.send_json(self.app.github_device(user))
-        if path == "/api/github/poll":
-            return self.send_json(self.app.github_poll(user))
-        if path == "/api/github/sign-out":
-            return self.send_json(self.app.github_sign_out(user))
         return self.send_error(404)
 
     def with_fonts(self, html: bytes) -> bytes:
@@ -1059,8 +979,8 @@ def watch_spending(page: App) -> None:
 def serve(jobs_dir: Path, port: int, open_browser: bool = True) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
     page = App(jobs_dir)
-    # Check the sandboxes, GitHub and the judge while the server starts, so the first visit doesn't wait.
-    threading.Thread(target=lambda: page.checks(config.load(page.models_config)[1]), daemon=True).start()
+    # Check the sandboxes and GitHub while the server starts, so the first visit doesn't wait.
+    threading.Thread(target=page.checks, daemon=True).start()
     # Delete the private clones and task folders left by runs whose process died, such as when the page last
     # restarted, and private runs' transcripts once they're past keeping; again every hour while the page runs.
     threading.Thread(target=sweep_hourly, args=(jobs_dir,), daemon=True).start()

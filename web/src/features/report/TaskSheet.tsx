@@ -6,7 +6,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { compact, day, dur, plural, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
-import type { Model, Report, Task, Trial, Vote } from "@/lib/types";
+import type { EarlierTry, Model, Report, Task, Trial, Vote } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { taskState, type TrialsFor } from "./TasksTable";
 import { TraceView } from "./TraceView";
@@ -88,6 +88,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
   ];
   const rows: [string, React.ReactNode][] = [];
   if (notScored) rows.push(["Why not scored", r.cause || r.invalid_reason || "unknown"]);
+  if (r.earlier_tries?.length) rows.push(["Tries", <Tries r={r} earlier={r.earlier_tries} />]);
   if (a.timed_out) rows.push(["Time limit", `Stopped at ${dur(a.seconds)}; graded on what it had changed by then.`]);
   if (r.tests) rows.push(["Hidden tests", <Lead word={r.tests.passed ? "Passed" : "Failed"} rest={`${r.tests.summary ? ` · ${r.tests.summary}` : ""}${setAside.length ? ` · on the agent's code alone, its edits to ${plural(setAside.length, "test file")} set aside` : ""}`} />]);
   if (r.judge) rows.push([(r.judge.panel?.length ?? 1) > 1 ? "Judges" : "Judge", r.judge.error ? `Error: ${r.judge.error}` : <Verdicts judge={r.judge} />]);
@@ -98,7 +99,7 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
     <article className="column-rule">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3 pb-3">
         <span className="inline-flex items-center gap-2 text-[16px] font-medium"><Swatch swatch={swatch} size={12} />{m.label}</span>
-        <span className="label-mono text-muted-foreground">Attempt {r.attempt}</span>
+        <span className="label-mono text-muted-foreground">Attempt {r.attempt}{(r.try ?? 1) > 1 ? ` · try ${r.try}` : ""}</span>
         <Badge variant={o.variant} style={r.outcome === "solved" && swatch ? { background: swatch.fill, color: swatch.ink } : undefined}>{o.label}</Badge>
         <span className="ml-auto flex flex-wrap gap-x-4 font-mono text-[12px] text-muted-foreground">
           <span title={a.cost_source?.startsWith("rebuilt") ? "Stopped at the time limit; cost rebuilt from the agent's log" : undefined}>
@@ -135,6 +136,30 @@ function Attempt({ t, r, m, swatch, runId }: { t: Task; r: Trial; m: Model; swat
         ))}
       </Tabs>
     </article>
+  );
+}
+
+/** Which try ended the attempt and what all of them cost, then each try the model failed before it.
+ *  The figures in the attempt's header, its diff and its trace are the last try's. */
+function Tries({ r, earlier }: { r: Trial; earlier: EarlierTry[] }) {
+  const agents = [...earlier.map((e) => e.agent ?? {}), r.agent ?? {}];
+  const cost = agents.every((a) => a.cost_usd != null) ? agents.reduce((s, a) => s + a.cost_usd!, 0) : null;
+  const seconds = agents.reduce((s, a) => s + (a.working_seconds ?? a.seconds ?? 0), 0);
+  const word = r.outcome === "solved" ? `Solved on try ${r.try}` : r.outcome === "failed" ? `Not solved in ${r.try} tries` : `Try ${r.try} not scored`;
+  return (
+    <>
+      <Lead word={word} rest={` · ${usd(cost)} and ${dur(seconds)} over every try`} />
+      <ul className="mt-2 grid gap-1.5 border-l border-lightGrey2 pl-3 text-[14px] leading-snug" aria-label="Earlier tries">
+        {earlier.map((e) => (
+          <li key={e.try} className="text-muted-foreground">
+            <span className="text-foreground">Try {e.try}</span>
+            {" · "}{e.tests?.passed ? `tests passed, judges said no${e.judge?.reason ? `: ${e.judge.reason}` : ""}` : `tests failed${e.tests?.summary ? ` (${e.tests.summary})` : ""}`}
+            {e.agent?.timed_out ? " · hit the time limit" : ""}
+            {" · "}{usd(e.agent?.cost_usd)} · {dur(e.agent?.working_seconds ?? e.agent?.seconds)}
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 

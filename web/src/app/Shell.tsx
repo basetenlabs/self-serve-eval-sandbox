@@ -52,7 +52,7 @@ export function Shell({ state, route, go, offline, children, canRequest }: {
       <main className="ev-main">{children}</main>
       <footer className="bt-footnote ev-foot">
         <span>Self-Serve Model Eval Sandbox</span>
-        {state && !state.github.sign_in && <span className="max-sm:hidden">Also from a terminal: <code>pr-eval run --quick</code></span>}
+        {state && !state.github.hosted && <span className="max-sm:hidden">Also from a terminal: <code>pr-eval run --quick</code></span>}
       </footer>
     </div>
   );

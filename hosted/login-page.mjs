@@ -13,8 +13,8 @@ import { previewMeta } from '@blaxel/sign-in'
 // The site's button chevron: a small solid triangle (the skill's assets/icons/chevron-right.svg).
 const CHEVRON = '<svg width="5" height="10" viewBox="0 0 5 10" fill="none"><path d="M5 5L0 0V10L5 5Z" fill="currentColor"/></svg>'
 
-// The skill's external-link arrow (assets/icons/external-link.svg): .bt-external grows it in on hover.
-const ARROW = '<svg width="6" height="6" viewBox="0 0 6.85355 6.85355" fill="none"><path d="M0.353553 6.5L6.35355 0.5M6.35355 6.5V0.5H0.353553" stroke="currentColor"/></svg>'
+// The open source link's arrow is the skill's own: baseten.css draws .bt-external's empty .arrow from
+// icons/external-link.svg beside it (served as /auth/icons/external-link.svg by hosted/public.mjs), White in dark.
 
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 
@@ -43,11 +43,11 @@ export function renderLogin({ brand, origin = '', next = '/', state = {}, blaxel
   if (state.request?.token) extra.push(`<form class="request" method="post" action="/auth/request-access"><input type="hidden" name="token" value="${escape(state.request.token)}"><button class="bt-button tertiary" type="submit"><span><span class="label">Request access</span></span></button></form>`)
   const notice = line ? `<div class="bt-notice ${tone}" role="${tone === 'error' ? 'alert' : 'status'}"><p>${escape(line)}</p>${extra.length ? `<div class="actions">${extra.join('')}</div>` : ''}</div>` : ''
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="auto">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light dark">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>${name}</title>
@@ -60,11 +60,11 @@ ${previewMeta({ brand, origin })}
 <div class="frame" data-auth data-state="idle" data-next="${escape(next)}">
 <main class="panel" id="main">
   <div class="card">
-    <img class="logo" src="/auth/brand/logo-light" alt="${escape(brand.company ?? 'Baseten')}" width="117" height="22">
+    <picture><source srcset="/auth/brand/logo-dark" media="(prefers-color-scheme: dark)"><img class="logo" src="/auth/brand/logo-light" alt="${escape(brand.company ?? 'Baseten')}" width="117" height="22"></picture>
     <h1>${name}</h1>
     ${notice}
     <a id="signin" class="bt-button has-chevron full" href="${escape(start)}"><span><span class="label btn-label">Continue with Blaxel</span><span class="chevron" aria-hidden="true">${CHEVRON}</span></span></a>
-    ${source ? `<a class="bt-link bt-external source" href="${escape(source)}" target="_blank" rel="noopener">View the open source repository<span class="arrow" aria-hidden="true">${ARROW}</span></a>` : ''}
+    ${source ? `<a class="bt-link bt-external source" href="${escape(source)}" target="_blank" rel="noopener">View the open source repository<span class="arrow" aria-hidden="true"></span></a>` : ''}
   </div>
 </main>
 </div>

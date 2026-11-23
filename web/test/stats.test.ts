@@ -185,16 +185,16 @@ describe("stats", () => {
     });
 
     it("leaves a model that solved none out of the cost comparison", () => {
-      const k = { ...d, key: "kimi", label: "Kimi K3" };
+      const k = { ...d, key: "kimi", label: "Kimi K3.1 Pro" };
       const none = { [g.key]: s(6 / 8, 6, 8, 0.4, 400), [k.key]: s(3 / 8, 3, 8, 1, 300), [c.key]: s(0, 0, 8, null, 200) };
       const t = takeaway([g, k, c], none);
       // No closed figure to measure against: the cheapest against the runner-up.
       expect([t.cost?.model.key, t.cost?.vs.key, t.cost?.chip]).toEqual([g.key, "kimi", "Baseten's GLM-5.3 is 60% cheaper"]);
-      expect(t.cost?.note).toBe("Compared with Kimi K3. It solved 6 of 8 PRs and Kimi K3 solved 3.");
+      expect(t.cost?.note).toBe("Compared with Kimi K3.1 Pro. It solved 6 of 8 PRs and Kimi K3.1 Pro solved 3.");
       expect(lead([g, c], none, "cost_per_solved")).toBeUndefined(); // one figure is no comparison
       // Time still has Claude's figure: the quickest open model and Claude, which is quicker.
       expect([t.time?.model.key, t.time?.vs.key, t.time?.chip]).toEqual([c.key, "kimi", "Anthropic's Claude Opus 5.5 took 34% less time"]);
-      expect(t.time?.note).toBe("Compared with Kimi K3. It solved none of 8 PRs and Kimi K3 solved 3.");
+      expect(t.time?.note).toBe("Compared with Kimi K3.1 Pro. It solved none of 8 PRs and Kimi K3.1 Pro solved 3.");
     });
 
     it("compares open models with each other when there's no closed one", () => {

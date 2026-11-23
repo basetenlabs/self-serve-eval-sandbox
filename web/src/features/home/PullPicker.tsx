@@ -7,10 +7,11 @@ import { Input } from "@/components/ui/input";
 import { samePull, usePulls } from "@/lib/api";
 import { ago, plural } from "@/lib/format";
 import { match } from "@/lib/fuzzy";
+import { KIND_LABEL, kindOf, mix, mixLabel } from "@/lib/pulls";
 import type { Favorite, PullList, PullRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const NEWEST = 10; // "Select newest" takes this many that can be tasks
+const NEWEST = 10; // "Choose a mix" and "Newest" take this many that can be tasks
 const PAGE = 30, MOST = 90; // latest merges listed at first and per "Show more", and at most
 const SEARCH_MS = 400; // GitHub is searched once typing pauses this long
 
@@ -69,8 +70,19 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
   const searching = !!needle && (words !== (needle.length >= 2 ? needle : "") || found.loading);
   const matches = groups.reduce((n, g) => n + g.rows.length, 0);
   const firstUsable = groups.flatMap((g) => g.rows).find((r) => !r.why && !chosen.includes(r.number));
-  const newest = fit.filter((r) => !r.maintenance).slice(0, NEWEST).map((r) => r.number);
-  const tookNewest = newest.length > 0 && newest.length === chosen.length && newest.every((n) => chosen.includes(n));
+  const newest = fit.filter((r) => !r.maintenance).slice(0, Math.min(NEWEST, max)).map((r) => r.number);
+  const same = (a: number[]) => a.length > 0 && a.length === chosen.length && a.every((n) => chosen.includes(n));
+  const tookNewest = same(newest);
+  // A mix of security changes, fixes and features, smaller ones first, chosen for you once the list arrives.
+  const mixed = mix(rows, Math.min(NEWEST, max));
+  const tookMix = same(mixed);
+  const preselected = React.useRef(false);
+  React.useEffect(() => {
+    if (preselected.current || !rows.length) return;
+    preselected.current = true;
+    if (!chosen.length && mixed.length) onChange(mixed);
+  }, [rows.length]);
+  const made = mixLabel([...seen.current.rows.values()], chosen);
   const reading = loading && !rows.length;
 
   return (
@@ -89,20 +101,25 @@ export function PullChooser({ repo, chosen, onChange, max, favorites, onFavorite
           {needle ? (searching ? "Searching GitHub too" : `${plural(matches, "match", "matches")} · ${chosen.length} chosen`)
             : reading ? <><span aria-hidden className="ev-dot live" /> Reading the latest merges from GitHub</>
             : list?.error ? "Couldn't list them"
-            : chosen.length ? <><span className="text-black">{chosen.length} chosen</span>{chosen.length >= max ? ` · the most one run takes` : ` · ${plural(fit.length, "usable PR")} listed`}</>
+            : chosen.length ? <><span className="text-black">{chosen.length} chosen</span>{made && ` · ${made}`}{chosen.length >= max ? ` · the most one run takes` : ""}</>
             : `Tick the ones to run · ${plural(fit.length, "usable PR")} listed`}
         </span>
         <span className="flex gap-1">
           {chosen.length > 0 && <Button type="button" size="sm" variant="ghost" onClick={() => onChange([])}>Clear</Button>}
           {!needle && (
-            <Button type="button" size="sm" variant={chosen.length ? "ghost" : "outline"} disabled={!newest.length || tookNewest}
-              onClick={() => onChange(newest)}>
-              {reading ? `Newest ${NEWEST}` : tookNewest ? `Newest ${newest.length} chosen` : `Choose newest ${newest.length || NEWEST}`}
-            </Button>
+            <>
+              <Button type="button" size="sm" variant={chosen.length ? "ghost" : "outline"} disabled={!mixed.length || tookMix}
+                onClick={() => onChange(mixed)} title="Security changes, fixes and features, smaller ones first">
+                {reading ? "A mix" : tookMix ? `Mix of ${mixed.length} chosen` : `Choose a mix of ${mixed.length || NEWEST}`}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" disabled={!newest.length || tookNewest} onClick={() => onChange(newest)}>
+                {tookNewest ? `Newest ${newest.length} chosen` : `Newest ${newest.length || NEWEST}`}
+              </Button>
+            </>
           )}
         </span>
       </div>
-      {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
+      {list?.error ? <Problem>{list.error}</Problem> : (
         <ul className="ev-pulls-list max-h-[420px] overflow-y-auto" aria-label={`${repo} pull requests`} aria-busy={loading || searching}>
           {!list && !needle ? Array.from({ length: 6 }, (_, i) => <SkeletonRow key={i} at={i} />) : groups.map((g) => (
             <React.Fragment key={g.label || "all"}>
@@ -226,7 +243,7 @@ function PastedRepo({ repo, numbers, onChecked, onRemove, favorites, onFavorite 
           {list?.language && !list.error ? ` · ${list.language}` : ""}
         </span>
       </div>
-      {list?.error ? <Problem install={list.install}>{list.error}</Problem> : (
+      {list?.error ? <Problem>{list.error}</Problem> : (
         <ul className="ev-pulls-list" aria-busy={loading}>
           {numbers.map((n) => {
             const row = rows.get(n);
@@ -265,6 +282,7 @@ function PullItem({ row, control, trailing, hits, chosen }: { row: PullRow; cont
               <>
                 {[row.author, row.merged_at && `merged ${ago(row.merged_at)}`, plural(row.files, "file"), `${row.lines.toLocaleString()} lines`, plural(row.tests, "test file")]
                   .filter(Boolean).map((part, i) => <span key={i} className="whitespace-nowrap">{i > 0 && <span aria-hidden className="mr-1.5 text-darkGrey3 max-md:hidden">·</span>}{part}</span>)}
+                {kindOf(row.title) !== "other" && <Badge variant="outline" className="ml-1">{KIND_LABEL[kindOf(row.title)]}</Badge>}
                 {row.maintenance && <Badge variant="outline" className="ml-1">Upkeep</Badge>}
               </>
             )}
@@ -311,15 +329,10 @@ function SkeletonRow({ number, trailing, at = 0 }: { number?: number; trailing?:
   );
 }
 
-function Problem({ children, install }: { children: React.ReactNode; install?: string }) {
+function Problem({ children }: { children: React.ReactNode }) {
   return (
     <div role="alert" className="bt-notice error flex-wrap items-center">
       <span className="min-w-0 flex-1">{children}</span>
-      {install && (
-        <Button asChild variant="outline">
-          <a href={install} target="_blank" rel="noreferrer">Add it on GitHub <External /></a>
-        </Button>
-      )}
     </div>
   );
 }

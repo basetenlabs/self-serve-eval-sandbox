@@ -1,14 +1,15 @@
 /* The public pages before sign-in: the sign-in page (hosted/login-page.mjs) and @blaxel/sign-in's error pages
    (renderMessage), served as /auth/login.css by hosted/public.mjs. The look is the /baseten-design skill's:
    the dotted texture, one White block, the site name and one primary button, set in Geist (Beausite is licensed
-   and served only after sign-in). baseten.css is the skill's stylesheet, unchanged; the rules below only place
-   this page's parts. The same file ships in every internal site; change them together. */
+   and served only after sign-in), light or dark with the system (the skill's dark theme). baseten.css is the
+   skill's stylesheet, unchanged; the rules below only place this page's parts. The same file ships in every internal site; change them together. */
 @import url("/auth/baseten.css");
 
 @font-face { font-family: "Geist"; src: url("/auth/fonts/geist.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url("/auth/fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
 
-:root { color-scheme: light; --bt-texture-url: url("/auth/texture.png"); }
+:root { --bt-texture-url: url("/auth/texture.png"); }
+:root[data-theme] { --bt-texture-dark-url: url("/auth/texture-dark.png"); }
 :focus-visible { outline: 2px solid var(--color-black); outline-offset: 2px; }
 
 .sb-auth { min-block-size: 100dvh; background: var(--background-texture); color: var(--color-black); }
@@ -41,6 +42,10 @@
 @media (min-width: 801px) { .sb-auth .top { padding-inline: 24px; } }
 .sb-auth .top .logo { margin: 0; }
 .sb-auth .top :is(.logo-dark, .divider, .label) { display: none; }
+@media (prefers-color-scheme: dark) {   /* hosted/theme.js sets data-theme="auto" there */
+  :root[data-theme="auto"] .sb-auth .top .logo-light { display: none; }
+  :root[data-theme="auto"] .sb-auth .top .logo-dark { display: block; }
+}
 .sb-auth .top + .panel .card { padding-block-start: 64px; }
 .sb-auth .card-head {
   display: flex; align-items: center; gap: 10px; inline-size: fit-content; margin: 0; padding: 4px 24px 4px 8px;

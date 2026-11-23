@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config, judge, report, runner, runtime, tasks
+from . import commands, config, judge, report, runner, runtime, tasks
 from .config import ROOT
 from .rundir import now, write_json
 
@@ -33,8 +33,11 @@ DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]
 # Models no longer offered, and the one that replaced each. A past run keeps the models it ran with (run.json
 # holds them, labels and prices included), so its report reads as before; a new run, or a resumed one, can't
 # name them, and Run again puts the replacement in the form.
-RETIRED = {"glm-5.3-fast": "glm-5.3", "deepseek-v4.1-flash-1017-fast": "deepseek-v4.1-flash"}
+RETIRED = {"glm-5.3-fast": "glm-5.3", "deepseek-v4.1-flash-1017-fast": "deepseek-v4.1-flash", "kimi-k3": "kimi-k3.1-pro"}
 DEFAULT_LIMIT = 10
+# Tries per attempt: a try the model fails is run again from scratch, up to this many in all, and the attempt is
+# solved if any try solves it. Every model gets the same. Runs from before tries were recorded had one.
+DEFAULT_TRIES = 3
 ACTIVE = ("collecting", "checking", "running")
 # An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
 # A run on a private repository loses these PR_EVAL_PRIVATE_RETENTION_DAYS after it ends (unset: kept);
@@ -94,10 +97,12 @@ class Job:
     def save(self) -> None:
         write_json(self.path / "run.json", self.meta)
 
-    def status(self, phase: str, detail: str = "") -> None:
+    def status(self, phase: str, detail: str = "", step: str | None = None) -> None:
         if phase not in ACTIVE:  # while this run still reads as going, so no new run starts on files being deleted
             release_private(self)
-        self.meta["status"] = {"phase": phase, "detail": detail, "pid": os.getpid(), "updated_at": now()}
+        # `step` names a part of the phase the page tells apart: "commands", working out how to install and test
+        self.meta["status"] = {"phase": phase, "detail": detail, "pid": os.getpid(), "updated_at": now(),
+                               **({"step": step} if step else {})}
         self.save()
         if detail:
             print(detail, flush=True)
@@ -176,7 +181,8 @@ def expire_transcripts(jobs_dir: Path) -> None:
             continue
         if (status.get("updated_at") or meta.get("created_at") or "") > cutoff:  # ISO times in UTC sort as text
             continue
-        found = [f for name in TRANSCRIPTS for f in path.parent.glob(f"trials/*/{name}")]
+        found = [f for name in TRANSCRIPTS for pattern in (f"trials/*/{name}", f"trials/*/{runner.TRIES}/*/{name}")
+                 for f in path.parent.glob(pattern)]
         repos = run_repos(meta)
         if not found or not any(answers.setdefault(r.lower(), private(r)) for r in repos):
             continue
@@ -249,7 +255,7 @@ def delete_private(found: dict[str, list[Path]], jobs_dir: Path, skip: Path | No
 
 def private(repo: str) -> bool:
     # The sample's repositories are public, as configured. Asking GitHub could fail (the hosted page's
-    # anonymous requests hit its rate limit) and delete the quick sample's tasks, which then need a GitHub sign-in.
+    # anonymous requests hit its rate limit) and delete the quick sample's tasks, which then need collecting again.
     if repo.lower() in {r.lower() for quick in (True, False) for r in tasks.sample(quick)}:
         return False
     try:
@@ -270,14 +276,12 @@ def public_to_anyone(repo: str) -> bool:
         return False
 
 
-def preflight(model_keys: list[str], judge_choice: str = "default",
-              models_config: Path = config.DEFAULT_MODELS, *, judges_checked: bool = False,
-              ) -> tuple[list[config.Model], config.Panel | None]:
+def preflight(model_keys: list[str], judge_choice: str = "none",
+              models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Panel | None]:
     """The models and judges for a run, or SystemExit saying what is missing.
 
-    `judge_choice` is "default" for the configured panel, "none" for tests only, or one
-    judge's model id or label to grade with that judge alone. `judges_checked` doesn't ask the
-    judges' providers again: the page checked them a moment before it started the run.
+    `judge_choice` is "none" for the hidden tests alone, "default" for the configured panel,
+    or one judge's model id or label to grade with that judge alone.
     """
     catalog, judge = config.load(models_config)
     if retired := [k for k in model_keys if k in RETIRED and k not in catalog]:
@@ -292,23 +296,23 @@ def preflight(model_keys: list[str], judge_choice: str = "default",
         return models, None
     if judge_choice != "default":
         judge = judge.only(judge_choice)
-    if not judges_checked and (problem := judge.problem()):
+    if problem := judge.problem():
         raise SystemExit(problem)
     return models, judge
 
 
 def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
-            name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
-            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1") -> Job:
+            tries: int = DEFAULT_TRIES, name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
+            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1", harness: str = runner.pi.NAME) -> Job:
     run_id = name or default_name(request)
     path = jobs_dir / run_id
     if (path / "run.json").exists():
         raise SystemExit(f"{path} exists: pass --resume {path} to finish it, or choose another --name")
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
     write_json(path / "run.json", {
-        "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": "claude-code",
+        "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": harness,
         "harness_version": None, "backend": "baseten", "image": image, "region": region,
-        "attempts": attempts, "models": [m.as_dict() for m in models],
+        "attempts": attempts, "tries": tries, "models": [m.as_dict() for m in models],
         "judge": judge.as_dict() if judge else None,
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
@@ -327,10 +331,14 @@ def find_tasks(request: Request, tasks_dir: Path, on_progress=None) -> list[task
         return tasks.discover(tasks_dir, request.task_ids)
     if request.repos or request.pulls:
         wanted = {repo: request.prs for repo in request.repos} | request.pulls
-        paths = [path for repo, prs in wanted.items() for path in tasks.collect(
-            repo, tasks_dir, prs=prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
-            setup=request.setup, test=request.test, language=request.language, max_lines=request.max_lines,
-            on_progress=on_progress)]
+        paths = []
+        for repo, prs in wanted.items():
+            setup, test = request.setup, request.test
+            if not (setup or test) and (kept := commands.saved(repo)) and not commands.curated(repo):
+                setup, test = kept["setup"], kept["test"]  # what an earlier run worked out
+            paths += tasks.collect(repo, tasks_dir, prs=prs, limit=request.limit or DEFAULT_LIMIT, since=request.since,
+                                   setup=setup, test=test, language=request.language, max_lines=request.max_lines,
+                                   on_progress=on_progress)
         return [tasks.load(p) for p in paths]
     paths = [path for repo, prs in tasks.sample(request.quick).items() for path in tasks.collect(repo, tasks_dir, prs=prs)]
     found = sorted((tasks.load(p) for p in paths), key=lambda t: t.meta["task"]["merged_at"])
@@ -339,31 +347,34 @@ def find_tasks(request: Request, tasks_dir: Path, on_progress=None) -> list[task
     return tasks.spread(found, request.limit, repo=lambda t: t.meta["task"]["repo"])
 
 
-def restore_tasks(ids: list[str], tasks_dir: Path, request: dict) -> list[tasks.Task]:
-    """A resumed run's tasks, collected again where they were deleted with their private repository."""
+def restore_tasks(ids: list[str], tasks_dir: Path, request: dict, used: dict | None = None) -> list[tasks.Task]:
+    """A resumed run's tasks, collected again where they were deleted with their private repository, with
+    the commands the run used (`used`, by repository: settle_commands)."""
     missing: dict[str, list[int]] = {}
     for task_id in ids:
         number = task_id.rsplit("-", 1)[-1]
         if "__" in task_id and number.isdigit() and not (tasks_dir / task_id / "task.toml").is_file():
             missing.setdefault(repo_of(task_id), []).append(int(number))
     for repo, prs in missing.items():
-        tasks.collect(repo, tasks_dir, prs=prs, setup=request.get("setup"), test=request.get("test"),
-                      language=request.get("language"))
+        known = next((c for r, c in (used or {}).items() if r.lower() == repo.lower()), {})
+        tasks.collect(repo, tasks_dir, prs=prs, setup=known.get("setup") or request.get("setup"),
+                      test=known.get("test") or request.get("test"), language=request.get("language"))
     return tasks.discover(tasks_dir, ids)
 
 
 def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> int:
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
-    attempts = job.meta.get("attempts", 1)
+    attempts, tries = job.meta.get("attempts", 1), job.meta.get("tries", 1)
     try:
         restore_execution(job.meta, settings)
         fit_memory(job, settings)
         resumed = bool(job.meta.get("tasks") and job.meta.get("checked", True))  # after the check: the same tasks
         if resumed:
-            selected = restore_tasks(job.meta["tasks"], tasks_dir, job.meta.get("request") or {})
+            selected = restore_tasks(job.meta["tasks"], tasks_dir, job.meta.get("request") or {}, job.meta.get("commands"))
         elif job.meta.get("candidates"):  # resumed while checking: the same pull requests
-            candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {})
+            candidates = restore_tasks(job.meta["candidates"], tasks_dir, job.meta.get("request") or {},
+                                       job.meta.get("commands"))
         else:
             request = Request(**job.meta.get("request") or {})
             job.status("collecting", f"Finding merged pull requests in {request.describe()}")
@@ -376,9 +387,9 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
             if len(check(job, selected, settings)) != len(selected):
                 raise SystemExit("The original task set no longer passes validation; start a new run.")
             start_running(job, models, settings)
-            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job))
+            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job), tries=tries)
         else:
-            check_and_run(job, candidates, models, settings)
+            check_and_run(job, settle_commands(job, candidates, settings), models, settings)
         path = report.build(job.path)
         lost = runner.lost_trials(job.path)
         job.status("done", f"Finished. Report: {path}" + (
@@ -401,6 +412,24 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
     except Exception as exc:
         job.status("failed", f"{type(exc).__name__}: {exc}")
         raise
+
+
+def settle_commands(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> list[tasks.Task]:
+    """Each named repository's install and test commands, before any of its PRs is checked: given, or worked
+    out (commands.settle), and recorded in run.json. The samples' tasks carry their own."""
+    request = job.meta.get("request") or {}
+    done = job.meta.setdefault("commands", {})
+    found = {t.id: t for t in candidates}
+    for repo in dict.fromkeys([*(request.get("repos") or []), *(request.get("pulls") or {})]):
+        mine = [t for t in candidates if t.meta["task"]["repo"].lower() == repo.lower()]
+        if not mine or repo in done:  # resumed: worked out before it stopped
+            continue
+        done[repo], settled = commands.settle(
+            job.path, repo, mine, settings, job.id, setup=request.get("setup"), test=request.get("test"),
+            status=lambda text: job.status("collecting", text, step="commands"))
+        found |= {t.id: t for t in settled}
+        job.save()
+    return [found[t.id] for t in candidates]
 
 
 def fit_memory(job: Job, settings: runner.Settings) -> None:
@@ -434,10 +463,14 @@ def collecting(job: Job):
 
 
 def start_running(job: Job, models: list[config.Model], settings: runner.Settings) -> None:
-    attempts = job.meta.get("attempts", 1)
-    job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models"
-                          + (f" x {attempts} attempts" if attempts > 1 else ""))
+    job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models" + times(job.meta))
     report.build(job.path)
+
+
+def times(meta: dict) -> str:
+    """How many attempts each task and model gets, and tries each attempt, for the status line."""
+    attempts, tries = meta.get("attempts", 1), meta.get("tries", 1)
+    return (f" x {attempts} attempts" if attempts > 1 else "") + (f", up to {tries} tries each" if tries > 1 else "")
 
 
 def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Model],
@@ -461,15 +494,17 @@ def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Mo
         job.meta["checked"] = True
         leave_out(job, statuses)
         if job.meta["tasks"]:
-            attempts = job.meta.get("attempts", 1)
             job.status("running", f"All checked. Running {len(job.meta['tasks'])} tasks x {len(models)} models"
-                                  + (f" x {attempts} attempts" if attempts > 1 else ""))
+                                  + times(job.meta))
         else:
             job.save()
 
     runner.check_and_run(candidates, models, job.meta.get("attempts", 1), job.path, settings, job.id,
-                         on_checked=checked, on_result=progress_printer(job))
+                         on_checked=checked, on_result=progress_printer(job), tries=job.meta.get("tries", 1))
     if not job.meta["tasks"]:
+        for repo, used in (job.meta.get("commands") or {}).items():
+            if used.get("source") == "saved":  # they may have gone stale: the next run works them out afresh
+                commands.keep(repo, None)
         raise SystemExit(none_passed(len(candidates), statuses))
 
 
@@ -522,11 +557,13 @@ def progress_printer(job: Job):
         nonlocal last_build
         cost = (result.get("agent") or {}).get("cost_usd")
         reason = f" ({result['invalid_reason']})" if result.get("invalid_reason") else ""
+        reason += f" on try {result['try']}" if (result.get("try") or 1) > 1 else ""
         print(f"[{done}/{total}] {result['trial']}: {result['outcome']}{reason}"
               + (f" ${cost:.3f}" if cost is not None else "")
               + (f": {result['cause']}" if result.get("cause") else ""), flush=True)
-        if not job.meta.get("harness_version") and (version := (result.get("agent") or {}).get("claude_code_version")):
-            job.meta["harness_version"] = version  # the image's Claude Code, as its first agent reported it
+        agent = result.get("agent") or {}
+        if not job.meta.get("harness_version") and (version := agent.get("harness_version") or agent.get("claude_code_version")):
+            job.meta["harness_version"] = version  # the image's coding agent, as its first attempt reported it
             job.save()
         if time.monotonic() - last_build > 30:
             last_build = time.monotonic()
@@ -543,10 +580,14 @@ def rebuild_quietly(job: Job) -> None:
 
 
 def restore_execution(meta: dict, settings: runner.Settings) -> None:
-    """Keep resumed work on its original image, region and sandbox size."""
+    """Keep resumed work on its original coding agent, image, region and sandbox size."""
     if meta.get("backend") != "baseten" or not meta.get("image"):
         raise SystemExit("This run's sandboxes ran somewhere pr-eval no longer uses (trials run on Baseten Sandboxes "
                          "now), so it can't be resumed: start a new run on the same pull requests instead.")
+    # Every run records its harness; one from before Pi ran Claude Code.
+    settings.harness = meta.get("harness") or runner.CLAUDE_CODE
+    if settings.harness not in runner.HARNESSES:
+        raise SystemExit(f"This run's coding agent ({settings.harness}) isn't one pr-eval runs any more.")
     settings.image = meta["image"]
     settings.region = meta.get("region", "us-pdx-1")
     # Disk grows with memory, so a resume never shrinks the run's sandboxes; a larger --memory raises them.
@@ -585,10 +626,13 @@ def resumed_models(meta: dict, requested: list[str] | None) -> tuple[list[str], 
     return have + added, added
 
 
-def resumed_judge(meta: dict, choice: str) -> str:
-    """The judge a resumed run started with, unless --judge names one, so a tests-only run stays tests only."""
-    if choice != "default" or "judge" not in meta:
+def resumed_judge(meta: dict, choice: str | None) -> str:
+    """The judge a resumed run started with, unless --judge was given, so a tests-only run stays tests only
+    and a judged one keeps its judges."""
+    if choice is not None:
         return choice
+    if "judge" not in meta:  # a run from before judges were recorded: the panel graded it
+        return "default"
     judge = meta["judge"]
     if not judge:
         return "none"

@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval_sandbox import app, cli, config, judge, pipeline, report, rundir, runner, runtime, tasks, trace  # noqa: E402
+from eval_sandbox import app, cli, config, judge, pi, pipeline, report, rundir, runner, runtime, tasks, trace  # noqa: E402
 from eval_sandbox.config import Judge, Model, Panel  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -60,8 +60,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(models["claude-opus"].kind, "closed")
         for model in models.values():
             self.assertIn(model.model, model.prices, f"{model.key} has no price for its own id")
-        self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3"])
-        self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3")
+        self.assertEqual([j.model for j in judge.judges], ["claude-opus-5-5", "gpt-6.1-sol", "moonshotai/Kimi-K3.1-Pro"])
+        self.assertEqual(judge.chair.model, "moonshotai/Kimi-K3.1-Pro")
 
     def test_closed_models_name_their_maker(self):
         # The report says who serves each model it compares: Baseten for an open one, a closed one's maker.
@@ -208,6 +208,114 @@ class AgentScriptTest(unittest.TestCase):
         with mock.patch.object(runner.runtime, "execute", return_value=refused), \
                 self.assertRaisesRegex(runner.runtime.RuntimeError, "can't keep a step off the network"):
             runner.sh("trial", "pytest -q", timeout=9)
+
+
+class PiTest(unittest.TestCase):
+    """Pi, the harness every model runs in by default: how it starts, and what is read back from its log."""
+
+    @staticmethod
+    def answer(*blocks, stop="toolUse", error=None, **usage):
+        message = {"role": "assistant", "content": list(blocks), "model": "zai-org/GLM-5.3", "stopReason": stop,
+                   "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, **usage}}
+        return {"type": "message_end", "message": {**message, **({"errorMessage": error} if error else {})}}
+
+    @staticmethod
+    def log(d, events) -> Path:
+        path = Path(d) / "agent.jsonl"
+        path.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in events))  # as Pi writes it
+        return path
+
+    def test_each_model_speaks_its_own_api_through_the_relay_from_the_jail(self):
+        gpt = config.load()[0]["gpt-6.2-sol"]
+        for model in (baseten_model(), anthropic_model(), gpt):
+            with self.subTest(model.key):
+                relay, script, env = runner.agent_script(model, harness=pi.NAME)
+                # The relay only signs each call and passes it on: nothing to translate, no effort to force.
+                self.assertIn(f"proxy.py --upstream {config.PROVIDER_URLS[model.provider]} --socket {runner.RELAY_SOCKET}", relay)
+                self.assertNotIn("--effort", relay)
+                self.assertIn(f"exec {runner.JAIL} --net none --bridge {runner.PROXY_PORT}={runner.RELAY_SOCKET} -- "
+                              f"pi --mode json --no-session --no-approve --model {model.provider}/{model.model} "
+                              f"--thinking {model.effort} ", script)
+                self.assertIn(f">{pi.CONFIG_DIR}/models.json", script)
+                self.assertEqual(pi.models_json(model, f"http://127.0.0.1:{runner.PROXY_PORT}"),
+                                 {"providers": {model.provider: {"baseUrl": f"http://127.0.0.1:{runner.PROXY_PORT}"}}})
+                self.assertEqual(env, pi.ENV)  # its own config, offline, and no key
+
+    def test_a_model_pis_catalog_lacks_comes_with_its_limits(self):
+        muse = config.load()[0]["muse-spark"]
+        entry, = pi.models_json(muse, "http://relay")["providers"]["baseten"]["models"]
+        self.assertEqual((entry["id"], entry["api"], entry["contextWindow"], entry["maxTokens"]),
+                         (muse.model, "openai-completions", 1048576, 262144))
+        self.assertFalse(entry["compat"]["supportsStore"])
+
+    def test_a_claude_subscription_token_is_pis_oauth_token(self):
+        self.assertEqual(pi.credential_env({"CLAUDE_CODE_OAUTH_TOKEN": "pr-eval-placeholder-x"}),
+                         {"ANTHROPIC_OAUTH_TOKEN": "sk-ant-oat01-pr-eval-placeholder-x"})
+        self.assertEqual(pi.credential_env({"BASETEN_API_KEY": "p"}), {"BASETEN_API_KEY": "p"})
+
+    def test_pis_log_gives_the_report_the_same_numbers_as_claude_codes(self):
+        with tempfile.TemporaryDirectory() as d:
+            summary = pi.summarize(self.log(d, [
+                {"type": "harness", "name": "pi", "version": "1.6.0"},
+                {"type": "auto_retry_start", "attempt": 1, "delayMs": 2000, "errorMessage": "429: slow down"},
+                self.answer({"type": "thinking", "thinking": "look"},
+                            {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "ls"}},
+                            input=1000, output=100),
+                {"type": "message_end", "message": {"role": "toolResult", "toolCallId": "c1", "toolName": "bash",
+                                                    "content": [{"type": "text", "text": "a.py"}], "isError": False}},
+                self.answer({"type": "text", "text": "Fixed it."}, stop="stop", input=200, output=20, cacheRead=1000),
+                {"type": "agent_end"},
+            ]), baseten_model())
+        self.assertEqual((summary["harness_version"], summary["subtype"], summary["is_error"], summary["num_turns"]),
+                         ("1.6.0", "success", False, 2))
+        self.assertEqual((summary["tool_calls"], summary["final_message"]), ({"bash": 1}, "Fixed it."))
+        self.assertEqual((summary["api_retries"], summary["rate_limited_retries"], summary["retry_wait_seconds"]), (1, 1, 2.0))
+        self.assertEqual(runner.token_totals(summary["model_usage"]),
+                         {"input": 1200, "cached_input": 1000, "cache_write": 0, "output": 120})
+        self.assertAlmostEqual(summary["cost_usd"], (1200 * 1.40 + 1000 * 0.14 + 120 * 4.40) / 1e6)
+
+    def test_an_error_pi_gave_up_on_is_a_provider_error_and_a_run_cut_off_has_no_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            failed = pi.summarize(self.log(d, [self.answer(stop="error", error='429: {"error": "rate limited"}'),
+                                               {"type": "agent_end"}]), baseten_model())
+            cut = pi.summarize(self.log(d, [self.answer({"type": "text", "text": "Still going"}, input=10, output=5)]),
+                               baseten_model())
+        self.assertEqual((failed["subtype"], failed["is_error"]), ("error", True))
+        self.assertTrue(runner.PROVIDER_ERROR.search(failed["final_message"]))
+        self.assertNotIn("subtype", cut)  # the time limit stopped it: no answer to judge it by
+        self.assertEqual(cut["cost_source"], "rebuilt-partial")
+
+    def test_the_kept_log_holds_each_message_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.log(d, [{"type": "message_update", "message": {"content": "partial"}},
+                                {"type": "tool_execution_update", "partialResult": "x"},
+                                self.answer({"type": "text", "text": "done"}, stop="stop"),
+                                {"type": "turn_end", "message": {"content": "again"}},
+                                {"type": "agent_end", "messages": [{"role": "user"}]}])
+            pi.compact(path)
+            kept = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual([e["type"] for e in kept], ["message_end", "turn_end", "agent_end"])
+        self.assertEqual(kept[1:], [{"type": "turn_end"}, {"type": "agent_end"}])
+
+
+class FirstMessageTest(unittest.TestCase):
+    def test_the_first_message_says_how_the_change_is_checked_without_naming_the_tests(self):
+        for test, files in (("python -m pytest -q tests/test_parser.py 'tests/test_more.py'",
+                             ["tests/test_parser.py", "tests/test_more.py"]),
+                            ("go test -count=1 ./parser ./more", ["parser/parser_test.go", "more/more_test.go"])):
+            task = SimpleNamespace(instruction="Fix the parser.\n\n## Names the tests use\n- `Parse`\n",
+                                   meta={"task": {"repo": "public/example"},
+                                         "verifier": {"test": test, "test_files": files}})
+            with self.subTest(test):
+                message = runner.first_message(task, 3600)
+                self.assertIn("a checkout of the public/example repository: the current directory", message)
+                self.assertIn(f"\n    {test.split(' ')[0]} ", message)
+                self.assertEqual(message.count("<the pull request's tests>"), 1)
+                for hidden in ("parser.py", "test_more", "./parser", "./more"):
+                    self.assertNotIn(hidden, message)
+                for said in ("There is no network", "You have an hour", "Nobody is available", "Names the tests use"):
+                    self.assertIn(said, message)
+        self.assertEqual(runner.duration(1800), "30 minutes")
 
 
 class ParsingTest(unittest.TestCase):
@@ -378,7 +486,7 @@ class RecipeTest(unittest.TestCase):
                     (Path(d) / f"o__r-{n}" / "validation" / "result.json").write_text(json.dumps({"status": status}))
             quick = app.quick_sample()
         self.assertEqual(quick["tasks"], 3)  # the screened-out and the failing ones are left out; a sandbox error runs again
-        self.assertEqual((quick["repos"], quick["names"]), (1, ["o/r"]))
+        self.assertEqual((quick["repos"], quick["names"], quick["at_once"]), (1, ["o/r"], app.QUICK_CONCURRENCY))
 
     def test_spread_mixes_repositories(self):
         rows = [{"repo": "a", "n": i} for i in range(5)] + [{"repo": "b", "n": i} for i in range(5)]
@@ -540,6 +648,72 @@ class CollectTest(unittest.TestCase):
         with tarfile.open(task.path / "environment" / "source.tar.gz") as tar:
             self.assertEqual(tar.extractfile("other.py").read().decode(), "untouched by the PR\n")
             self.assertEqual(tar.extractfile("lib.py").read().decode(), "def double(x):\n    return 2 * x\n")
+
+    def checkout(self, setup):
+        """The agent's /workspace for a PR squash-merged after two more commits, set up locally."""
+        import subprocess
+        for n in (1, 2):
+            (self.repo / "other.py").write_text(f"older version {n}\n")
+            self.git("add", "-A")
+            self.git("commit", "-qm", f"before the PR {n}")
+        (self.repo / "lib.py").write_text("def double(x):\n    return x + x\n")
+        (self.repo / "tests" / "test_lib.py").write_text("assert double(3) == 6\n")
+        self.git("commit", "-qam", "the PR, squash-merged")
+        self.pr["merge_commit_sha"] = self.git("rev-parse", "HEAD")
+        self.git("config", "uploadpack.allowFilter", "true")
+        self.git("config", "uploadpack.allowAnySHA1InWant", "true")
+        root = Path(self.dir.name)
+        repos, work, tmp = root / "repos", root / "workspace", root / "tmp"
+        subprocess.run(["git", "clone", "-q", "--bare", "--filter=blob:none", f"file://{self.repo}",
+                        str(repos / "o__r.git")], check=True)
+        task = tasks.load(self.export(mirror=repos / "o__r.git"))
+        task.meta["environment"]["setup"] = setup
+        work.mkdir()
+        tmp.mkdir()
+
+        def local_sh(container, script, *, timeout, **_):  # the sandbox's /workspace and /tmp, here
+            script = script.replace("/tmp/", f"{tmp}/").replace("/workspace", str(work))
+            p = subprocess.run(["bash", "-c", script], cwd=work, capture_output=True, text=True,
+                               env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull})
+            return p.returncode, p.stdout + p.stderr, False
+        history = tasks.history
+        with mock.patch.object(runner, "sh", local_sh), \
+                mock.patch.object(tasks, "HISTORY_COMMITS", 2), \
+                mock.patch.object(tasks, "history", lambda t: history(t, repos)), \
+                mock.patch.object(runner.runtime, "upload",
+                                  side_effect=lambda c, local, remote, **_: shutil.copy(local, tmp / Path(remote).name)):
+            reason, stats = runner.prepare_workspace("unused", task, root, history=True)
+        self.assertIsNone(reason)
+
+        def run(script):
+            return local_sh(None, script, timeout=9)[1].strip()
+        return run, stats, local_sh
+
+    def test_the_agents_checkout_has_the_history_before_the_pr_and_nothing_after(self):
+        run, stats, local_sh = self.checkout("echo built >'odd [name].txt' && mkdir -p build && echo x >build/out && "
+                                             "echo setup >>other.py")
+        self.assertEqual(stats["history_commits"], 2)
+        self.assertEqual(run("git log --format=%s"), "before the PR 2\nbefore the PR 1")  # stops where it should
+        self.assertEqual(run("git show HEAD~1:other.py"), "older version 1")
+        self.assertEqual(run("git for-each-ref --format='%(refname)'; git remote"), "refs/heads/main")
+        merged_lib = self.git("rev-parse", f"{self.pr['merge_commit_sha']}:lib.py")
+        for later in (self.pr["merge_commit_sha"], merged_lib):  # the PR's commit and its version of lib.py
+            self.assertIn("missing", run(f"git cat-file -e {later} 2>&1 || echo missing"))
+        # Setup's own files are out of sight, and its change to a tracked file stays uncommitted.
+        self.assertEqual(run("git status --porcelain"), "M other.py")
+        run("echo agent >lib.py")
+        with mock.patch.object(runner, "sh", local_sh), mock.patch.object(
+                runner.runtime, "download", side_effect=lambda c, remote, local, **_: local.write_bytes(
+                    Path(remote.replace("/workspace", str(Path(self.dir.name) / "workspace"))).read_bytes())):
+            patch, numstat = runner.capture_patch("unused", stats["baseline"], Path(self.dir.name) / "agent.patch")
+        self.assertIn("+agent", patch)
+        self.assertEqual(runner.diff_stats(numstat)["files"], 1)  # the agent's change alone
+
+    def test_a_source_that_differs_from_the_base_commit_gets_no_history(self):
+        (self.repo / ".gitattributes").write_text("other.py export-ignore\n")  # git archive leaves it out
+        self.git("add", ".gitattributes")
+        run, stats, _ = self.checkout("true")
+        self.assertEqual((stats["history_commits"], run("git log --format=%s")), (0, "setup\nbase"))
 
     def test_a_scan_skips_unfit_prs_by_githubs_file_list_and_reports_counts(self):
         from unittest import mock
@@ -792,13 +966,14 @@ class PipelineTest(unittest.TestCase):
                          "deepseek-v4.1-flash-1017-fast is no longer offered: use deepseek-v4.1-flash")
 
     def test_resume_keeps_the_runs_own_judge(self):
-        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "none")  # no judge key needed
-        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, "default"), "gpt-x")
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, None), "none")  # no judge key needed
+        self.assertEqual(pipeline.resumed_judge({"judge": {"model": "gpt-x"}}, None), "gpt-x")
         self.assertEqual(pipeline.resumed_judge({"judge": None}, "gpt-y"), "gpt-y")  # named on the command line
-        self.assertEqual(pipeline.resumed_judge({}, "default"), "default")  # a run from before judges were recorded
+        self.assertEqual(pipeline.resumed_judge({"judge": None}, "default"), "default")  # --judge alone: the panel
+        self.assertEqual(pipeline.resumed_judge({}, None), "default")  # a run from before judges were recorded
         panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
-        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, "default"), "default")
-        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, "default"), "a")
+        self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, None), "default")
+        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, None), "a")
 
     def job(self, d, request):
         return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
@@ -964,6 +1139,8 @@ class PipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             old = self.private_run_with_transcripts(d, timedelta(days=8))
             jobs = old.parent
+            (old / "trials" / "t__m__1" / runner.TRIES / "1").mkdir(parents=True)  # a try the model failed before
+            (old / "trials" / "t__m__1" / runner.TRIES / "1" / "agent.jsonl").write_text("x")
             with mock.patch.object(tasks, "gh", return_value={"private": True}), \
                     mock.patch.object(pipeline, "alive", return_value=False), contextlib.redirect_stdout(io.StringIO()):
                 with mock.patch.dict(os.environ, {"PR_EVAL_PRIVATE_RETENTION_DAYS": ""}):
@@ -977,7 +1154,8 @@ class PipelineTest(unittest.TestCase):
                         pipeline.expire_transcripts(jobs)  # a public repository's run keeps them
                     self.assertTrue((old / "trials" / "t__m__1" / "agent.jsonl").exists())
                     pipeline.expire_transcripts(jobs)
-            self.assertEqual(sorted(p.name for p in (old / "trials" / "t__m__1").iterdir()), ["agent.patch", "result.json"])
+            self.assertEqual(sorted(p.name for p in (old / "trials" / "t__m__1").iterdir()), ["agent.patch", "result.json", "tries"])
+            self.assertFalse((old / "trials" / "t__m__1" / runner.TRIES / "1" / "agent.jsonl").exists())
             self.assertTrue((old / "report.html").exists())
 
     def test_a_starting_run_keeps_the_clones_it_is_about_to_use(self):
@@ -985,7 +1163,8 @@ class PipelineTest(unittest.TestCase):
             repos = Path(d) / "repos"
             (repos / "o__secret.git").mkdir(parents=True)
             job = self.job(d, pipeline.Request(repos=["o/secret"]))
-            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), \
+            # Its own tasks folder too: the run's sweep would otherwise delete this checkout's real ones.
+            with mock.patch.object(tasks, "DEFAULT_REPOS", repos), mock.patch.object(tasks, "DEFAULT_TASKS", Path(d) / "tasks"), \
                     mock.patch.object(tasks, "gh", return_value={"private": True}), \
                     mock.patch.object(pipeline, "alive", side_effect=lambda pid: pid == os.getpid()), \
                     mock.patch.object(pipeline, "preflight", return_value=([baseten_model()], None)), \
@@ -1000,7 +1179,7 @@ class PipelineTest(unittest.TestCase):
             job = self.job(d, pipeline.Request(repos=["o/r"]))
             saved = []
 
-            def check_and_run(candidates, *_, on_checked, on_result):
+            def check_and_run(candidates, *_, on_checked, on_result, **__):
                 on_checked(candidates[0], "valid", 1)
                 meta = pipeline.Job(job.path).meta
                 saved.append((meta["status"]["phase"], meta["tasks"]))
@@ -1048,6 +1227,54 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(runner.lost_trials(Path(d)), 4)
         # Only infrastructure: a diff that won't apply or tests that hang may be the model's doing.
         self.assertEqual([attempt for _, _, attempt, _ in pending], [1, 2, 3, 4, 10])
+
+    def test_tries_are_saved_with_the_run_and_a_resume_keeps_or_raises_them(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(pipeline, "preflight", return_value=([baseten_model()], None)), \
+                mock.patch.object(pipeline, "execute", return_value=0), mock.patch.object(pipeline, "sweep_private"), \
+                mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+            jobs = Path(d) / "jobs"
+
+            def tries(run_id):
+                return pipeline.Job(jobs / run_id).meta.get("tries")
+            cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r1"])
+            cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r2", "--tries", "1"])
+            self.assertEqual((tries("r1"), tries("r2")), (pipeline.DEFAULT_TRIES, 1))
+            cli.main(["run", "--resume", str(jobs / "r2")])
+            self.assertEqual(tries("r2"), 1)  # kept
+            cli.main(["run", "--resume", str(jobs / "r2"), "--tries", "2"])
+            self.assertEqual(tries("r2"), 2)  # raised
+            old = pipeline.Job(jobs / "r1")
+            del old.meta["tries"]
+            old.save()
+            cli.main(["run", "--resume", str(jobs / "r1")])
+            self.assertEqual(tries("r1"), 1)  # a run from before tries were recorded had one
+
+    def test_judges_grade_a_run_only_when_asked_for_and_a_resume_keeps_them(self):
+        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
+
+        def preflight(keys, choice, *_):
+            return [baseten_model()], None if choice == "none" else panel if choice == "default" else panel.only(choice)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(pipeline, "preflight", side_effect=preflight) as checked, \
+                mock.patch.object(pipeline, "execute", return_value=0) as execute, \
+                mock.patch.object(pipeline, "sweep_private"), mock.patch.dict(os.environ), \
+                contextlib.redirect_stdout(io.StringIO()):
+            jobs = Path(d) / "jobs"
+
+            def run(*argv):
+                cli.main(["run", *argv, "--jobs", str(jobs)])
+                return checked.call_args.args[1], execute.call_args.args[2].judge
+            self.assertEqual(run("o/r", "--name", "tests"), ("none", None))  # the default: the hidden tests alone
+            self.assertEqual(run("o/r", "--name", "panel", "--judge"), ("default", panel))  # today's panel and chair
+            self.assertEqual(run("o/r", "--name", "one", "--judge", "a")[0], "a")
+            self.assertIsNone(pipeline.Job(jobs / "tests").meta["judge"])
+            self.assertEqual(pipeline.Job(jobs / "panel").meta["judge"]["chair"]["model"], "b")
+            self.assertEqual(run("--resume", str(jobs / "tests")), ("none", None))  # stays tests only
+            self.assertEqual(run("--resume", str(jobs / "panel")), ("default", panel))  # keeps its judges
+            self.assertEqual(run("--resume", str(jobs / "tests"), "--judge")[0], "default")
+            with self.assertRaisesRegex(SystemExit, "at least 1"):
+                cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r3", "--tries", "0"])
 
     def test_a_resumed_run_still_lists_the_prs_it_left_out_before(self):
         job = SimpleNamespace(meta={"left_out": {"old": "reference-fails"}})
@@ -1116,11 +1343,36 @@ class AppTest(unittest.TestCase):
                 (jobs / run_id).mkdir()
                 (jobs / run_id / "run.json").write_text(json.dumps({"run_id": run_id, "request": request, "tasks": task_ids}))
                 (jobs / run_id / "report.json").write_text(json.dumps(
-                    {"summary": {"m": {"valid": 1, "cost_per_attempt": cost, "median_seconds": 60}}}))
+                    {"summary": {"m": {"valid": 1, "solved": 1, "cost_per_attempt": cost, "median_seconds": 60}}}))
             found = app.App(jobs).estimates([{"id": "big"}, {"id": "quick"}])  # newest first
         self.assertEqual(found["m"]["cost_per_attempt"], 2.0)  # with nothing closer, the most recent run
-        self.assertEqual(found["m"]["by_scope"], {"o/big": {"cost_per_attempt": 2.0, "seconds_per_attempt": 60},
-                                                  "o/r,o/s": {"cost_per_attempt": 0.2, "seconds_per_attempt": 60}})
+        solved_first = {"tries_per_attempt": 1.0, "solve_rate": 1.0, "seconds_per_attempt": 60}
+        self.assertEqual(found["m"]["by_scope"], {"o/big": {"cost_per_attempt": 2.0, "cost_per_try": 2.0, **solved_first},
+                                                  "o/r,o/s": {"cost_per_attempt": 0.2, "cost_per_try": 0.2, **solved_first}})
+
+    def test_estimates_count_the_tries_an_attempt_is_likely_to_take(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d)
+            (jobs / "r").mkdir()
+            (jobs / "r" / "run.json").write_text(json.dumps({"run_id": "r", "tasks": ["o__r-1"]}))
+            # Four attempts took eight tries and solved one: a try solves it one time in eight.
+            (jobs / "r" / "report.json").write_text(json.dumps({"summary": {"m": {
+                "valid": 4, "solved": 1, "tries": 8, "cost_per_attempt": 2.0, "cost_per_try": 1.0,
+                "median_seconds": 200, "median_seconds_per_try": 100}}}))
+            found = app.App(jobs).estimates([{"id": "r"}])["m"]
+        expected = 1 + 7 / 8 + (7 / 8) ** 2  # a second try when the first fails, a third when both do
+        self.assertAlmostEqual(found["tries_per_attempt"], expected)
+        self.assertAlmostEqual(found["cost_per_attempt"], expected)
+        self.assertAlmostEqual(found["seconds_per_attempt"], 100 * expected)
+        self.assertEqual((app.expected_tries(1.0, 3), app.expected_tries(0.0, 3), app.expected_tries(None, 3)), (1, 3, 3))
+
+    def test_a_board_cell_counts_every_try(self):
+        cell = app.cell("m", 1, {"outcome": "solved", "try": 2, "started_at": "2026-10-23T18:01:00+00:00",
+                                 "finished_at": "2026-10-23T18:02:00+00:00", "agent": {"cost_usd": 0.5},
+                                 "earlier_tries": [{"try": 1, "started_at": "2026-10-23T18:00:00+00:00",
+                                                    "finished_at": "2026-10-23T18:00:30+00:00", "agent": {"cost_usd": 1.0}}]})
+        self.assertEqual((cell["seconds"], cell["cost"], cell["try"]), (90, 1.5, 2))
+        self.assertNotIn("try", app.cell("m", 1, {"outcome": "solved", "agent": {"cost_usd": 0.5}}))
 
     def test_the_board_shows_each_attempt_live(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1187,52 +1439,39 @@ class AppTest(unittest.TestCase):
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}):
             self.assertNotIn("error", page.repo_info("o/r"))
-            with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+            with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
                 self.assertIn("public repositories only", page.repo_info("o/r")["error"])
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh", return_value={"private": False, "language": "Go"}), \
-                mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
             self.assertNotIn("error", page.repo_info("o/r"))
 
     def test_github_is_asked_about_a_repository_once_while_it_is_picked(self):
         page = app.App(Path("/nonexistent"))
         with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")) as gh:
             self.assertIn("error", page.repo_info("o/r"))
-            self.assertIn("error", page.repo_info("o/r"))  # a failure isn't kept: added on GitHub, it's asked again
+            self.assertIn("error", page.repo_info("o/r"))  # a failure isn't kept: it's asked again
         self.assertEqual(gh.call_count, 2)
         with mock.patch.object(app.tasks, "gh", return_value={"private": False, "language": "Go"}) as gh, \
                 mock.patch.object(app.tasks, "browse", return_value=[{"number": 7}]) as browse:
             self.assertEqual(page.repo_info("o/r")["language"], "Go")
             self.assertEqual(page.pulls("o/r")["prs"], [{"number": 7}])
             self.assertEqual(page.pulls("o/r")["prs"], [{"number": 7}])  # the listing found a moment ago
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            page.repo_info("o/r", "a@x.co")  # signed in with GitHub: asked again, with their token
-        self.assertEqual([c.args for c in gh.call_args_list], [("repos/o/r", None), ("repos/o/r", "tok-a")])
+            page.repo_info("o/r", "a@x.co")  # anyone else picking it gets the same answer
+        self.assertEqual([c.args for c in gh.call_args_list], [("repos/o/r", None)])
         self.assertEqual(browse.call_count, 1)
 
-    def test_signing_in_with_github_reads_private_repositories_for_that_person(self):
+    def test_the_hosted_page_without_its_own_token_runs_the_quick_sample_only(self):
         page = app.App(Path("/nonexistent"))
-        with mock.patch.object(app.tasks, "gh", return_value={"private": True, "language": "Go"}) as gh, \
-                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
-            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "a@x.co")["error"])
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            self.assertNotIn("error", page.repo_info("o/r", "a@x.co"))
-            self.assertEqual(gh.call_args.args, ("repos/o/r", "tok-a"))
-            self.assertIn("Sign in with GitHub", page.repo_info("o/r", "b@x.co")["error"])  # only for the one who signed in
-            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "public": False, "login": "ana"})
-            page.github["a@x.co"]["until"] = 0  # GitHub's token expired
-            self.assertEqual(page.github_state("a@x.co"), {"sign_in": True, "public": False, "login": None})
-
-    def test_the_hosted_page_reads_github_only_with_the_visitors_own_sign_in(self):
-        page = app.App(Path("/nonexistent"))
-        with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+        with mock.patch.object(app.tasks, "gh") as gh, mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
+                mock.patch.object(app, "PAGE_GITHUB_TOKEN", None), \
                 mock.patch.object(page, "state", return_value={"checks": {"sandboxes": True, "gh": False}}):
-            self.assertIn("Sign in with GitHub", page.repo_info("o/public", "a@x.co")["error"])  # public ones too
+            self.assertEqual(page.repo_info("o/public", "a@x.co")["error"], app.NO_PAGE_TOKEN)
             with mock.patch.object(app, "quick_collected", return_value=False):  # the quick sample isn't collected yet
-                self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
+                self.assertEqual(page._start({"quick": True, "models": ["a"]}, "a@x.co")["error"], app.NO_PAGE_TOKEN)
         gh.assert_not_called()  # the page has no GitHub login of its own to fall back on
 
-    def test_the_pages_own_token_reads_public_repositories_without_a_github_sign_in(self):
+    def test_the_pages_own_token_reads_public_repositories(self):
         jobs = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, jobs, True)
         page = app.App(jobs)
@@ -1242,73 +1481,59 @@ class AppTest(unittest.TestCase):
             if endpoint not in answers:
                 raise RuntimeError("gh api: HTTP 404")  # a public-only token can't see a private repository
             return answers[endpoint]
-        with mock.patch.object(app.tasks, "gh", side_effect=gh) as asked, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
+        with mock.patch.object(app.tasks, "gh", side_effect=gh) as asked, \
                 mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"), mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"), \
                 mock.patch.object(page, "spawn") as spawn, mock.patch.object(app.pipeline, "preflight"), \
                 mock.patch.object(page, "state", return_value={"blocked": None, "quick": {"tasks": 10}, "checks": {
-                    "sandboxes": True, "gh": False, "judge": {"problem": None}}}):
+                    "sandboxes": True, "gh": False}}):
             self.assertEqual(page.repo_info("o/public", "a@x.co")["language"], "Go")
             self.assertEqual(asked.call_args.args, ("repos/o/public", "page-tok"))
-            self.assertIn("if it's private, sign in with GitHub", page.repo_info("o/private", "a@x.co")["error"])
-            self.assertTrue(page.github_state("a@x.co")["public"])
+            self.assertIn("public repositories only", page.repo_info("o/private", "a@x.co")["error"])
             self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co"), {"id": mock.ANY})
-            self.assertEqual(spawn.call_args.args[2], "page-tok")
-            self.assertIn("private", page._start({"repo": "o/private", "models": ["a"]}, "b@x.co")["error"])
+            spawn.assert_called_once()
+            self.assertIn("public repositories only", page._start({"repo": "o/private", "models": ["a"]}, "b@x.co")["error"])
             answers["repos/o/secret"] = {"private": True, "language": "Go"}  # even if the token could read one
-            self.assertIn("private repository", page.repo_info("o/secret", "a@x.co")["error"])
+            self.assertIn("public repositories only", page.repo_info("o/secret", "a@x.co")["error"])
 
-    def test_the_quick_sample_starts_without_github_once_its_tasks_are_collected(self):
-        page = app.App(Path("/nonexistent"))
-        with mock.patch.object(app.tasks, "gh") as gh, mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
-                mock.patch.object(app, "quick_collected", return_value=True), \
-                mock.patch.object(page, "state", return_value={"checks": {"sandboxes": True, "gh": False}}):
-            self.assertNotEqual(page._start({"quick": True, "models": []}, "a@x.co")["error"], app.SIGN_IN_FIRST)
-            self.assertEqual(page._start({"repo": "o/public", "models": ["a"]}, "a@x.co")["error"], app.SIGN_IN_FIRST)
-        gh.assert_not_called()  # its tasks are only read: nothing asks GitHub
+    def test_a_run_reads_and_clones_with_the_pages_own_token(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app.subprocess, "Popen") as popen:
+            page = app.App(Path(d))
+            page.spawn("r1", ["o/a"])
+            self.assertIsNone(popen.call_args.kwargs["env"])  # locally: the `gh` login
+            with mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
+                page.spawn("r2", ["o/a"])
+            self.assertEqual(popen.call_args.kwargs["env"]["GH_TOKEN"], "page-tok")
 
-    def test_a_repository_the_github_app_cant_read_points_to_adding_it(self):
-        page = app.App(Path("/nonexistent"))
-        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-        install = "https://github.com/apps/eval-app/installations/new"
-        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Not Found (HTTP 404)")), \
-                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
-            self.assertEqual(page.repo_info("o/r", "a@x.co")["install"], install)
-            self.assertNotIn("install", page.repo_info("o/r", "b@x.co"))  # not signed in: the page's own login missed it
-            self.assertEqual(page.github_state("a@x.co")["install"], install)  # where to add more
+    def test_the_hosted_page_offers_no_github_sign_in(self):
+        import http.client
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d) / "jobs")
+            handler = type("H", (app.Handler,), {"app": page})
+            server = app.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                for path in ("/api/github/device", "/api/github/poll", "/api/github/sign-out"):
+                    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+                    conn.request("POST", path, body="{}", headers={"content-type": "application/json",
+                                                                   "x-forwarded-email": "a@x.co"})
+                    self.assertEqual(conn.getresponse().status, 404, path)
+            finally:
+                server.shutdown()
 
-    def test_a_github_sign_in_that_ran_out_asks_to_sign_in_again(self):
-        page = app.App(Path("/nonexistent"))
-        page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-        with mock.patch.object(app.tasks, "gh", side_effect=RuntimeError("gh api repos/o/r: Bad credentials (HTTP 401)")), \
-                mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), mock.patch.object(app, "GITHUB_APP", "eval-app"):
-            info = page.repo_info("o/r", "a@x.co")
-        self.assertIn("Sign in with GitHub again", info["error"])
-        self.assertNotIn("install", info)  # nothing to add on GitHub: the repository may well be there
-        self.assertIsNone(page.token("a@x.co"))
-
-    def test_the_github_sign_in_waits_for_the_person_to_approve_it(self):
-        page = app.App(Path("/nonexistent"))
-        answers = [{"device_code": "dev", "user_code": "AB-12", "verification_uri": "https://github.com/login/device",
-                    "interval": 5, "expires_in": 900},
-                   {"error": "authorization_pending"}, {"error": "slow_down"},
-                   {"access_token": "tok", "expires_in": 28800}]
-        with mock.patch.object(app, "GITHUB_CLIENT_ID", "client"), \
-                mock.patch.object(app, "github_form", side_effect=answers) as form, \
-                mock.patch.object(app.tasks, "gh", return_value={"login": "ana"}):
-            self.assertEqual(page.github_device("a@x.co")["user_code"], "AB-12")
-            self.assertEqual(form.call_args.args[1], {"client_id": "client"})  # a GitHub App: its own permissions
-            self.assertEqual(page.github_state("a@x.co")["device"]["user_code"], "AB-12")  # a reloaded page shows it again
-            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 5})
-            self.assertEqual(page.github_poll("a@x.co"), {"pending": True, "interval": 10})  # GitHub asked to slow down
-            self.assertEqual(page.github_poll("a@x.co"), {"login": "ana"})
-        self.assertEqual(page.token("a@x.co"), "tok")
-        self.assertEqual(page.github_state("a@x.co"), {"sign_in": False, "public": False, "login": "ana"})  # no code waiting; no client id here
-        self.assertIn("expired", page.github_poll("a@x.co")["error"])  # nothing is waiting any more
-        with mock.patch.object(app.time, "time", return_value=app.time.time() + 8 * 3600):
-            self.assertIsNone(page.token("a@x.co"))  # 8 hours by the clock, however long the sandbox slept
-        page.github_sign_out("a@x.co")
-        self.assertIsNone(page.token("a@x.co"))
-        self.assertIn("isn't set up", page.github_device("a@x.co")["error"])  # locally: no client id, gh's login reads
+    def test_the_hosted_page_does_not_resume_a_private_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            (Path(d) / "r1").mkdir()
+            (Path(d) / "r1" / "run.json").write_text(json.dumps({"request": {"repos": ["o/a"]}, "tasks": []}))
+            (Path(d) / "r1" / app.ACCESS).write_text(json.dumps({"owner": "a@x.co", "private": True}))
+            run = {"resumable": True, "models": [], "progress": {"total": 0, "done": 0}, "lost": 0}
+            with mock.patch.object(page, "manageable_run", return_value=run), mock.patch.object(page, "spawn") as spawn, \
+                    mock.patch.object(page, "state", return_value={"blocked": None}), \
+                    mock.patch.object(app, "PAGE_GITHUB_TOKEN", "page-tok"):
+                with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                    self.assertIn("public repositories only", page._resume("r1", "a@x.co")["error"])
+                spawn.assert_not_called()
+                self.assertEqual(page._resume("r1", "a@x.co"), {"id": "r1"})  # locally the `gh` login reads it
 
     def test_a_guests_private_run_is_seen_only_by_who_started_it(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1476,38 +1701,35 @@ class AppTest(unittest.TestCase):
     def test_a_run_on_a_private_repository_belongs_to_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            page.github["a@x.co"] = {"token": "tok-a", "login": "ana", "until": app.time.time() + 60}
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True, "private": True}):
                 started = page.start({"pulls": {"o/a": [1]}, "models": ["m"]}, "a@x.co")
             access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
-        self.assertEqual(spawn.call_args.args[2], "tok-a")  # it clones with their GitHub sign-in
+        spawn.assert_called_once()
 
-    def test_starting_a_run_takes_the_judges_check_from_the_page(self):
+    def test_the_page_starts_runs_graded_on_their_hidden_tests_alone(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            checks = {"sandboxes": True, "gh": True, "judge": {"problem": "the judge needs KEY"}}
+            checks = {"sandboxes": True, "gh": True}
             with mock.patch.object(page, "state", return_value={"busy": False, "runs": [], "checks": checks}), \
                     mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight") as preflight, \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
-                self.assertEqual(page.start({"pulls": {"o/a": [1]}, "models": ["m"]}), {"error": "the judge needs KEY"})
-                checks["judge"]["problem"] = None
-                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"]}))
-        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked again
+                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"], "judge": "default"}))
+        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked
         spawn.assert_called_once()
-        self.assertIn("--judges-checked", spawn.call_args.args[1])  # nor by the run it starts
+        self.assertFalse([a for a in spawn.call_args.args[1] if a.startswith("--judge")])  # nor turned on by the form
 
-    def test_a_run_the_page_started_does_not_ask_the_judges_again(self):
+    def test_judges_are_asked_only_when_a_run_wants_them(self):
         panel = SimpleNamespace(problem=mock.Mock(return_value="the judge needs KEY"))
         with mock.patch.object(app.pipeline.config, "load", return_value=({}, panel)):
-            self.assertEqual(app.pipeline.preflight([], judges_checked=True), ([], panel))
+            self.assertEqual(app.pipeline.preflight([]), ([], None))  # the hidden tests alone decide
             panel.problem.assert_not_called()
-            with self.assertRaises(SystemExit):
-                app.pipeline.preflight([])
+            with self.assertRaises(SystemExit):  # asked for, a judge that can't run stops the run before it starts
+                app.pipeline.preflight([], "default")
 
     @staticmethod
     def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
@@ -1562,14 +1784,19 @@ class AppTest(unittest.TestCase):
             state = self.hosted_state(page, "a@x.co")
             self.assertEqual((state["spend"], state["blocked"]), ({"spent": 45, "cap": 50}, None))
             self.assertIsNone(self.hosted_state(page, None)["spend"])  # locally, no one's own limit
-            model = {"key": "m", "cost_per_attempt": 1.0, "by_scope": {"o/a": {"cost_per_attempt": 0.1}}}
+            model = {"key": "m", "cost_per_try": 1.0, "solve_rate": 1.0,
+                     "by_scope": {"o/a": {"cost_per_try": 0.1, "solve_rate": 1.0}}}
             state["models"] = [model]
             self.assertIn("about $10.00, and you have $5.00 left of your $50.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co"))
             self.assertIsNone(page.over_budget(state, ["m"], 10, "o/a", "a@x.co"))  # cheaper on this repository
-            # No earlier run prices "other": it counts as the dearest of UNKNOWN_ATTEMPT_COST and every attempt seen.
-            self.assertIn(f"about {app.usd(app.UNKNOWN_ATTEMPT_COST * 10)}", page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
+            model["solve_rate"] = 0.0  # never solves on the first try: every attempt pays for every try
+            self.assertIn("about $30.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co", tries=3))
+            self.assertIn("about $10.00", page.over_budget(state, ["m"], 10, "o/x", "a@x.co", tries=1))
+            # No earlier run prices "other": each of its tries counts as the dearest of UNKNOWN_ATTEMPT_COST and every try seen.
+            self.assertIn(f"about {app.usd(app.UNKNOWN_ATTEMPT_COST * 10 * pipeline.DEFAULT_TRIES)}",
+                          page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
             with mock.patch.object(app, "UNKNOWN_ATTEMPT_COST", 0.01):
-                self.assertIn("about $10.00", page.over_budget(state, ["other"], 10, "o/a", "a@x.co"))
+                self.assertIn("about $10.00", page.over_budget(state, ["other"], 10, "o/a", "a@x.co", tries=1))
             self.add_run(jobs, "r2", "a@x.co", phase="done", cost=10)
             self.assertIn("reached your $50.00 limit", self.hosted_state(page, "a@x.co")["blocked"])
             self.add_run(jobs, "r3", None, phase="done", cost=50)
@@ -1634,7 +1861,7 @@ class AppTest(unittest.TestCase):
     def test_a_run_started_while_signed_in_records_its_starter(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
@@ -1648,7 +1875,7 @@ class AppTest(unittest.TestCase):
     def test_runs_started_in_the_same_second_get_their_own_folders(self):
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}, "quick": {"tasks": 10}}
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}, "quick": {"tasks": 10}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(app, "datetime", SimpleNamespace(now=lambda: datetime(2026, 10, 29, 9, 0, 0))):
@@ -1696,14 +1923,14 @@ class AppTest(unittest.TestCase):
             self.assertIsInstance(app.App.chosen_pulls(bad), str, bad)
         with tempfile.TemporaryDirectory() as d:
             page = app.App(Path(d))
-            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True, "judge": {"problem": None}}}
+            ready = {"busy": False, "checks": {"sandboxes": True, "gh": True}}
             with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn") as spawn, \
                     mock.patch.object(app.pipeline, "preflight"), \
                     mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
                 started = page.start({"pulls": {"o/a": [3, 1]}, "models": ["m"]})
                 refused = page.start({"pulls": {"o/a": [1], "x/b": [2]}, "models": ["m"], "setup": "npm ci", "test": "npx t"})
         self.assertTrue(started["id"].startswith("a-"))
-        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"], "--judges-checked"])
+        self.assertEqual(spawn.call_args.args[1], ["o/a#1", "o/a#3", "--models", "m", "--name", started["id"]])
         self.assertIn("one repository", refused["error"])
 
     def test_the_page_serves_reports_and_traces_but_not_raw_logs(self):
@@ -1788,6 +2015,33 @@ class ReportTest(unittest.TestCase):
         self.assertEqual((s["valid"], s["invalid"], s["solved"]), (2, 1, 1))
         self.assertEqual(s["pass_at_1"], 0.5)
         self.assertEqual(s["cost_per_solved"], 2.0)  # the failure is paid for; the invalid one is not counted
+
+    def test_a_run_from_before_tries_reads_as_before(self):
+        trials = [self.trial("t1", "m", "solved", 1.0), self.trial("t2", "m", "failed", 1.0)]
+        s = report.summarize(trials)
+        self.assertEqual((s["cost_per_attempt"], s["cost_per_solved"], s["median_seconds"], s["median_turns"],
+                          s["mean_output_tokens"]), (1.0, 2.0, 60, 5, 5))
+        self.assertEqual((s["tries"], s["cost_per_try"], s["solved_on"]), (2, 1.0, [1]))
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "x").mkdir()
+            (Path(d) / "x" / "result.json").write_text(json.dumps(trials[0]))
+            record = report.trial_record(Path(d) / "x")
+        self.assertNotIn("try", record)
+        self.assertNotIn("earlier_tries", record)
+
+    def test_an_attempt_pays_for_every_try_and_says_which_one_solved_it(self):
+        later = {**self.trial("t1", "m", "solved", 1.0), "try": 2,
+                 "started_at": "2026-10-20T00:01:00+00:00", "finished_at": "2026-10-20T00:02:00+00:00",
+                 "earlier_tries": [{"try": 1, "outcome": "failed", "started_at": "2026-10-20T00:00:00+00:00",
+                                    "finished_at": "2026-10-20T00:00:30+00:00",
+                                    "agent": {"cost_usd": 2.0, "seconds": 30, "num_turns": 2, "tokens": {"output": 7}}}]}
+        s = report.summarize([later, self.trial("t2", "m", "failed", 1.0)])
+        self.assertEqual((s["solved"], s["cost_usd"], s["cost_per_attempt"], s["cost_per_solved"]), (1, 4.0, 2.0, 4.0))
+        self.assertEqual((s["tries"], s["solved_on"]), (3, [0, 1]))
+        self.assertAlmostEqual(s["cost_per_try"], 4 / 3)
+        self.assertEqual((s["median_seconds"], s["median_turns"], s["mean_output_tokens"]), (75, 6, 8.5))  # 90 and 60, ...
+        timing = report.summarize_timing([later])
+        self.assertEqual((timing["elapsed_seconds"], timing["total_working_seconds"], timing["timed_attempts"]), (90, 90, 1))
 
     def test_rate_limit_waits_are_not_working_time(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2185,6 +2439,28 @@ class TraceTest(unittest.TestCase):
         self.assertEqual((bash["title"], bash["detail"], bash["output"], bash["at"]), ("grep -rn parse .", "grep -rn parse .\nls", "p.go:1: parse", 30))
         self.assertEqual((edit["title"], edit["detail"], edit["error"], edit["at"]), ("p.go", "- a - b\n+ a + b", True, 100))
         self.assertEqual((got["hidden_thinking"], got["tool_calls"], got["tool_errors"], got["finished"]["turns"]), (1, 2, 1, 3))
+
+    def test_a_pi_log_reads_the_same(self):
+        with tempfile.TemporaryDirectory() as d:
+            trial = Path(d) / "t"
+            start = datetime(2026, 10, 20, tzinfo=timezone.utc).timestamp() * 1000
+            self.write(trial, [
+                {"type": "message_end", "message": {"role": "assistant", "stopReason": "toolUse", "content": [
+                    {"type": "thinking", "thinking": "Look at the parser."},
+                    {"type": "toolCall", "id": "a", "name": "edit", "arguments": {
+                        "path": "/workspace/p.go", "edits": [{"oldText": "a - b", "newText": "a + b"}]}}]}},
+                {"type": "message_end", "message": {"role": "toolResult", "toolCallId": "a", "toolName": "edit",
+                                                    "content": [{"type": "text", "text": "ok"}], "isError": False,
+                                                    "timestamp": start + 30000}},
+                {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+                                                    "content": [{"type": "text", "text": "Done."}]}},
+                {"type": "agent_end"},
+            ], seconds=40)
+            got = trace.condense(trial)
+        self.assertEqual([(s["kind"], s.get("tool")) for s in got["steps"]], [("thinking", None), ("tool", "edit"), ("text", None)])
+        edit = got["steps"][1]
+        self.assertEqual((edit["title"], edit["detail"], edit["output"], edit["error"]), ("p.go", "- a - b\n+ a + b", "ok", False))
+        self.assertEqual(got["finished"], {"turns": 2, "seconds": 40.0, "error": False, "subtype": "success"})
 
     def test_credentials_never_leave_in_a_trace(self):
         with tempfile.TemporaryDirectory() as d, mock_env(SOME_SERVICE_TOKEN="plain-words-but-secret"):

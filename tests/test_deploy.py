@@ -20,7 +20,7 @@ deploy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy)
 
 WENT = {"outcome": "failed", "invalid_reason": None, "setup": {"exit_code": 0}, "agent": {"subtype": "success"},
-        "diff": {"files": 2}, "tests": {"passed": False}, "judge": {"verdict": "fail"}}
+        "diff": {"files": 2}, "tests": {"passed": False}}
 
 
 
@@ -93,7 +93,7 @@ class SignInAcrossReleases(unittest.TestCase):
 class SmokeVerdict(unittest.TestCase):
     def test_an_attempt_that_went_end_to_end_passes_whether_or_not_it_solved(self):
         self.assertIsNone(deploy.verdict({}, WENT))
-        self.assertIsNone(deploy.verdict({}, {**WENT, "outcome": "solved", "judge": {"verdict": "pass"}}))
+        self.assertIsNone(deploy.verdict({}, {**WENT, "outcome": "solved", "tests": {"passed": True}}))
         self.assertIsNone(deploy.verdict({}, {**WENT, "agent": {"timed_out": True}}))  # stopped at its time limit
 
     def test_a_not_scored_attempt_fails_with_its_cause(self):
@@ -109,7 +109,7 @@ class SmokeVerdict(unittest.TestCase):
 
     def test_each_missing_step_fails(self):
         for change, words in [({"agent": {}}, "agent"), ({"tests": None}, "hidden tests"),
-                              ({"diff": {"files": 0}}, "changed no files"), ({"judge": {"error": "429"}}, "judges"),
+                              ({"diff": {"files": 0}}, "changed no files"),
                               ({"outcome": "interrupted"}, "interrupted")]:
             with self.subTest(change=change):
                 self.assertIn(words, deploy.verdict({}, {**WENT, **change}))
@@ -137,7 +137,7 @@ class UnverifiedRelease(unittest.TestCase):
         def smoke(*args):
             calls.append(("smoke", args[1], args[-1]))
             if smoke_fails:
-                raise deploy.SmokeFailed("judges failed")
+                raise deploy.SmokeFailed("the hidden tests didn't run")
 
         with mock.patch.object(deploy, "remote_json", lambda box, path: left), \
                 mock.patch.object(deploy, "live_release", lambda box: live), \
@@ -192,6 +192,12 @@ class SmokeStaysAwake(unittest.TestCase):
         started = inspect.getsource(deploy.smoke)
         self.assertIn('"keepAlive": True', started)
         self.assertIn('"timeout": SMOKE_TIMEOUT', started)  # and bounded: awake no longer than the run may take
+
+    def test_the_smoke_attempt_is_graded_like_the_pages_runs_in_one_try(self):
+        import inspect
+        started = inspect.getsource(deploy.smoke)
+        self.assertIn("--tries 1", started)  # a failed try run again would only make the deploy slower
+        self.assertNotIn("--judge", started)  # the page's runs have no judges, so neither does the smoke test
 
 
 class PageSandboxes(unittest.TestCase):

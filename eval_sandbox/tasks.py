@@ -6,6 +6,7 @@ A task folder is what one trial needs and nothing more:
       task.toml                  metadata, setup and test commands, timeouts
       instruction.md             what the agent is asked to do (PR or issue text, names the tests call)
       environment/source.tar.gz  the repository at the PR's base commit, no .git
+      environment/history.pack   the commits up to the base commit, made when first run
       tests/files/...            the PR's test files at the merged commit   (hidden)
       tests/deleted.txt          test files the PR removed                  (hidden)
       tests/test.sh              runs the hidden tests, writes the reward   (hidden)
@@ -45,7 +46,9 @@ QUICK = ROOT / "configs" / "quick_tasks.toml"
 # A PR makes a good task when it changes code and tests together and is a reviewable size.
 # Scans of recent PRs take only those up to DEFAULT_MAX_LINES; bigger ones cost a lot per
 # attempt and tell little. PRs asked for by number may go up to MAX_LINES.
-MAX_FILES, MAX_LINES, DEFAULT_MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 40, 1600, 400, 400_000, 80
+MAX_FILES, MAX_LINES, DEFAULT_MAX_LINES, MAX_PATCH_BYTES, MIN_REQUEST_CHARS = 80, 3000, 1000, 1_000_000, 80
+# An attempt's time limit: an hour, so the agent has room to work through a larger pull request.
+AGENT_SECONDS = 3600
 # Test files, and what only tests read (Go testdata, snapshots): all of it is hidden from the agent.
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|__snapshots__|testing|testdata|fixtures)(/|$)"
                        r"|(?:_test\.go|[._](?:test|spec)\.[cm]?[jt]sx?|^test_[^/]+\.py|/test_[^/]+\.py|\.snap)$", re.I)
@@ -78,6 +81,10 @@ class Task:
 
 class Skip(Exception):
     """A pull request that can't be a task, and why."""
+
+
+class NoRecipe(Skip):
+    """A repository without default commands here: the run works them out (commands.py)."""
 
 
 def parse_pull(text: str) -> tuple[str, int] | None:
@@ -154,7 +161,7 @@ def recipe(repo: str, language: str, test_paths: list[str], package_json: dict |
                 "test": ("node_modules/.bin/vitest run --project main --coverage.enabled=false "
                          + " ".join(shlex.quote(p) for p in files)),
                 "scope": "the PR's changed test files"}
-    raise Skip(f"no default setup and test commands for {language}; pass --setup and --test")
+    raise NoRecipe(f"no default setup and test commands for {language}; pass --setup and --test")
 
 
 def toml_value(value) -> str:
@@ -176,14 +183,14 @@ def write_toml(path: Path, sections: dict[str, dict]) -> None:
     path.write_text("\n".join(lines))
 
 
-# Hosted (GitHub sign-in on, the page's runs inherit its environment), visitors have no terminal: errors name
-# what they or the page's admins can do instead of a `gh` command.
-HOSTED = bool(os.environ.get("PR_EVAL_GITHUB_CLIENT_ID"))
+# Hosted (public repositories only; the page's runs inherit its environment), visitors have no terminal: errors
+# name what they or the page's admins can do instead of a `gh` command.
+HOSTED = bool(os.environ.get("PR_EVAL_PUBLIC_REPOS_ONLY"))
 
 
 def gh(endpoint: str, token: str | None = None):
     """One GitHub API call through the gh CLI, which carries the user's own login, or `token`:
-    the hosted page's visitor's, when they signed in with GitHub."""
+    the hosted page's own, which reads public repositories only."""
     return gh_args([endpoint], endpoint, token)
 
 
@@ -242,7 +249,7 @@ def clone(repo: str, repos_dir: Path, on_progress=None) -> Path:
         if p.wait():
             shutil.rmtree(partial, ignore_errors=True)
             raise SystemExit(f"couldn't clone {repo} ({tail.strip()[-200:]}): " + (
-                "check that your GitHub sign-in can read it: add it to the page's GitHub App on GitHub" if HOSTED
+                "this page runs public repositories only" if HOSTED
                 else "check that `gh auth status` shows an account with access to it"))
         partial.rename(path)
     return path
@@ -267,8 +274,8 @@ def fetching(mirror: Path) -> threading.Lock:
     return _FETCHING.setdefault(mirror, threading.Lock())
 
 
-def prefetch(mirror: Path, commit: str) -> None:
-    """Fetch, in one batch, the files at `commit` that a blobless clone doesn't have yet.
+def prefetch(mirror: Path, *commits: str) -> None:
+    """Fetch, in one batch, the files at `commits` that a blobless clone doesn't have yet.
 
     Without it, `git archive` asks GitHub for each missing file on its own, one round trip per
     file. The first task in a repository fetches its whole tree (PostHog's: 220 MB, under a
@@ -277,7 +284,7 @@ def prefetch(mirror: Path, commit: str) -> None:
     if not git(mirror, "config", "--get", "--default=", "remote.origin.promisor").strip():
         return  # a full clone has everything
     with fetching(mirror):
-        listing = git(mirror, "rev-list", "--objects", "--no-walk", "--missing=print", commit).decode()
+        listing = git(mirror, "rev-list", "--objects", "--no-walk", "--missing=print", *commits).decode()
         missing = [line[1:] for line in listing.splitlines() if line.startswith("?")]
         if missing:
             subprocess.run(["git", *GIT_AUTH, f"--git-dir={mirror}", "-c", "fetch.negotiationAlgorithm=noop",
@@ -473,7 +480,13 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
     runnable = [p for p in test_paths if p in present and SOURCE_FILE.search(p)]
     go_files = [f["path"] for f in files if f["path"].endswith(".go")]
     imports = go_imports(mirror, reference, go_files) if repo == "grafana/grafana" else None
-    commands = recipe(repo, language, runnable, package_json, imports) if not (setup and test) else {}
+    commands = {}
+    if not (setup and test):
+        try:
+            commands = recipe(repo, language, runnable, package_json, imports)
+        except NoRecipe:  # a guess from its files for now, proved when the run starts
+            from .commands import first_guess
+            commands = first_guess(mirror, base, language, runnable)
     template = test or commands["test"]
     commands = {"setup": setup or commands["setup"], "scope": commands.get("scope", "the given test command"),
                 "setup_timeout": commands.get("setup_timeout", 900), "memory": commands.get("memory"),
@@ -515,7 +528,7 @@ def export_task(mirror: Path, repo: str, language: str, pr: dict, out: Path, *,
                  "reference_sha": reference, "instruction_source": source},
         "environment": {"setup": commands["setup"], "setup_timeout_sec": commands["setup_timeout"],
                         **({"memory_mb": commands["memory"]} if commands["memory"] else {})},
-        "agent": {"timeout_sec": 1800},
+        "agent": {"timeout_sec": AGENT_SECONDS},
         "verifier": {"test": commands["test"], "test_template": template, "scope": commands["scope"], "timeout_sec": 900,
                      "test_files": test_paths, "deleted_test_files": deleted},
     })
@@ -643,11 +656,6 @@ def collect(repo: str, out: Path = DEFAULT_TASKS, *, prs: list[int] | None = Non
         language = language or gh(f"repos/{repo}").get("language") or "unknown"
     except RuntimeError as exc:
         raise SystemExit(f"can't read {repo} on GitHub: {exc}") from None
-    if not (setup and test):
-        try:
-            recipe(repo, language, [])
-        except Skip as why:
-            raise SystemExit(f"{repo}: {why}") from None
     say(f"Cloning {repo}")
     mirror = clone(repo, repos_dir, on_progress)
     out.mkdir(parents=True, exist_ok=True)
@@ -732,6 +740,64 @@ def spread(rows, limit, repo=lambda row: row["repo"]):
             if by_repo[name] and len(picked) < limit:
                 picked.append(by_repo[name].pop())  # newest first: least likely to be memorized
     return picked
+
+
+# The agent's checkout is a git repository with the commits that led to the base commit, as a clone
+# would be, so `git log` and `git blame` show how the code got here. The last HISTORY_COMMITS of
+# them: enough for that, and small enough to upload to every sandbox (chi's: 0.3 MB, PostHog's: 12 MB).
+HISTORY_COMMITS, HISTORY_MAX_BYTES = 100, 64 << 20
+_HISTORIES: dict[Path, threading.Lock] = {}
+
+
+@dataclass
+class History:
+    pack: Path          # a git pack: the commits, and their files other than the base commit's own
+    base: str
+    shallow: list[str]  # the commits where it stops, whose parents it doesn't have
+    commits: int
+
+
+def history(task: Task, repos_dir: Path = DEFAULT_REPOS) -> History | None:
+    """The history up to the task's base commit, for the agent's checkout, made once per task.
+
+    None when the repository's clone isn't here (or the pack would be too big). Only the base commit
+    and its ancestors go in: never the pull request's commits or anything after them.
+    """
+    env, base = task.path / "environment", task.meta["task"]["base_sha"]
+    pack, about = env / "history.pack", env / "history.json"
+    with _HISTORIES.setdefault(task.path, threading.Lock()):
+        if not about.is_file():
+            mirror = repos_dir / f"{task.meta['task']['repo'].replace('/', '__')}.git"
+            if not re.fullmatch(r"[0-9a-f]{40}", base) or not mirror.is_dir():
+                return None
+            write_history(mirror, base, pack, about)
+        meta = json.loads(about.read_text())
+    if not meta.get("commits") or not pack.is_file():
+        return None
+    return History(pack, meta["base"], meta["shallow"], meta["commits"])
+
+
+def write_history(mirror: Path, base: str, pack: Path, about: Path) -> None:
+    listing = git(mirror, "rev-list", "--parents", "--topo-order", f"--max-count={HISTORY_COMMITS}", base).decode()
+    parents = {commit: rest for commit, *rest in map(str.split, listing.splitlines())}
+    shallow = [commit for commit, rest in parents.items() if any(p not in parents for p in rest)]
+    prefetch(mirror, *parents)  # older versions of files a blobless clone hasn't fetched
+    # The sandbox has the base commit's files already, in the source it unpacks.
+    present = {line.split()[2] for line in git(mirror, "ls-tree", "-r", base).decode().splitlines()
+               if line.split()[1] == "blob"}
+    objects = [line for line in git(mirror, "rev-list", "--objects", "--no-walk=unsorted", "--missing=print",
+                                    *parents).decode().splitlines()
+               if not line.startswith("?") and line.split()[0] not in present]
+    tmp = pack.with_name(f".{pack.name}.{os.getpid()}")
+    with tmp.open("wb") as out:
+        subprocess.run(["git", f"--git-dir={mirror}", "pack-objects", "-q", "--stdout"],
+                       input="\n".join(objects).encode() + b"\n", stdout=out, check=True)
+    fits = tmp.stat().st_size <= HISTORY_MAX_BYTES
+    if fits:
+        tmp.replace(pack)
+    else:
+        tmp.unlink()
+    about.write_text(json.dumps({"base": base, "commits": len(parents) if fits else 0, "shallow": shallow}))
 
 
 _COMPRESSING = threading.Lock()

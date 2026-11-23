@@ -3,7 +3,7 @@ import { Swatch } from "@/components/brand";
 import { External } from "@/components/brand/icons";
 import { Tip } from "@/components/ui/tooltip";
 import { clock, secondsSince, usd } from "@/lib/format";
-import type { Swatch as SwatchT } from "@/lib/models";
+import { INK_BLACK, type Swatch as SwatchT } from "@/lib/models";
 import { CHECK, failReason, isFinal, isLive, STAGE, STEPS, stepIndex, type Tone } from "@/lib/stages";
 import type { BoardRow, Cell, Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -146,7 +146,8 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
       </div>
     );
   } else if (c.stage === "solved" || c.stage === "failed") {
-    const line = [c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null].filter(Boolean).join(" · ");
+    // Time and cost of every try; which try ended it, from the second on.
+    const line = [c.seconds != null ? clock(c.seconds) : null, c.cost != null ? usd(c.cost) : null, c.try ? `try ${c.try}` : null].filter(Boolean).join(" · ");
     sub = <div className="mt-0.5 truncate font-mono text-[12px]" title={line}>{line}</div>;
   } else if (c.stage === "invalid") {
     sub = <div className="mt-0.5 truncate text-[12px]" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
@@ -155,7 +156,7 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
   const cell = (
     <div key={c.stage} className={cn("flex h-12 animate-fade flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
-        <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}</span>
+        <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}{live && c.try ? ` · try ${c.try}` : ""}</span>
         {live && c.started_at && <span className="num font-mono text-[12px]">{clock(secondsSince(c.started_at, now))}</span>}
       </div>
       {sub}
@@ -172,7 +173,7 @@ export function BoardLegend({ judged }: { judged: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2" aria-label="Each attempt's steps">
       {items.map(([tone, label], i) => {
-        const { className, style } = toneStyle(tone, { fill: "var(--color-green)", ink: "var(--color-black)", tint: "var(--color-lightGreen)" });
+        const { className, style } = toneStyle(tone, { fill: "var(--color-green)", ink: INK_BLACK, tint: "var(--color-lightGreen)" });
         return (
           <span key={tone} className="inline-flex items-center gap-2 text-[12px] text-muted-foreground">
             <span className={cn("size-3.5", className)} style={style} />

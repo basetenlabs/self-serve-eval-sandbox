@@ -85,10 +85,11 @@ export function ModelName({ label, swatch, className, sub }: { label: string; sw
   );
 }
 
-/** Pink delta chip: the one comparison number per metric, Black Beausite on the Pink base. */
+/** Pink delta chip: the one comparison number per metric, Black Beausite on the Pink base. The base keeps its colour
+ *  in the dark theme, so the chip stays light inside (as the skill's Base fills do) and its text stays Black. */
 export function DeltaChip({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center bg-delta px-2 py-0.5 text-[16px] leading-6 font-normal whitespace-nowrap text-black", className)}>
+    <span className={cn("inline-flex items-center bg-delta px-2 py-0.5 text-[16px] leading-6 font-normal whitespace-nowrap text-black scheme-light", className)}>
       {children}
     </span>
   );

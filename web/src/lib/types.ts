@@ -18,10 +18,12 @@ export interface Model {
 export interface CatalogModel extends Model {
   missing?: string | null;
   default?: boolean;
+  /** Per attempt, counting the tries an attempt is likely to take (AppState.tries at most). */
   cost_per_attempt?: number;
   seconds_per_attempt?: number;
+  tries_per_attempt?: number;
   /** The same, from the most recent run over each set of repositories ("o/a,o/b", lower case) or "quick". */
-  by_scope?: Record<string, { cost_per_attempt: number; seconds_per_attempt: number }>;
+  by_scope?: Record<string, { cost_per_attempt: number; seconds_per_attempt: number; tries_per_attempt?: number }>;
 }
 
 export interface Checks {
@@ -32,7 +34,6 @@ export interface Checks {
   /** Whose GitHub login the `gh` CLI on this machine uses. */
   gh_login?: string | null;
   image: boolean;
-  judge: { label: string; chair?: string | null; effort?: string | null; ok: boolean; problem?: string | null };
 }
 
 export type Phase = "collecting" | "checking" | "running" | "judging" | "reporting" | "done" | "stopped" | "failed" | string;
@@ -53,6 +54,8 @@ export interface Cell {
   diff?: { files: number; added: number; removed: number } | null;
   tests_passed?: boolean | null;
   judge?: string | null;
+  /** The try this is, from the second on: live, the one running; finished, the last. */
+  try?: number;
 }
 
 export interface BoardRow {
@@ -110,6 +113,22 @@ export interface Run {
   /** What Run again puts back in the form; null when it can't. */
   again?: Again | null;
   board?: Board;
+  /** "commands" while the run works out how to install and test a repository. */
+  step?: string | null;
+  /** The install and test commands each named repository ran with. */
+  commands?: Record<string, CommandsUsed>;
+}
+
+/** A repository's install and test commands in a run, and where they came from. */
+export interface CommandsUsed {
+  setup: string;
+  test: string;
+  /** given on the form or the command line; saved from an earlier run; the default; or worked out at the start. */
+  source: "given" | "saved" | "default" | "worked out";
+  proven_on?: { pr: number; commit?: string | null } | null;
+  tries?: number;
+  cost_usd?: number | null;
+  model?: string | null;
 }
 
 /** A run's pull requests, models and commands, to start the same run again. */
@@ -125,32 +144,30 @@ export interface AppState {
   checks: Checks;
   models: CatalogModel[];
   runs: Run[];
-  /** `ready`: its tasks are collected, so it starts without a GitHub sign-in. */
-  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean };
-  default_limit: number;
+  /** `ready`: its tasks are collected, so it starts without reading GitHub. */
+  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean; at_once?: number };
+  /** Tries per attempt a run started here gets: a try the model fails runs again, up to this many. */
+  tries?: number;
   max_limit: number;
+  pr_size?: { lines: number; pasted_lines: number; files: number };
   /** Some run is going, anyone's: the page polls faster. */
   busy: boolean;
   /** Why you can't start a run now: your run is going, the most runs are, or a spending limit is reached. */
   blocked?: string | null;
   /** What your runs spent on models in the last 24 hours, and your limit, when there is one. */
   spend?: { spent: number; cap: number } | null;
-  github: GitHubAccount;
+  github: GitHubAccess;
   favorites: Favorite[];
   /** Hosted: you are an admin, so you see every run and the Access page. */
   admin?: boolean;
 }
 
-/** Who reads GitHub for you. Hosted, `sign_in` offers your own GitHub sign-in; locally the `gh` CLI's login reads. */
-export interface GitHubAccount {
-  sign_in: boolean;
-  /** Hosted: the page reads public repositories itself, so only private ones need your sign-in. */
+/** Who reads GitHub. Hosted, the page reads public repositories only, with its own token, and nobody signs in
+ * with GitHub; locally the `gh` CLI's login reads. */
+export interface GitHubAccess {
+  hosted: boolean;
+  /** The page has its own token for public repositories. Hosted without one, only the quick sample runs. */
   public?: boolean;
-  login: string | null;
-  /** Where to choose which repositories the GitHub App may read. */
-  install?: string;
-  /** A sign-in waiting for you to enter its code on GitHub. */
-  device?: { user_code: string; verification_uri: string; interval: number };
 }
 
 /** A pull request saved for later, newest first. */
@@ -166,9 +183,9 @@ export interface RepoInfo {
   language?: string;
   private?: boolean;
   defaults?: boolean;
+  /** Commands an earlier run worked out for it. */
+  commands?: { setup: string; test: string; at?: string } | null;
   error?: string;
-  /** Where to add this repository to the GitHub App, when the person's sign-in can't read it yet. */
-  install?: string;
 }
 
 /** A pull request to pick, from /api/prs; `why` says why it can't be a task. */
@@ -238,6 +255,10 @@ export interface Summary {
   rebuilt_cost_attempts?: number;
   partial_cost_attempts?: number;
   judge_disagreements: number;
+  /** Tries over the valid attempts, and how many attempts each try solved ([on try 1, on try 2, ...]). */
+  tries?: number;
+  cost_per_try?: number | null;
+  solved_on?: number[];
 }
 
 export interface Task {
@@ -258,11 +279,26 @@ export interface Task {
 
 export type Outcome = "solved" | "failed" | "invalid";
 
+/** A try of an attempt that its model failed before the last one, in brief. */
+export interface EarlierTry {
+  try: number;
+  outcome: "failed";
+  started_at?: string | null;
+  finished_at?: string | null;
+  agent?: Trial["agent"];
+  diff?: Trial["diff"];
+  tests?: { passed?: boolean | null; summary?: string | null } | null;
+  judge?: { verdict?: string; reason?: string } | null;
+}
+
 export interface Trial {
   trial: string;
   task_id: string;
   model: string;
   attempt: number;
+  /** Set when the attempt took more than one try: the last one's number, and the ones before it. */
+  try?: number;
+  earlier_tries?: EarlierTry[];
   outcome: Outcome;
   invalid_reason?: string | null;
   /** Not scored: the step it failed at, why in one sentence, and the end of the log that shows it. */
@@ -313,12 +349,17 @@ export interface Report {
     run_id: string;
     created_at: string;
     attempts: number;
+    /** Tries per attempt; missing on runs from before tries, which had one. */
+    tries?: number;
     tasks?: string[];
+    /** "pi", or "claude-code" (every run from before Pi). */
+    harness?: string;
     harness_version?: string;
     judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;
     note?: string | null;
     status?: { phase?: string; detail?: string } | null;
     request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;
+    commands?: Record<string, CommandsUsed>;
   };
   models: Model[];
   summary: Record<string, Summary>;

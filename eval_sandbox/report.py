@@ -7,6 +7,9 @@ Definitions:
 - *Solved at least once* (pass@k) counts tasks with at least one solved attempt.
 - *Cost per solved task* is everything spent on valid attempts / solved attempts, so a
   model that fails often pays for its failures.
+- An attempt may take several *tries* (run.json's `tries`, the same for every model): a try the
+  model fails is run again from scratch, and the attempt is solved if any try solves it. Its cost
+  and time are those of every try, so a solve on a later try pays for the tries before it.
 """
 from __future__ import annotations
 
@@ -68,28 +71,44 @@ def busy_seconds(spans: list[tuple[datetime, datetime]]) -> float:
     return total
 
 
+def tries_of(t: dict) -> list[dict]:
+    """Each try of an attempt, oldest first: the ones its model failed before (earlier_tries), then the last.
+    An attempt from before tries were recorded is its one try."""
+    return [*(t.get("earlier_tries") or []), t]
+
+
+def working(agent: dict) -> float | None:
+    """Agent time without the waits on provider rate limits (see trial_record)."""
+    return agent.get("working_seconds", agent.get("seconds"))
+
+
+def per_attempt(t: dict, value) -> float | None:
+    """`value(agent)` added up over an attempt's tries; None when no try has it."""
+    known = [v for v in (value(x.get("agent") or {}) for x in tries_of(t)) if v is not None]
+    return sum(known) if known else None
+
+
 def summarize_timing(trials: list[dict], started_at: str | None = None) -> dict:
     """Elapsed is wall clock while attempts ran, plus the setup before the first one.
 
     Parallel attempts count once, and a stopped run's idle time before it was resumed
-    not at all. Summed agent time can overlap across trials.
+    not at all. Summed agent time can overlap across trials. An attempt's tries each count.
     """
-    spans = [(datetime.fromisoformat(t["started_at"]), datetime.fromisoformat(t["finished_at"]))
-             for t in trials if t.get("started_at") and t.get("finished_at")]
+    tries = [x for t in trials for x in tries_of(t)]
+    spans = [(datetime.fromisoformat(x["started_at"]), datetime.fromisoformat(x["finished_at"]))
+             for x in tries if x.get("started_at") and x.get("finished_at")]
     first = min((s for s, _ in spans), default=None)
     start = datetime.fromisoformat(started_at) if started_at else first
     finish = max((f for _, f in spans), default=None)
-    complete = len(spans) == len(trials)
+    complete = len(spans) == len(tries)
     lead = max(0.0, (first - start).total_seconds()) if first and start else 0.0
-    working = [(t.get("agent") or {}).get("working_seconds", (t.get("agent") or {}).get("seconds"))
-               for t in trials]
-    known = [seconds for seconds in working if seconds is not None]
+    known = [seconds for x in tries if (seconds := working(x.get("agent") or {})) is not None]
     return {
         "started_at": start.isoformat() if start else None,
         "finished_at": finish.isoformat() if finish else None,
         "elapsed_seconds": lead + busy_seconds(spans) if complete and spans else None,
         "total_working_seconds": sum(known) if known else None,
-        "timed_attempts": len(known),
+        "timed_attempts": sum(all(working(x.get("agent") or {}) is not None for x in tries_of(t)) for t in trials),
         "attempts": len(trials),
     }
 
@@ -97,13 +116,16 @@ def summarize_timing(trials: list[dict], started_at: str | None = None) -> dict:
 def summarize(trials: list[dict]) -> dict:
     valid = [t for t in trials if t["outcome"] in ("solved", "failed")]
     solved = [t for t in valid if t["outcome"] == "solved"]
-    cost = sum((t.get("agent") or {}).get("cost_usd") or 0 for t in valid)
-    priced = all((t.get("agent") or {}).get("cost_usd") is not None for t in valid)
+    every_try = [x for t in valid for x in tries_of(t)]
+    agent = [(x.get("agent") or {}) for x in every_try]  # each try's, failed tries included
+    cost = sum(a.get("cost_usd") or 0 for a in agent)
+    priced = all(a.get("cost_usd") is not None for a in agent)
     by_task = defaultdict(list)
     for t in valid:
         by_task[t["task_id"]].append(t)
-    agent = [(t.get("agent") or {}) for t in valid]
-    tokens = [a.get("tokens") or {} for a in agent]
+    tokens = [{k: per_attempt(t, lambda a, k=k: (a.get("tokens") or {}).get(k)) or 0
+               for k in ("input", "cached_input", "cache_write", "output")} for t in valid]
+    solved_on = [sum((t.get("try") or 1) == n for t in solved) for n in range(1, max((t.get("try") or 1 for t in solved), default=0) + 1)]
     return {
         "attempts": len(trials), "valid": len(valid), "invalid": len(trials) - len(valid),
         "timing": summarize_timing(trials),
@@ -114,20 +136,26 @@ def summarize(trials: list[dict]) -> dict:
         "cost_usd": cost if priced else None,
         "cost_per_attempt": cost / len(valid) if valid and priced else None,
         "cost_per_solved": cost / len(solved) if solved and priced else None,
-        "median_seconds": median(a.get("working_seconds", a.get("seconds")) for a in agent),
-        "median_seconds_with_waits": median(a.get("seconds") for a in agent),
-        "rate_limited_attempts": sum(1 for a in agent if a.get("rate_limited_retries")),
-        "median_turns": median(a.get("num_turns") for a in agent),
-        "mean_output_tokens": statistics.mean(t.get("output", 0) for t in tokens) if tokens else None,
-        "mean_input_tokens": statistics.mean(t.get("input", 0) + t.get("cached_input", 0) + t.get("cache_write", 0)
+        # Per try, for estimating runs with another number of tries (app.estimates).
+        "tries": len(every_try),
+        "cost_per_try": cost / len(every_try) if every_try and priced else None,
+        "median_seconds_per_try": median(working(a) for a in agent),
+        # How many solved attempts each try solved: [on try 1, on try 2, ...].
+        "solved_on": solved_on,
+        "median_seconds": median(per_attempt(t, working) for t in valid),
+        "median_seconds_with_waits": median(per_attempt(t, lambda a: a.get("seconds")) for t in valid),
+        "rate_limited_attempts": sum(1 for t in valid if per_attempt(t, lambda a: a.get("rate_limited_retries"))),
+        "median_turns": median(per_attempt(t, lambda a: a.get("num_turns")) for t in valid),
+        "mean_output_tokens": statistics.mean(t["output"] for t in tokens) if tokens else None,
+        "mean_input_tokens": statistics.mean(t["input"] + t["cached_input"] + t["cache_write"]
                                              for t in tokens) if tokens else None,
         "agent_timeouts": sum(1 for a in agent if a.get("timed_out")),
         # Attempts stopped at the time limit: cost rebuilt from the log; "partial" ones
         # are missing some output tokens, so the total is a slight undercount.
         "rebuilt_cost_attempts": sum(1 for a in agent if str(a.get("cost_source")).startswith("rebuilt")),
         "partial_cost_attempts": sum(1 for a in agent if a.get("cost_source") == "rebuilt-partial"),
-        "judge_disagreements": sum(1 for t in valid if (t.get("tests") or {}).get("passed")
-                                   and (t.get("judge") or {}).get("verdict") == "fail"),
+        "judge_disagreements": sum(1 for x in every_try if (x.get("tests") or {}).get("passed")
+                                   and (x.get("judge") or {}).get("verdict") == "fail"),
     }
 
 
@@ -136,11 +164,11 @@ def trial_record(trial_dir: Path) -> dict | None:
     if not path.is_file():
         return None
     r = json.loads(path.read_text())
-    agent = r.get("agent") or {}
-    if agent.get("seconds") is not None:  # time spent backing off from rate limits is the provider's, not the model's
-        agent["working_seconds"] = max(agent["seconds"] - (agent.get("retry_wait_seconds") or 0), 0)
+    agent = with_working(r.get("agent") or {})
+    earlier = [{**x, "agent": with_working(dict(x.get("agent") or {}))} for x in r.get("earlier_tries") or []]
     return {
         "trial": r["trial"], "task_id": r["task_id"], "model": r["model"], "attempt": r["attempt"],
+        **({"try": r.get("try") or 1, "earlier_tries": earlier} if earlier or (r.get("try") or 1) > 1 else {}),
         "outcome": r["outcome"], "invalid_reason": r.get("invalid_reason"),
         "started_at": r.get("started_at"), "finished_at": r.get("finished_at"),
         "agent": {k: agent.get(k) for k in ("seconds", "working_seconds", "api_retries", "rate_limited_retries",
@@ -154,6 +182,12 @@ def trial_record(trial_dir: Path) -> dict | None:
         "step": r.get("step"), "cause": sentence(r),
         "log": tail(trial_dir / r["log"], 80) if r.get("log") and ".." not in r["log"] else None,
     }
+
+
+def with_working(agent: dict) -> dict:
+    if agent.get("seconds") is not None:  # time spent backing off from rate limits is the provider's, not the model's
+        agent["working_seconds"] = max(agent["seconds"] - (agent.get("retry_wait_seconds") or 0), 0)
+    return agent
 
 
 def build_data(job_dir: Path) -> dict:
