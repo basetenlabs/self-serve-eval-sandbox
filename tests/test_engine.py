@@ -23,7 +23,7 @@ MODEL = SimpleNamespace(key="model", model="model", provider="anthropic", max_co
 
 def task(d: Path, task_id: str = "public-task"):
     return SimpleNamespace(id=task_id, instruction="Fix the public example.", path=d,
-                           meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {}})
+                           meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}})
 
 
 def no_such_device() -> runtime.RuntimeError:
@@ -63,7 +63,7 @@ def sandboxes(prepare=None, create=None, tests=None):
             mock.patch.object(runner, "credential_env", return_value={"ANTHROPIC_API_KEY": "real"}), \
             mock.patch.object(runtime, "create", side_effect=create or (lambda *a, **k: None)), \
             mock.patch.object(runner, "prepare_workspace",
-                              side_effect=prepare or (lambda *a: (None, {"baseline": "a" * 40}))), \
+                              side_effect=prepare or (lambda *a, **k: (None, {"baseline": "a" * 40}))), \
             mock.patch.object(runtime, "upload"), mock.patch.object(runtime, "download"), \
             mock.patch.object(runtime, "delete"), \
             mock.patch.object(runner, "run_agent", side_effect=agent), \
@@ -84,7 +84,7 @@ def run_one(d: Path, the_task=None, tries: int = 1) -> dict:
 
 class CauseTests(unittest.TestCase):
     def test_todays_upload_failure_says_its_step_and_cause_and_keeps_its_log_everywhere(self):
-        def prepare(name, *_):
+        def prepare(name, *_, **__):
             raise runner.StepFailed("upload", "the agent's", no_such_device())
         with tempfile.TemporaryDirectory() as d, sandboxes(prepare=prepare):
             d = Path(d)
@@ -124,7 +124,7 @@ class CauseTests(unittest.TestCase):
         self.assertIsNone(causes.short({"outcome": "solved"}))
 
     def test_a_failed_install_points_at_its_log_in_the_right_sandbox(self):
-        def prepare(name, task, log_dir, *_):
+        def prepare(name, task, log_dir, *_, **__):
             (log_dir / "setup.log").write_text("ERROR: No matching distribution found for nothing==9\n")
             return ("setup-error", {}) if log_dir.name == "verification" else (None, {"baseline": "a" * 40})
         with tempfile.TemporaryDirectory() as d, sandboxes(prepare=prepare):
@@ -196,7 +196,7 @@ class RetryTests(unittest.TestCase):
         self.assertEqual((result["outcome"], result["step"], result["transient"]), ("invalid", "boot", True))
         self.assertEqual(tries["boot"], 4)  # each try creates the agent's sandbox and its verifier: two tries, no third
 
-        def prepare(name, *_):
+        def prepare(name, *_, **__):
             tries["upload"] += 1
             raise runner.StepFailed("upload", "the agent's", no_such_device())
         with tempfile.TemporaryDirectory() as d, sandboxes(prepare=prepare):

@@ -26,7 +26,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import causes, meter, runtime
+from . import causes, meter, runtime, tasks
 from . import judge as judge_mod
 from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
 from .rundir import charge, now, read_json, write_json
@@ -39,12 +39,33 @@ PROXY_PORT = 18787
 # so `--resume` runs them again.
 STOPPING = threading.Event()
 
-PROMPT = """You are working in a checkout of the {repo} repository (the current directory).
-Make the code change requested below, the way a contributor would for a pull request.
-You can read the code, run the existing tests and add tests of your own. Nobody is
-available to answer questions, so make reasonable decisions and finish the change.
+# The agent's first message; the harness's own system prompt stays as it is. It says what a contributor
+# knows before starting: the repository, the request, how the change will be checked, and what this machine allows.
+FIRST_MESSAGE = """You are in a checkout of the {repo} repository: the current directory, a git repository at \
+the commit this pull request starts from. Make the change it asks for, the way a contributor would.
 
-{instruction}"""
+<pull-request>
+{instruction}
+</pull-request>
+
+How your change is checked: when you stop, the pull request's own tests, which you can't see, are added \
+to the repository and run with
+
+    {test}
+
+Your change passes if they pass.{names} Changes you make to test files are set aside for this run, so \
+it checks your change to the code.
+
+Your environment:
+- There is no network. Dependencies are already installed; nothing else can be downloaded, and GitHub \
+can't be reached.
+- You have {limit}. Whatever is in the working tree when you stop, or when time runs out, is what gets \
+checked.
+- Nobody is available to answer questions, so make reasonable decisions and finish the change.
+
+You are done when the change is in the working tree (committing it is up to you) and the repository's \
+existing tests still pass."""
+NAMED = ' They call the code by the names listed under "Names the tests use", so keep those exactly.'
 
 # Claude Code's own settings that belong to the harness, not the model: every model driven
 # by Claude Code runs under the same ceilings, whoever hosts it.
@@ -123,6 +144,36 @@ def sh(container: str, script: str, *, timeout: int, network: bool = False) -> t
 
 def trial_name(task: Task, model: Model, attempt: int) -> str:
     return f"{task.id}__{model.key}__{attempt}"
+
+
+def first_message(task: Task, seconds: int) -> str:
+    """What the agent is asked: the request, and how the change will be checked."""
+    instruction = task.instruction.strip()
+    return FIRST_MESSAGE.format(repo=task.meta["task"]["repo"], instruction=instruction, test=shown_test(task),
+                                names=NAMED if "## Names the tests use" in instruction else "",
+                                limit=duration(seconds))
+
+
+def shown_test(task: Task) -> str:
+    """The hidden tests' command as the agent sees it: the PR's test files (Grafana: their packages) said to
+    be there, not named. Only the names the tests call reach the agent, never which tests they are."""
+    paths = task.meta["verifier"].get("test_files") or []
+    hidden = set(paths) | {"./" + os.path.dirname(p) for p in paths if os.path.dirname(p)}
+    words, shown = [], False
+    for word in task.meta["verifier"]["test"].split(" "):
+        if word.strip("'\"") in hidden:
+            if not shown:
+                words.append("<the pull request's tests>")
+            shown = True
+        else:
+            words.append(word)
+    return " ".join(words)
+
+
+def duration(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return "an hour" if seconds == 3600 else f"{seconds // 3600} hours"
+    return f"{round(seconds / 60)} minutes"
 
 
 def agent_script(model: Model, meter_url: str | None = None) -> tuple[str, str, dict[str, str]]:
@@ -449,22 +500,59 @@ def sandbox_memory(task: Task, settings: Settings) -> int:
     return max(settings.memory, int(task.meta["environment"].get("memory_mb", 0)))
 
 
-def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "the agent's") -> tuple[str | None, dict]:
-    """Base source in /workspace, dependencies installed, both committed as the baseline.
+# Hides what setup left untracked from `git status`, as patterns anchored to it, with the
+# characters .gitignore treats as special escaped.
+HIDE_UNTRACKED = r"""git ls-files -z --others --exclude-standard --directory | python3 -c 'import re, sys
+sys.stdout.writelines("/" + re.sub(r"[][*?\\ ]", lambda m: "\\" + m[0], p) + "\n" for p in sys.stdin.read().split("\0") if p)' >>.git/info/exclude"""
+COMMIT = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
+HISTORY_ADDED = "pr-eval: history added"
+
+
+def add_history(past: tasks.History) -> str:
+    """Shell that turns the unpacked source into a clone at the base commit: its history's objects, main
+    at the base commit, and where the history stops. Only when the source is exactly the base commit's
+    files (git archive can leave some out); otherwise the base is a commit of its own, as without history."""
+    shallow = f"printf '%s\\n' {' '.join(past.shallow)} >.git/shallow && " if past.shallow else ""
+    return (f"git index-pack --stdin </tmp/history.pack >/dev/null && rm /tmp/history.pack && git add -A && "
+            f'if [ "$(git write-tree)" = "$(git rev-parse -q --verify {past.base}^{{tree}})" ]; then '
+            f"{shallow}git update-ref refs/heads/main {past.base} && echo '{HISTORY_ADDED}'; else {COMMIT} base; fi")
+
+
+def recent_history(task: Task) -> tasks.History | None:
+    try:
+        return tasks.history(task)
+    except Exception as exc:  # noqa: BLE001 - the checkout works without history, as it did before it had any
+        print(f"({task.id}: no git history for the agent: {str(exc)[-300:]})", flush=True)
+        return None
+
+
+def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "the agent's",
+                      history: bool = False) -> tuple[str | None, dict]:
+    """Base source in /workspace, dependencies installed, both in the baseline commit.
 
     Returns (invalid reason or None, setup stats); its log is log_dir/setup.log. A sandbox error
     raises StepFailed, naming the step. The baseline includes whatever setup wrote outside
     .gitignore and CACHES, so the agent's diff is only the agent's.
+
+    With `history` (the agent's sandbox) /workspace is, where the task's repository clone is here, a
+    git repository at the base commit with the commits before it and no others, like a developer's
+    clone. Setup's changes then stay out of its history: untracked files it wrote are hidden from
+    `git status`, changes to tracked files are left uncommitted, and the baseline is a commit no
+    branch points to. Otherwise "base" and "setup" are the repository's only commits.
     """
-    commit = "git -c user.name=eval -c user.email=eval@localhost commit -q --no-verify --allow-empty -m"
+    past = None
     with at("upload", whose):
         runtime.upload(container, snapshot(task), "/tmp/source.tar.gz")
+        if history and (past := recent_history(task)):
+            runtime.upload(container, past.pack, "/tmp/history.pack")
         code, out, _ = sh(container, f"tar -xzf /tmp/source.tar.gz -C /workspace && rm /tmp/source.tar.gz && "
                                      f"git init -q -b main && printf '%s\\n' {' '.join(map(shlex.quote, CACHES))} "
-                                     f">>.git/info/exclude && git add -A && {commit} base", timeout=300)
+                                     f">>.git/info/exclude && "
+                                     + (add_history(past) if past else f"git add -A && {COMMIT} base"), timeout=300)
     if code != 0:
         (log_dir / "setup.log").write_text(out)
         return "workspace-error", {}
+    cloned = past is not None and out.strip().endswith(HISTORY_ADDED)
     started = time.monotonic()
     timeout = int(task.meta["environment"].get("setup_timeout_sec", 900))
     logs = []
@@ -476,16 +564,26 @@ def prepare_workspace(container: str, task: Task, log_dir: Path, whose: str = "t
                 break
             time.sleep(wait)
         (log_dir / "setup.log").write_text("\n--- setup again ---\n".join(logs))
-        stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1)}
+        stats = {"exit_code": code, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1),
+                 "history_commits": past.commits if cloned else 0}
         if code != 0:
             return ("setup-timeout" if timed_out else "setup-error"), stats
-        code, out, timed_out = sh(container, f"git add -A && {commit} setup", timeout=120)
+        if cloned:
+            code, out, timed_out = sh(container, f"{HIDE_UNTRACKED} && git add -A && if git diff --cached --quiet HEAD; "
+                                                 "then baseline=$(git rev-parse --verify HEAD); else baseline=$(git -c "
+                                                 "user.name=eval -c user.email=eval@localhost commit-tree "
+                                                 '"$(git write-tree)" -p HEAD -m setup); fi && git reset -q && '
+                                                 'echo "$baseline"', timeout=120)
+        else:
+            code, out, timed_out = sh(container, f"git add -A && {COMMIT} setup", timeout=120)
         if code or timed_out:
             return "setup-commit-error", stats
-        code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
-        if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
+        if not cloned:
+            code, out, _ = sh(container, "git rev-parse --verify HEAD", timeout=30)
+        baseline = out.strip().rsplit("\n", 1)[-1]
+        if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", baseline):
             return "workspace-error", stats
-    stats["baseline"] = out.strip()
+    stats["baseline"] = baseline
     return None, stats
 
 
@@ -627,7 +725,7 @@ def prepare_trial(task: Task, trial_dir: Path, run_id: str, settings: Settings) 
         with at("boot"):
             start_container(ready.container, run_id, settings, memory)
         stage(live, "setup", started_at=ready.started_at)
-        ready.reason, ready.setup = prepare_workspace(ready.container, task, trial_dir)
+        ready.reason, ready.setup = prepare_workspace(ready.container, task, trial_dir, history=True)
     except Exception as exc:  # noqa: BLE001 - an attempt's errors are run_trial's to record
         ready.error = exc
     return ready
@@ -736,11 +834,11 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
         else:
             start_container(container, run_id, settings, memory)
             stage(live, "setup", **since)
-            reason, result["setup"] = prepare_workspace(container, task, trial_dir)
+            reason, result["setup"] = prepare_workspace(container, task, trial_dir, history=True)
         if reason:
             return finish("invalid", reason)
         step = "upload"
-        prompt = PROMPT.format(repo=task.meta["task"]["repo"], instruction=task.instruction.strip())
+        prompt = first_message(task, agent_timeout)
         (trial_dir / "prompt.md").write_text(prompt)
         runtime.upload(container, trial_dir / "prompt.md", "/tmp/instruction.md")
         step = "agent"

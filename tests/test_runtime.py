@@ -525,7 +525,7 @@ class ModelKeyTests(unittest.TestCase):
             with self.subTest(provider), tempfile.TemporaryDirectory() as d:
                 d = Path(d)
                 task = SimpleNamespace(id="public-task", instruction="Fix it.", path=d,
-                                       meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}})
+                                       meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}})
                 model = SimpleNamespace(key="m", model="m", effort="high", provider=provider)
                 ran, started, order = [], [], []
 
@@ -600,7 +600,7 @@ class TrialBoundaryTests(unittest.TestCase):
     def trial(self, d, events, prepare, on_delete=lambda name: None, agent=None, trial_dir=None):
         """run_trial with every sandbox step mocked; the agent's sandbox is "agent", the verifier "verifier"."""
         task = SimpleNamespace(id="public-task", instruction="Fix the public example.",
-                               meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}}, path=d)
+                               meta={"task": {"repo": "public/example"}, "agent": {}, "environment": {}, "verifier": {"test": "pytest"}}, path=d)
         model = SimpleNamespace(key="model", model="model", provider="anthropic", prices={"model": {"input": 1, "output": 1}})
 
         def finished(name, model, placeholder_env, relay_headers, path, timeout, *_):
@@ -629,7 +629,7 @@ class TrialBoundaryTests(unittest.TestCase):
     def test_the_answer_reaches_the_verifier_only_after_the_agent_vm_is_deleted(self):
         events, both_set_up = [], threading.Barrier(2, timeout=5)
 
-        def prepare(name, *_):
+        def prepare(name, *_, **__):
             events.append(("prepare", name))
             both_set_up.wait()  # the verifier is set up while the agent's sandbox is
             return None, {"baseline": "a" * 40}
@@ -646,7 +646,7 @@ class TrialBoundaryTests(unittest.TestCase):
             raise runtime.RuntimeError("sandbox went away")
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "trials" / "t1").mkdir(parents=True)
-            result = self.trial(Path(d), [], lambda *_: (None, {"baseline": "a" * 40}), agent=lost,
+            result = self.trial(Path(d), [], lambda *_, **__: (None, {"baseline": "a" * 40}), agent=lost,
                                 trial_dir=Path(d) / "trials" / "t1")
             charges = [json.loads(line) for line in (Path(d) / rundir.SPEND_LEDGER).read_text().splitlines()]
         self.assertEqual(result["invalid_reason"], "sandbox-error")
@@ -665,7 +665,7 @@ class TrialBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"PR_EVAL_METER_URL": "https://m.example/"}):
             trial_dir = Path(d) / "trials" / "t1"
             trial_dir.mkdir(parents=True)
-            result = self.trial(Path(d), events, lambda *_: (None, {"baseline": "a" * 40}), agent=agent, trial_dir=trial_dir)
+            result = self.trial(Path(d), events, lambda *_, **__: (None, {"baseline": "a" * 40}), agent=agent, trial_dir=trial_dir)
             left = list((Path(d) / "meter").iterdir())
             ledger = (Path(d) / rundir.SPEND_LEDGER).is_file()
         self.assertEqual(list(seen["relay_headers"]), [meter.HEADER])
@@ -679,7 +679,7 @@ class TrialBoundaryTests(unittest.TestCase):
     def test_an_attempt_that_ends_early_deletes_the_verifier_mid_setup(self):
         events, deleted, finished = [], threading.Event(), threading.Event()
 
-        def prepare(name, *_):
+        def prepare(name, *_, **__):
             if name == "agent":
                 return "setup-error", {}
             deleted.wait(5)  # a long setup, cut short by the deletion
@@ -699,7 +699,7 @@ class TrialBoundaryTests(unittest.TestCase):
             earlier.mkdir()
             (earlier / "result.json").write_text(json.dumps({"outcome": "invalid", "invalid_reason": "sandbox-error"}))
             (earlier / "error.log").write_text("Baseten creation failed")
-            result = self.trial(Path(d), [], lambda name, *_: (None, {"baseline": "a" * 40}))
+            result = self.trial(Path(d), [], lambda name, *_, **__: (None, {"baseline": "a" * 40}))
             self.assertFalse((earlier / "error.log").exists())
         self.assertEqual((result["outcome"], result["rerun_after"]), ("solved", "sandbox-error"))
 
