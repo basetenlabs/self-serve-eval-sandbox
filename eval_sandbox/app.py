@@ -158,7 +158,7 @@ class App:
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(), "models": models, "runs": runs,
                 "quick": quick_sample(), "tries": pipeline.DEFAULT_TRIES,
-                "default_limit": pipeline.DEFAULT_LIMIT, "max_limit": MAX_LIMIT,
+                "max_limit": MAX_LIMIT,
                 # Which PRs can be tasks, for the page's guidance: a repository's list keeps PRs up to `lines`,
                 # a PR named by its link may go up to `pasted_lines`.
                 "pr_size": {"lines": tasks.DEFAULT_MAX_LINES, "pasted_lines": tasks.MAX_LINES, "files": tasks.MAX_FILES},

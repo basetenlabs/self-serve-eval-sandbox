@@ -38,7 +38,7 @@ pr-eval serve
 
 It opens http://127.0.0.1:8765, with a checklist of anything still missing. Then:
 
-1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes, or up to three times that when a model needs every try) or **Your pull requests**: paste links, or type a repository and pick from its merges.
+1. Pick the **Quick sample** (10 merged PRs from PostHog's Python codebase, about 35 minutes, or up to three times that when a model needs every try) or **Your pull requests**: paste links, or type a repository and choose from its merged PRs (a mix of fixes, features and security changes is ticked for you).
 2. Choose the models to compare (Claude Opus 5.5, DeepSeek V4.1 Flash 1017 and GLM-5.3 to start).
 3. Press **Start run**. When it finishes, **Open report** opens on the **Simple** view: PRs solved, cost per solved task and time per task for each model, and a chart of share solved against cost. **Detailed** adds every attempt's diff, trace and test output, and the judges' verdicts on a run graded with them. The page remembers your choice; add `?view=detail` or `?view=simple` to a report's link to open it on that view.
 

@@ -19,10 +19,8 @@ import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPic
 import { Readiness } from "./Readiness";
 
 type Source = "quick" | "repo";
-type Pick = "latest" | "choose";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 type Commands = { setup: string; test: string };
-const LIMITS = [5, 10, 20, 40];
 const MODELS_KEY = "pr-eval-models-3"; // a new name when the default models change, so everyone starts on them once
 // Every quick-sample attempt starts at once, so the slowest try sets the end; an attempt the model
 // fails runs again, so a run of several tries can take that long for each.
@@ -36,8 +34,6 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const [text, setText] = useStored("pr-eval-pulls", "");
   const [handed] = React.useState(takeCommands);
   React.useEffect(() => { try { sessionStorage.removeItem(COMMANDS); } catch { /* private window */ } }, []);
-  const [pick, setPick] = useStored<Pick>("pr-eval-pick", "choose");
-  const [limit, setLimit] = React.useState(state.default_limit);
   const tries = state.tries ?? 1;
   const quickMinutes = QUICK_MINUTES * tries;
   const [chosen, setChosen] = React.useState<number[]>([]);
@@ -103,7 +99,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const lookupError = lookups.find((l) => l.error)?.error;
   const needsCommands = lookups.find((l) => l.repo && !l.error && l.defaults === false);
   const prs = mode === "quick" ? state.quick.tasks : mode === "pasted" ? pullCount(pastedPulls)
-    : mode === "repo" && !info?.error ? (pick === "choose" ? chosen.length : limit) : 0;
+    : mode === "repo" && !info?.error ? chosen.length : 0;
 
   // Price from a run over the same repositories when there is one: a large repository costs far more per attempt.
   const scope = (mode === "quick" ? state.quick.names ?? []
@@ -129,7 +125,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     : checking ? "Checking the pull requests on GitHub."
     : lookupError ? "Pick a repository the page can read."
     : needsCommands && !commandsGiven ? `Give the install and test commands for ${needsCommands.language}.`
-    : !prs ? (mode === "repo" && pick === "choose" ? "Choose at least one pull request." : "Name a repository or paste pull request links.")
+    : !prs ? (mode === "repo" ? "Choose at least one pull request." : "Name a repository or paste pull request links.")
     : "Runs keep going if you close this page.";
 
   const toggleModel = (key: string, on: boolean) => {
@@ -144,7 +140,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     setStarting(true);
     const which = mode === "quick" ? { quick: true }
       : mode === "pasted" ? { pulls: pastedPulls }
-        : pick === "choose" ? { pulls: { [repo!]: chosen } } : { repo, limit };
+        : { pulls: { [repo!]: chosen } };
     const res = await post("/api/runs", { ...which, models: chosenModels, setup, test });
     setStarting(false);
     if (res.error || !res.id) {
@@ -175,7 +171,6 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     const kept = mode === "pasted" ? text.trim() : ""; // a repository name gives way to exact pull requests
     setText(`${kept ? `${kept}\n` : ""}https://github.com/${f.repo}/pull/${f.number}`);
   };
-  const savedHere = repo ? favorites.filter((f) => f.repo.toLowerCase() === repo.toLowerCase()).length : 0;
 
   return (
     <form ref={form} onSubmit={start} onInput={() => setError(null)} aria-label="New run" className="layout-grid !p-0 gap-y-12">
@@ -216,27 +211,12 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
 
               {/* Only once the lookup has read the repository, so a private one doesn't flash a chooser. */}
               {mode === "repo" && !!info?.repo && !info.error && (
-                <div className="grid grid-cols-1 gap-4">
-                  <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-                    <Segmented label="Which" value={pick} onChange={(v) => setPick(v as Pick)}
-                      options={[{ value: "latest", label: "Latest merged" }, { value: "choose", label: "Choose" }]} />
-                    {pick === "latest" && (
-                      <Segmented label="How many" value={String(limit)} onChange={(v) => setLimit(Number(v))}
-                        options={LIMITS.map((n) => ({ value: String(n), label: String(n) }))} />
-                    )}
-                    {pick === "latest" && savedHere > 0 && (
-                      <Button variant="ghost" onClick={() => setPick("choose")}>{savedHere} saved here: choose</Button>
-                    )}
-                  </div>
-                  {pick === "choose" && (
-                    <PullChooser key={repo!} repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit}
-                      favorites={favorites} onFavorite={onFavorite} />
-                  )}
-                </div>
+                <PullChooser key={repo!} repo={repo!} chosen={chosen} onChange={setChosen} max={state.max_limit}
+                  favorites={favorites} onFavorite={onFavorite} />
               )}
 
               {mode === "pasted" && pastedRepos.length === 1 && (
-                <Button variant="outline" className="w-fit" onClick={() => { setText(`https://github.com/${pastedRepos[0]}`); setPick("choose"); }}>
+                <Button variant="outline" className="w-fit" onClick={() => setText(`https://github.com/${pastedRepos[0]}`)}>
                   Browse all merged PRs in {pastedRepos[0]}
                 </Button>
               )}
@@ -399,22 +379,6 @@ function SourceStatus({ id, mode, info, looking, pasted, pastedRepos }: {
     );
   } else if (pasted.unknown.length) body = <Bad>Not a repository or pull request: {pasted.unknown[0]}</Bad>;
   return <div id={id} className="text-[14px] empty:hidden" aria-live="polite">{body}</div>;
-}
-
-function Segmented({ label, value, onChange, options }: {
-  label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[];
-}) {
-  return (
-    <div className="bt-field w-auto gap-2">
-      <span className="label-xs text-muted-foreground">{label}</span>
-      <div className="bt-toolbar ev-chips" role="radiogroup" aria-label={label}>
-        {options.map((o) => (
-          <button key={o.value} type="button" role="radio" aria-checked={value === o.value} className={cn("bt-chip", value === o.value && "active")}
-            onClick={() => onChange(o.value)}>{o.label}</button>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; chosen: string[]; onToggle: (k: string, on: boolean) => void }) {

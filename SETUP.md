@@ -95,7 +95,7 @@ Check: the run ends with `Finished. Report: jobs/<run>/report.html`. On the page
 
 ## 7. Your own repository
 
-On the page, choose **Your pull requests** and type `owner/repo`, or paste links to pull requests. Star the ones that stand for your team's work: they collect under **Your eval suite**, so the next model gets the same test. **Run again** on a finished run puts its pull requests and models back in the form, ready for a new model.
+On the page, choose **Your pull requests** and type `owner/repo` to choose from its merged pull requests (a mix is ticked for you), or paste links to pull requests. Star the ones that stand for your team's work: they collect under **Your eval suite**, so the next model gets the same test. **Run again** on a finished run puts its pull requests and models back in the form, ready for a new model.
 
 From a terminal:
 
