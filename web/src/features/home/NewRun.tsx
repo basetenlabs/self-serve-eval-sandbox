@@ -13,7 +13,7 @@ import { dur, money, plural, usd } from "@/lib/format";
 import { parsePasted, pullCount } from "@/lib/github";
 import { type Route, useStored } from "@/lib/hooks";
 import { isOpen } from "@/lib/models";
-import type { Again, AppState, CatalogModel, Favorite, PullList, RepoInfo } from "@/lib/types";
+import type { Again, AppState, CatalogModel, Favorite, JudgesOffer, PullList, RepoInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { type OnFavorite, PastedPulls, PullChooser, SavedPulls } from "./PullPicker";
 import { Readiness } from "./Readiness";
@@ -22,6 +22,7 @@ type Source = "quick" | "repo";
 const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands, handed to the next form once
 type Commands = { setup: string; test: string };
 const MODELS_KEY = "pr-eval-models-3"; // a new name when the default models change, so everyone starts on them once
+const JUDGES_KEY = "pr-eval-judges"; // the LLM judges switch, on unless turned off
 // Quick-sample attempts start together (up to state.quick.at_once), so the slowest try sets the end; an
 // attempt the model fails runs again, so a run of several tries can take that long for each.
 const QUICK_MINUTES = 35;
@@ -46,6 +47,10 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const defaults = usable.filter((m) => m.default).map((m) => m.key);
   const [storedModels, setStoredModels] = useStored<string[] | null>(MODELS_KEY, null);
   const chosenModels = (storedModels ?? defaults).filter((k) => usable.some((m) => m.key === k));
+  // The LLM judges review each attempt beside its tests. The server says which can run here; with none, it's off.
+  const offer = state.judges;
+  const [judgesWanted, setJudges] = useStored<boolean>(JUDGES_KEY, true);
+  const judgesOn = !!offer?.on && judgesWanted;
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const form = React.useRef<HTMLFormElement>(null);
@@ -118,7 +123,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const attempts = prs * models.length;
   const quickAtOnce = Math.min(attempts, state.quick.at_once ?? attempts);
   const priced = models.length > 0 && models.every((m) => m.cost_per_attempt != null);
-  const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) : null;
+  const judging = judgesOn ? offer!.cost_per_attempt * attempts : 0; // one review per attempt, its last try's
+  const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) + judging : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
   // A run takes at least its slowest attempt, however many go at once.
   const minutes = mode === "quick" ? quickMinutes : Math.max(1, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60));
@@ -149,7 +155,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     const which = mode === "quick" ? { quick: true }
       : mode === "pasted" ? { pulls: pastedPulls }
         : { pulls: { [repo!]: chosen } };
-    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test });
+    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test, ...(offer ? { judges: judgesOn } : {}) });
     setStarting(false);
     if (res.error || !res.id) {
       setError(res.error ?? "The run didn't start.");
@@ -275,12 +281,13 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
             <div className="ev-plan">
               <div className="ev-plan-stats">
                 <PlanStat label="Estimated cost" value={<Rolling value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`} />}
-                  tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}.`
+                  tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}${judgesOn ? ", and the judges' review of each attempt" : ""}.`
                     : "No earlier run to estimate from yet."} />
                 <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `≈ ${minutes} min` : "–"} />}
                   tip={mode === "quick" && tries > 1 ? `${quickAtOnce < attempts ? `Up to ${quickAtOnce} attempts run` : "Every attempt starts"} at once, and one the model fails runs again: the slowest sets the end.`
                     : slowest ? `Slowest model takes about ${dur(slowest)} per attempt${tries > 1 ? ", its tries included" : ""}.` : undefined} />
               </div>
+              {offer && <JudgesSwitch offer={offer} on={judgesOn} onChange={(v) => { setError(null); setJudges(v); }} />}
               <dl className="bt-kv ev-plan-rows">
                 <PlanRow label="Pull requests">{prs || "–"}</PlanRow>
                 {tries > 1 && (
@@ -320,13 +327,14 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   );
 }
 
-/** Put a run's pull requests, models and commands in the form; it reads them when it next mounts. */
+/** Put a run's pull requests, models, commands and judges switch in the form; it reads them when it next mounts. */
 export function fillAgain(again: Again) {
   const links = Object.entries(again.pulls ?? {}).flatMap(([repo, numbers]) => numbers.map((n) => `https://github.com/${repo}/pull/${n}`));
   try {
     localStorage.setItem("pr-eval-source", JSON.stringify(again.quick ? "quick" : "repo"));
     if (!again.quick) localStorage.setItem("pr-eval-pulls", JSON.stringify(links.join("\n")));
     localStorage.setItem(MODELS_KEY, JSON.stringify(again.models));
+    if (again.judges !== undefined) localStorage.setItem(JUDGES_KEY, JSON.stringify(again.judges));
     sessionStorage.setItem(COMMANDS, JSON.stringify({ setup: again.setup ?? "", test: again.test ?? "" }));
   } catch { /* private window: the form stays as it was */ }
 }
@@ -428,6 +436,24 @@ function ModelPicker({ models, chosen, onToggle }: { models: CatalogModel[]; cho
           </ul>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** The LLM judges switch: on unless turned off, and off and disabled when no judge has a key here. The line under
+ * it is the server's (which judges review, who has the final word, or why none can), or what off means. */
+function JudgesSwitch({ offer, on, onChange }: { offer: JudgesOffer; on: boolean; onChange: (on: boolean) => void }) {
+  const label = <span id="judges-label" className="label-xs text-muted-foreground">LLM judges</span>;
+  return (
+    <div className="ev-judges">
+      <Tip content="The judges review each attempt beside its hidden tests: what's wrong with the change, then a verdict. Only the tests decide solved.">
+        {label}
+      </Tip>
+      <button type="button" role="switch" className="bt-switch" aria-checked={on} aria-labelledby="judges-label"
+        aria-describedby="judges-note" disabled={!offer.on} onClick={() => onChange(!on)} />
+      <p id="judges-note" className="ev-small" aria-live="polite">
+        {!offer.on || on ? offer.note : "Off: the hidden tests alone, and no judge is paid for."}
+      </p>
     </div>
   );
 }

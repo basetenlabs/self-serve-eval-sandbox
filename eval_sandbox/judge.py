@@ -1,11 +1,13 @@
-"""LLM judges: does the agent's diff do what the merged PR did?
+"""LLM judges: what is wrong with the agent's diff, next to what the merged PR did?
 
-The hidden tests are the first check. The judges are the second: each reads the request,
-the merged diff and the agent's diff on its own, and catches what tests miss (a change
-that games the tests, edits them, or only half-implements the request). The chair then
-reads the same evidence and every judge's verdict, and gives the final pass or fail with
-a one-sentence overview. The report shows that next to every attempt, with each judge's
-own verdict under it.
+The hidden tests decide whether an attempt is solved. The judges review it beside them:
+each reads the request, the merged diff and the agent's diff on its own, lists what is
+wrong (bugs, missed requirements, gamed tests, risky or unneeded changes), and only then
+gives a pass or fail. The chair then reads the same evidence and every judge's review, and
+gives the final problems, verdict and one-sentence overview. Without a chair the judges'
+own verdict stands: a pass when every one passes. The board and the report show that next
+to every attempt's test result, with each judge's own review under it; it never changes
+whether the attempt counts as solved.
 """
 from __future__ import annotations
 
@@ -32,42 +34,55 @@ MAX_PATCH_CHARS = 60_000
 CHAT_TIMEOUT = 120  # seconds to wait for one Chat Completions request
 CLAUDE_TIMEOUT = 180  # seconds for one Claude Code run, which retries the API itself
 
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 SYSTEM = """You review code changes for a benchmark of coding agents. You are given a change
 request taken from a real pull request, the change the maintainers merged, and a change
-an agent made from the request alone. Decide whether a maintainer would accept the
-agent's change as resolving the request, judged by behavior.
+an agent made from the request alone. Review the agent's change as a maintainer would,
+judged by behavior.
 
-Pass when the change does what the request asks and breaks nothing else. A different
-approach from the merged change is fine.
+First ask what is wrong with it. Compare it with the request and the merged change, and
+list every problem you find, one short sentence each:
+- a bug: behavior that is wrong, or that breaks something the request did not ask to change;
+- a missed requirement: part of what the request asks for is missing or only half done;
+- gamed: it special-cases test inputs, hardcodes expected values, or disables or rewrites
+  checks so they pass instead of fixing the behavior;
+- a risky or unneeded change: an edit the request did not call for that a maintainer would
+  not want to merge.
+A different approach from the merged change is not a problem. Leave out hypothetical edge
+cases that neither the request nor the merged tests cover, being less thorough than the
+merged change in ways a maintainer would still accept, and style, comments, docs and
+changelog entries. An empty list is a fine answer.
 
-Fail only for one of these, and name it in the reason:
-- incomplete: part of what the request asks for is missing or wrong;
-- gamed: the change special-cases test inputs, hardcodes expected values, or disables
-  or rewrites checks so they pass instead of fixing the behavior;
-- regression: it breaks behavior the request did not ask to change.
+Only then give your verdict: pass when a maintainer would accept the change as resolving
+the request, fail when a problem you listed is serious enough that they would not.
 
 Hidden tests from the merged PR were run against the agent's change; their result is
 given. Passing tests are strong evidence for pass. Failing tests are strong evidence
-against, unless they fail for a reason unrelated to the request. Do not fail a change for
-hypothetical edge cases that neither the request nor the merged tests cover, or for being
-less thorough than the merged change in ways a maintainer would still accept. Ignore
-style, comments, docs and changelog entries.
+against, unless they fail for a reason unrelated to the request.
 
-Answer with JSON only: {"verdict": "pass" | "fail", "reason": "<one sentence, under 30 words>"}"""
+Answer with JSON only, the problems first: {"problems": ["<one sentence each, under 25 words>"], "verdict": "pass" | "fail", "reason": "<one sentence, under 30 words>"}"""
 
-CHAIR = """You chair a panel of judges grading a coding agent's change for a benchmark. You
+CHAIR = """You chair a panel of judges reviewing a coding agent's change for a benchmark. You
 are given the change request from a real pull request, the change the maintainers merged,
-the agent's change, the hidden test result, and each judge's verdict with its reason.
+the agent's change, the hidden test result, and each judge's review: the problems it
+found, its verdict and its reason.
 
-Give the panel's final verdict on the judges' standard: pass when a maintainer would
-accept the agent's change as resolving the request, judged by behavior; fail only when it
-is incomplete, gamed, or causes a regression. Check each judge's reason against the
-evidence rather than counting votes, and side with the reasons the diffs and tests
-support. Passing hidden tests are strong evidence for pass, failing ones strong evidence
-against.
+First ask what is wrong with the agent's change. Check each problem the judges raised
+against the diffs and tests, keep the ones the evidence supports, add any real bug, missed
+requirement, gamed test, or risky or unneeded change they all missed, and list them, one
+short sentence each. Drop a different approach from the merged change, hypothetical edge
+cases and style.
 
-Answer with JSON only: {"verdict": "pass" | "fail", "reason": "<one sentence, under 40 words: what the panel found, and whose reading you followed if they split>"}"""
+Only then give the panel's final verdict on the judges' standard: pass when a maintainer
+would accept the agent's change as resolving the request, judged by behavior; fail when a
+problem you kept is serious enough that they would not. Side with the reviews the diffs
+and tests support rather than counting votes. Passing hidden tests are strong evidence
+for pass, failing ones strong evidence against.
+
+Answer with JSON only, the problems first: {"problems": ["<one sentence each, under 25 words>"], "verdict": "pass" | "fail", "reason": "<one sentence, under 40 words: what the panel found, and whose reading you followed if they split>"}"""
+
+MAX_PROBLEMS = 8  # problems kept from one answer, each cut to MAX_PROBLEM_CHARS
+MAX_PROBLEM_CHARS = 300
 
 # Claude Code, quiet: no update checks, telemetry or error reports from a judge. A judge asks
 # once, so a prompt cache is never read and its write (an hour's, at twice the input rate)
@@ -99,7 +114,17 @@ def parse(reply: str | None) -> dict:
         verdict = json.loads(found[0])
     if not isinstance(verdict, dict) or verdict.get("verdict") not in ("pass", "fail"):
         raise ValueError(f"unexpected verdict {verdict!r}")
+    if "problems" in verdict:  # a review lists them first; a task screen has none
+        listed = verdict["problems"] if isinstance(verdict["problems"], list) else [verdict["problems"]]
+        verdict["problems"] = [str(p).strip()[:MAX_PROBLEM_CHARS] for p in listed
+                               if p and str(p).strip()][:MAX_PROBLEMS]
     return verdict
+
+
+def answer(verdict: dict) -> dict:
+    """What a record keeps of a parsed reply: its verdict and reason, and the problems it listed, if any."""
+    return {"verdict": verdict["verdict"], "reason": str(verdict.get("reason", "")).strip(),
+            **({"problems": verdict["problems"]} if "problems" in verdict else {})}
 
 
 def clip(text: str, limit: int = MAX_PATCH_CHARS) -> str:
@@ -178,7 +203,8 @@ def screen(judge: Judge, task: Task) -> dict:
 
 
 def grade(panel: Panel, task: Task, agent_patch: str, tests: dict, test_output: str) -> dict:
-    """Every judge's verdict, then the chair's: the final verdict and reason, with the panel's votes."""
+    """Every judge's review, then the chair's: the final problems, verdict and reason, with the panel's votes.
+    A review only: the hidden tests decide whether the attempt is solved (runner.judge_attempt)."""
     record = {"model": panel.name, "prompt_version": PROMPT_VERSION}
     try:
         user = evidence(task, agent_patch, tests, test_output)
@@ -191,19 +217,41 @@ def grade(panel: Panel, task: Task, agent_patch: str, tests: dict, test_output: 
     answered = [v for v in votes if not v.get("error")]
     if len(answered) * 2 <= len(votes):  # a majority of the panel must answer
         return {**record, "error": "; ".join(f"{v['label']}: {v['error']}" for v in votes if v.get("error"))}
-    if not panel.chair:
-        return {**record, "verdict": answered[0]["verdict"], "reason": answered[0]["reason"]}
-    reviews = "\n".join(f"- {v['label']}: {v['verdict']}. {v['reason']}" if not v.get("error")
-                        else f"- {v['label']}: no verdict (it failed to answer)" for v in votes)
+    if not panel.chair:  # left out (no key for it here), or never configured: the judges decide together
+        return {**record, **together(answered)}
+    reviews = "\n".join(review(v) for v in votes)
     chair = {"label": panel.chair.name, "model": panel.chair.model, "effort": panel.chair.effort,
-             **ask(panel.chair, CHAIR, f"{user}\n\n## The judges' verdicts\n\n{reviews}")}
+             **ask(panel.chair, CHAIR, f"{user}\n\n## The judges' reviews\n\n{reviews}")}
     record["chair"] = chair
     if not chair.get("error"):
-        return {**record, "verdict": chair["verdict"], "reason": chair["reason"]}
+        return {**record, **answer(chair)}
     agreed = {v["verdict"] for v in answered}
     if len(answered) == len(votes) and len(agreed) == 1:  # a unanimous panel stands without its chair
-        return {**record, "verdict": agreed.pop(), "reason": f"All {len(votes)} judges agreed; {answered[0]['reason']}"}
+        return {**record, **together(answered)}
     return {**record, "error": f"{chair['label']} (chair): {chair['error']}"}
+
+
+def review(vote: dict) -> str:
+    """One judge's review as the chair reads it: its verdict and reason, then each problem it listed."""
+    if vote.get("error"):
+        return f"- {vote['label']}: no verdict (it failed to answer)"
+    return "\n".join([f"- {vote['label']}: {vote['verdict']}. {vote['reason']}",
+                      *(f"  - problem: {p}" for p in vote.get("problems") or [])])
+
+
+def together(answered: list[dict]) -> dict:
+    """The verdict of judges with no chair to settle it: one judge's own; for several, a pass only when every
+    one passes, else a fail with the reason of the first that failed it. Their problems, each once."""
+    failed = [v for v in answered if v["verdict"] == "fail"]
+    if len(answered) == 1:
+        reason = answered[0]["reason"]
+    elif not failed or len(failed) == len(answered):
+        reason = f"All {len(answered)} judges agreed; {answered[0]['reason']}"
+    else:
+        reason = f"The judges split; {failed[0]['label']} said no: {failed[0]['reason']}"
+    problems = list(dict.fromkeys(p for v in answered for p in v.get("problems") or []))[:MAX_PROBLEMS]
+    return {"verdict": "fail" if failed else "pass", "reason": reason,
+            **({"problems": problems} if any("problems" in v for v in answered) else {})}
 
 
 def ask(judge: Judge, system: str, user: str) -> dict:
@@ -258,7 +306,7 @@ def ask_claude(judge: Judge, system: str, user: str) -> dict:
                 time.sleep(3 * 2 ** attempt)
                 continue
         usage = data.get("usage") or {}
-        return {"verdict": verdict["verdict"], "reason": str(verdict.get("reason", "")).strip(),
+        return {**answer(verdict),
                 "input_tokens": sum(usage.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens",
                                                                  "cache_read_input_tokens")),
                 "output_tokens": usage.get("output_tokens"), "cost_usd": data.get("total_cost_usd")}
@@ -283,7 +331,7 @@ def ask_chat(judge: Judge, system: str, user: str) -> dict:
             verdict = parse(data["choices"][0]["message"].get("content"))
             usage = data.get("usage") or {}
             cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
-            return {"verdict": verdict["verdict"], "reason": str(verdict.get("reason", "")).strip(),
+            return {**answer(verdict),
                     "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
                     "cost_usd": judge.price(usage.get("prompt_tokens"), usage.get("completion_tokens"), cached)}
         except urllib.error.HTTPError as exc:
