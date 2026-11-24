@@ -74,6 +74,8 @@ export interface Board {
   rows: BoardRow[];
   sandboxes: number;
   concurrency?: number | null;
+  /** Hosted: the places every run's attempts share, how many are taken and how many attempts wait for one. */
+  shared?: { held: number; waiting: number; limit: number } | null;
 }
 
 export interface RunSummary {

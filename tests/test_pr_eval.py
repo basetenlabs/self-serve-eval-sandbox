@@ -1782,7 +1782,7 @@ class AppTest(unittest.TestCase):
             self.add_run(jobs, "old", "a@x.co", phase="done", cost=1000, age=timedelta(days=2))
             page = app.App(jobs)
             state = self.hosted_state(page, "a@x.co")
-            self.assertEqual((state["spend"], state["blocked"]), ({"spent": 45, "cap": 50}, None))
+            self.assertEqual((state["spend"], state["blocked"]), ({"spent": 45, "cap": 50, "reserved": 0}, None))
             self.assertIsNone(self.hosted_state(page, None)["spend"])  # locally, no one's own limit
             model = {"key": "m", "cost_per_try": 1.0, "solve_rate": 1.0,
                      "by_scope": {"o/a": {"cost_per_try": 0.1, "solve_rate": 1.0}}}
@@ -1802,7 +1802,43 @@ class AppTest(unittest.TestCase):
             self.add_run(jobs, "r3", None, phase="done", cost=50)
             state = self.hosted_state(page, "b@x.co")
             self.assertIn("reached its $100 limit", state["blocked"])
-            self.assertEqual(state["spend"], {"spent": 0, "cap": 50})
+            self.assertEqual(state["spend"], {"spent": 0, "cap": 50, "reserved": 0})
+
+    def test_runs_going_hold_what_they_are_still_expected_to_spend(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 50.0), \
+                mock.patch.object(app, "SPEND_TOTAL", 100.0), mock.patch.object(app, "RUNS_PER_PERSON", 3), \
+                mock.patch.object(app, "MAX_RUNS", 20):
+            jobs = Path(d)
+            self.add_run(jobs, "a-going", "a@x.co", cost=10)  # estimated at $40 when it started: $30 still to come
+            access = jobs / "a-going" / app.ACCESS
+            access.write_text(json.dumps({**json.loads(access.read_text()), "estimate": 40.0}))
+            self.add_run(jobs, "b-going", "b@x.co", cost=50)  # past its estimate: holds nothing more
+            access = jobs / "b-going" / app.ACCESS
+            access.write_text(json.dumps({**json.loads(access.read_text()), "estimate": 20.0}))
+            page = app.App(jobs)
+            state = self.hosted_state(page, "a@x.co")
+            self.assertEqual((state["spend"], state["reserved_total"]), ({"spent": 10, "cap": 50, "reserved": 30}, 30))
+            self.assertIsNone(state["blocked"])  # a second run of their own may start beside the first
+            state["models"] = [{"key": "m", "cost_per_try": 1.0, "solve_rate": 1.0}]
+            self.assertIsNone(page.over_budget(state, ["m"], 10, "o/x", "a@x.co", tries=1))  # 10 + 30 + 10 fits 50
+            self.assertIn("you have $10.00 left of your $50.00 for the last 24 hours, counting what your runs going are expected to spend.",
+                          page.over_budget(state, ["m"], 11, "o/x", "a@x.co", tries=1))
+            other = self.hosted_state(page, "c@x.co")  # the page: 60 spent and 30 still to come of 100
+            other["models"] = state["models"]
+            self.assertIn("this page has $10.00 left of its $100 for the last 24 hours, counting what the runs going are expected to spend.",
+                          page.over_budget(other, ["m"], 11, "o/x", "c@x.co", tries=1))
+
+    def test_a_run_started_with_limits_keeps_its_estimate(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(app, "SPEND_PER_PERSON", 500.0):
+            page = app.App(Path(d))
+            ready = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True}, "spend": {"spent": 0, "cap": 500},
+                     "spent_total": 0, "quick": {"tasks": 10}, "models": [{"key": "m", "cost_per_try": 2.0, "solve_rate": 1.0}]}
+            with mock.patch.object(page, "state", return_value=ready), mock.patch.object(page, "spawn"), \
+                    mock.patch.object(app.pipeline, "preflight"), \
+                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
+                started = page.start({"pulls": {"o/a": [1, 2, 3]}, "models": ["m"]}, "a@x.co")
+            access = json.loads((Path(d) / started["id"] / app.ACCESS).read_text())
+            self.assertEqual(access, {"owner": "a@x.co", "private": False, "estimate": 6.0})
 
     def test_spending_counts_each_runs_ledger_by_when_it_was_spent(self):
         def ledger(jobs: Path, run_id: str, *entries: tuple) -> None:
