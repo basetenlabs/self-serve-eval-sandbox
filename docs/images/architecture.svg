@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 984" width="1200" height="984">
+  <title>How a pr-eval run works</title>
+  <!-- Fonts by name only, no font files: browsers apply this block, Figma reads the attributes. -->
+  <defs><style>text[font-family="Geist Mono"],tspan[font-family="Geist Mono"]{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace}text[font-family="Beausite Classic"],tspan[font-family="Beausite Classic"]{font-family:"Beausite Classic","Beausite","Geist",system-ui,-apple-system,"Segoe UI",sans-serif}</style></defs>
+  <g id="Canvas"><rect x="0.5" y="0.5" width="1199" height="983" fill="#F8F9F8" stroke="#E3EAE1"/></g>
+  <g id="Header">
+    <g id="Eyebrow"><text x="64" y="64" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">PR-EVAL</text><rect x="125.4" y="56" width="5" height="5" fill="#575D56"/><text x="140.4" y="64" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">HOW A RUN WORKS</text></g>
+    <g id="Title"><text x="64" y="112" font-family="Beausite Classic" font-style="normal" font-weight="500" font-size="32" letter-spacing="-0.48" fill="#000000">From merged pull requests to a solve rate per model</text></g>
+    <g id="Subtitle"><text x="64" y="142" font-family="Beausite Classic" font-style="normal" font-weight="400" font-size="18" fill="#575D56">The agent works with no network and holds no key; hidden tests it never sees decide what is solved.</text></g>
+  </g>
+  <g id="Body">
+    <g id="Row / Start, collect, run">
+      <g id="Column / Start">
+        <line x1="64" y1="196" x2="264" y2="196" stroke="#000000"/><text x="64" y="226" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">START</text>
+        <g id="Node / pr-eval serve">
+          <rect x="64" y="248" width="200" height="56" fill="#E3EAE1"/>
+          <text x="164" y="272" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">pr-eval serve</text>
+          <text x="164" y="288" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">LOCAL PAGE</text>
+        </g>
+        <g id="Node / Hosted page">
+          <rect x="64" y="312" width="200" height="56" fill="#E3EAE1"/>
+          <text x="164" y="336" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">HOSTED PAGE</text>
+          <text x="164" y="352" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">BEHIND A SIGN-IN</text>
+        </g>
+        <g id="Node / pr-eval run">
+          <rect x="64" y="376" width="200" height="56" fill="#E3EAE1"/>
+          <text x="164" y="400" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">pr-eval run</text>
+          <text x="164" y="416" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">TERMINAL, SAME PIPELINE</text>
+        </g>
+        <g id="Note / Pick"><text x="64" y="460" font-family="Beausite Classic" font-style="normal" font-weight="400" font-size="14" fill="#575D56">Pick a repository, its merged</text><text x="64" y="480" font-family="Beausite Classic" font-style="normal" font-weight="400" font-size="14" fill="#575D56">PRs and the models to compare.</text></g>
+      </g>
+      <g id="Column / Collect">
+        <line x1="304" y1="196" x2="524" y2="196" stroke="#000000"/><text x="304" y="226" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">COLLECT</text>
+        <g id="Node / Task">
+          <rect x="304" y="248" width="220" height="88" fill="#E3EAE1"/>
+          <text x="414" y="272" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">MERGED PR → TASK</text>
+          <text x="414" y="288" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">JOINS ONLY IF ITS TESTS</text>
+          <text x="414" y="304" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">FAIL WITHOUT THE CHANGE</text>
+          <text x="414" y="320" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">AND PASS WITH IT</text>
+        </g>
+        <g id="Node / Request">
+          <rect x="332" y="352" width="192" height="56" fill="#E3EAE1"/>
+          <text x="428" y="376" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">REQUEST</text>
+          <text x="428" y="392" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">PR TEXT OR ITS ISSUE</text>
+        </g>
+        <g id="Node / Hidden tests">
+          <rect x="332" y="424" width="192" height="72" fill="#C7D4C4"/>
+          <text x="428" y="448" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">HIDDEN TESTS</text>
+          <text x="428" y="464" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">MERGED DIFF + PR TESTS</text>
+          <text x="428" y="480" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">KEPT ASIDE: THE ANSWER</text>
+        </g>
+      </g>
+      <g id="Column / Run">
+        <line x1="564" y1="196" x2="1136" y2="196" stroke="#000000"/><text x="564" y="226" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">RUN</text><rect x="596.4" y="217" width="5" height="5" fill="#000000"/><text x="611.4" y="226" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">BASETEN SANDBOXES</text><rect x="760.0" y="217" width="5" height="5" fill="#000000"/><text x="775" y="226" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">ONE ATTEMPT PER TASK PER MODEL</text>
+        <g id="Sandbox / Trial">
+          <rect x="564.5" y="248.5" width="339" height="243" fill="none" stroke="#C7D4C4"/>
+          <text x="580" y="270" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">TRIAL SANDBOX</text>
+          <g id="Node / Install dependencies">
+            <rect x="580" y="284" width="308" height="56" fill="#E3EAE1"/>
+            <text x="734" y="308" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">INSTALL DEPENDENCIES</text>
+            <text x="734" y="324" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">NETWORK OPEN, BEFORE THE AGENT</text>
+          </g>
+          <g id="Jail / No network">
+            <rect x="580.5" y="356.5" width="175" height="119" fill="none" stroke="#000000"/>
+            <text x="592" y="378" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000">JAIL: NO NETWORK</text>
+            <g id="Node / Coding agent">
+              <rect x="596" y="388" width="144" height="72" fill="#E3EAE1"/>
+              <text x="668" y="412" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">CODING AGENT</text>
+              <text x="668" y="428" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">PI OR CLAUDE CODE</text>
+              <text x="668" y="444" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">NO MODEL KEY</text>
+            </g>
+          </g>
+          <g id="Node / Model relay">
+            <rect x="772" y="388" width="116" height="72" fill="#E3EAE1"/>
+            <text x="830" y="412" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">MODEL RELAY</text>
+            <text x="830" y="428" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">THE AGENT&#8217;S</text>
+            <text x="830" y="444" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">ONE WAY OUT</text>
+          </g>
+        </g>
+        <g id="Node / Key meter">
+          <rect x="940" y="248" width="196" height="88" fill="#E3EAE1"/>
+          <text x="1038" y="272" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">KEY METER</text>
+          <text x="1038" y="288" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">HOLDS THE MODEL KEYS</text>
+          <text x="1038" y="304" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">CHECKS EACH TICKET</text>
+          <text x="1038" y="320" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">RECORDS SPEND</text>
+        </g>
+        <g id="Models">
+          <g id="Node / Open models">
+            <rect x="964" y="360" width="172" height="56" fill="#19E76E"/>
+            <text x="1050" y="384" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">OPEN MODELS</text>
+            <text x="1050" y="400" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">BASETEN MODEL APIS</text>
+          </g>
+          <g id="Node / Closed comparison">
+            <rect x="964" y="424" width="172" height="56" fill="#3DA6FF"/>
+            <text x="1050" y="448" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">CLOSED COMPARISON</text>
+            <text x="1050" y="464" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">ANTHROPIC, OPENAI</text>
+          </g>
+        </g>
+      </g>
+    </g>
+    <g id="Row / Grade, judges, report">
+      <g id="Column / Grade">
+        <line x1="64" y1="568" x2="504" y2="568" stroke="#000000"/><text x="64" y="598" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">GRADE</text>
+        <g id="Sandbox / Verifier">
+          <g id="Node / Hidden tests on the diff">
+            <rect x="80" y="656" width="408" height="40" fill="#E3EAE1"/>
+            <text x="284" y="680" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">HIDDEN TESTS RUN ON THE AGENT&#8217;S DIFF</text>
+          </g>
+          <g id="Node / Solved">
+            <rect x="80" y="720" width="408" height="56" fill="#000000"/>
+            <text x="284" y="744" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#FFFFFF" text-anchor="middle">SOLVED = HIDDEN TESTS PASS</text>
+            <text x="284" y="760" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#FFFFFF" text-anchor="middle">THE ONLY PASS/FAIL RULE</text>
+          </g>
+          <rect x="64.5" y="620.5" width="439" height="171" fill="none" stroke="#C7D4C4"/>
+          <text x="80" y="642" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">FRESH VERIFIER SANDBOX</text>
+        </g>
+      </g>
+      <g id="Column / LLM judges">
+        <line x1="544" y1="568" x2="820" y2="568" stroke="#000000"/><text x="544" y="598" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">LLM JUDGES</text><rect x="634.5" y="589" width="5" height="5" fill="#000000"/><text x="649.5" y="598" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">ON BY DEFAULT</text>
+        <g id="Node / Judge Claude Opus">
+          <rect x="544" y="620" width="134" height="40" fill="#FFBE4D"/>
+          <text x="611" y="644" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">CLAUDE OPUS</text>
+        </g>
+        <g id="Node / Judge GPT">
+          <rect x="686" y="620" width="134" height="40" fill="#FFBE4D"/>
+          <text x="753" y="644" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">GPT</text>
+        </g>
+        <g id="Node / Judge Kimi, chair">
+          <rect x="544" y="684" width="276" height="56" fill="#FFBE4D"/>
+          <text x="682" y="708" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">KIMI</text>
+          <text x="682" y="724" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">CHAIR, WRITES THE FINAL REVIEW</text>
+        </g>
+        <g id="Note / Judges"><text x="544" y="768" font-family="Beausite Classic" font-style="normal" font-weight="400" font-size="14" fill="#575D56">Each compares the diff with the merged</text><text x="544" y="788" font-family="Beausite Classic" font-style="normal" font-weight="400" font-size="14" fill="#575D56">one and says what is wrong with it.</text><text x="544" y="808" font-family="Beausite Classic" font-style="normal" font-weight="400" font-size="14" fill="#575D56">They never change pass or fail.</text></g>
+      </g>
+      <g id="Column / Report">
+        <line x1="860" y1="568" x2="1136" y2="568" stroke="#000000"/><text x="860" y="598" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">REPORT</text>
+        <g id="Node / Per model">
+          <rect x="860" y="620" width="276" height="72" fill="#E3EAE1"/>
+          <text x="998" y="644" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">PER MODEL</text>
+          <text x="998" y="660" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">SOLVE RATE, TIME PER TASK</text>
+          <text x="998" y="676" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="middle">COST PER SOLVED TASK</text>
+        </g>
+        <g id="Comparison / Open vs closed">
+          <g id="Bar / Open on Baseten"><rect x="860" y="708" width="180" height="32" fill="#19E76E"/><text x="872" y="729" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">OPEN ON BASETEN</text></g>
+          <g id="Bar / Closed comparison"><rect x="860" y="740" width="180" height="32" fill="#3DA6FF"/><text x="872" y="761" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000">CLOSED COMPARISON</text></g>
+          <g id="Chip / Difference"><rect x="1048" y="726" width="88" height="28" rx="2" fill="#FFA9FD"/><text x="1092" y="744" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">DIFFERENCE</text></g>
+        </g>
+        <g id="Node / Not scored">
+          <rect x="860" y="788" width="276" height="72" fill="#FFBE4D"/>
+          <text x="998" y="812" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#000000" text-anchor="middle">NOT SCORED</text>
+          <text x="998" y="828" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">SETUP, PROVIDER, VERIFIER</text>
+          <text x="998" y="844" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#000000" text-anchor="middle">OR JUDGE ERRORS</text>
+        </g>
+        <g id="Node / Output">
+          <rect x="860" y="868" width="276" height="40" fill="#000000"/>
+          <text x="998" y="892" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="13" letter-spacing="0.5" fill="#FFFFFF" text-anchor="middle">HTML PAGE + report.json</text>
+        </g>
+      </g>
+    </g>
+    <g id="Connectors" fill="none" stroke="#A2AE9D">
+      <path d="M316 336 V460"/>
+      <path d="M316 380 H332"/>
+      <path d="M326 374 L332 380 L326 386"/>
+      <path d="M316 460 H332"/>
+      <path d="M326 454 L332 460 L326 466"/>
+      <path d="M524 380 H544 V424 H596"/>
+      <path d="M590 418 L596 424 L590 430"/>
+      <path d="M740 424 H772"/>
+      <path d="M766 418 L772 424 L766 430"/>
+      <path d="M888 424 H922 V292 H940"/>
+      <path d="M934 286 L940 292 L934 298"/>
+      <path d="M952 336 V452"/>
+      <path d="M952 388 H964"/>
+      <path d="M958 382 L964 388 L958 394"/>
+      <path d="M952 452 H964"/>
+      <path d="M958 446 L964 452 L958 458"/>
+      <path d="M284 696 V720"/>
+      <path d="M278 714 L284 720 L290 714"/>
+      <path d="M428 496 V656"/>
+      <path d="M422 650 L428 656 L434 650"/>
+      <path d="M600 492 V540 H476 V656"/>
+      <path d="M470 650 L476 656 L482 650"/>
+      <path d="M611 660 V684"/>
+      <path d="M605 678 L611 684 L617 678"/>
+      <path d="M753 660 V684"/>
+      <path d="M747 678 L753 684 L759 678"/>
+      <path d="M264 196 H304"/>
+      <path d="M298 190 L304 196 L298 202"/>
+      <path d="M524 196 H564"/>
+      <path d="M558 190 L564 196 L558 202"/>
+      <path d="M504 568 H544"/>
+      <path d="M538 562 L544 568 L538 574"/>
+      <path d="M820 568 H860"/>
+      <path d="M854 562 L860 568 L854 574"/>
+    </g>
+    <g id="Connector labels">
+      <text x="416" y="522" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56" text-anchor="end">NEVER IN THE AGENT&#8217;S SANDBOX</text>
+      <text x="612" y="522" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">AGENT&#8217;S DIFF, AFTER ITS SANDBOX IS DELETED</text>
+    </g>
+  </g>
+  <g id="Footer"><text x="64" y="948" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">RUN LOCALLY, THE RELAY PUTS THE KEY ON EACH CALL</text><rect x="441.1" y="940" width="5" height="5" fill="#575D56"/><text x="456.1" y="948" font-family="Geist Mono" font-style="normal" font-weight="400" font-size="12" letter-spacing="0.5" fill="#575D56">HOSTED, THE KEY METER DOES</text></g>
+</svg>
