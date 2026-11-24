@@ -22,6 +22,7 @@ import ctypes
 import json
 import os
 import random
+import re
 import socket
 import socketserver
 import sys
@@ -58,6 +59,17 @@ STOP_REASON = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_u
 
 # Request path -> the wire the client is speaking. Anything else is forwarded untranslated.
 SHAPES = {"/v1/messages": "anthropic", "/v1/responses": "responses", "/v1/chat/completions": "chat"}
+
+# A path the relay passes on: segments of plain characters only, so nothing the upstream could resolve into another
+# endpoint ("..", "%2e%2e"), the way a model lookup could otherwise become a read of the account's files.
+PLAIN_PATH = re.compile(r"(/[A-Za-z0-9][A-Za-z0-9._:@+-]*)+/?")
+
+# Tools the agent runs itself. Any other kind (web search, fetching a page, running code, a remote MCP server) runs on
+# the provider's side, where it reaches the network for the agent: the one thing the jail exists to stop. Media the
+# provider would download from a link, or read from the account's files, is the same way out.
+OWN_TOOLS = {"custom", "function"}
+REMOTE_MEDIA = ("image_url", "file_url", "file_id", "video_url", "audio_url")
+NOT_CONTENT = {"input_schema", "parameters"}  # a tool's argument schema, which can name anything
 
 # An upstream call returns the response, or an HTTPError, which reads like one and carries a status.
 Upstream = HTTPResponse | urllib.error.HTTPError
@@ -642,6 +654,34 @@ def call_upstream(path: str, body: bytes | None, headers: dict[str, str]) -> Ups
         return error
 
 
+def reaches_out(value: Any) -> str | None:
+    """Why a request body would have the provider reach the network for the caller, or None.
+
+    Walks the whole body, so tools added along the way (as Pi adds them to a Responses input) count too. A tool
+    call's own arguments are the agent's, never a request to the provider, so they are skipped."""
+    if isinstance(value, list):
+        return next((why for item in value if (why := reaches_out(item))), None)
+    if not isinstance(value, dict) or value.get("type") == "tool_use":
+        return None
+    for key in ("mcp_servers", "container"):
+        if key in value:
+            return f"{key} has the provider act on the network"
+    tools = value.get("tools")
+    for tool in tools if isinstance(tools, list) else []:
+        kind = tool.get("type", "custom") if isinstance(tool, dict) else "malformed"
+        if kind not in OWN_TOOLS:
+            return f"a {kind} tool runs on the provider's side"
+    source = value.get("source")
+    if isinstance(source, dict) and source.get("type") in ("url", "file"):
+        return f"the provider would fetch a {source['type']} source"
+    for key in REMOTE_MEDIA:
+        found = value.get(key)
+        found = found.get("url") if isinstance(found, dict) else found
+        if isinstance(found, str) and (key == "file_id" or not found.startswith("data:")):
+            return f"the provider would fetch {key}"
+    return next((why for key, item in value.items() if key not in NOT_CONTENT and (why := reaches_out(item))), None)
+
+
 def upstream_url(path: str) -> str:
     """Map a client path onto the upstream host, whose base URL already ends in /v1."""
     tail = path[len("/v1"):] if path.startswith("/v1") else path
@@ -723,12 +763,26 @@ class Proxy(BaseHTTPRequestHandler):
         """Silence the stdlib access log; this proxy writes one line per turn instead."""
 
     def _own_path(self) -> bool:
-        """Whether the request names a path, which is all the upstream's base URL may be joined with. Anything
-        else ("@other.host/x", "http://other.host/") could turn the join into a call to another host, with the
-        relay's credential on it; the agent's only way out is the one upstream."""
-        if self.path.startswith("/"):
+        """Whether the request names a plain path, which is all the upstream's base URL may be joined with. Anything
+        else ("@other.host/x", "http://other.host/", "/v1/models/../files") could turn the join into a call to
+        another host or endpoint, with the relay's credential on it; the agent's only way out is the one upstream."""
+        if PLAIN_PATH.fullmatch(self.path.split("?", 1)[0]):
             return True
-        self._send(400, error_body(ValueError("the relay takes a path on its one upstream, nothing else"), "anthropic"))
+        self._send(400, error_body(ValueError("the relay takes a plain path on its one upstream, nothing else"), "anthropic"))
+        return False
+
+    def _stays_in(self, raw: bytes, turn: int, started: float) -> bool:
+        """Whether a request keeps to the model: no provider-side tool or fetch (reaches_out). Refused otherwise."""
+        try:
+            why = reaches_out(json.loads(raw)) if raw else None
+        except ValueError:
+            why = None  # not JSON: the provider refuses it, and it can ask for nothing
+        if why is None:
+            return True
+        path = self.path.split("?", 1)[0]
+        self._send(403, error_body(ValueError(f"the agent has no network, so the relay doesn't forward this: {why}"),
+                                   next((s for p, s in SHAPES.items() if path.endswith(p)), "anthropic")))
+        self._record(turn, started, path, "refused", 403, "provider-side tool or fetch")  # never the body's words
         return False
 
     def do_GET(self) -> None:
@@ -770,7 +824,7 @@ class Proxy(BaseHTTPRequestHandler):
         started = time.monotonic()
         turn = next_turn()
         raw = self.rfile.read(int(self.headers.get("content-length") or 0))
-        if not self._own_path():
+        if not self._own_path() or not self._stays_in(raw, turn, started):
             return
         if not CONFIG.effort:
             return self._as_is(raw)

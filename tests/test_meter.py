@@ -65,6 +65,15 @@ class FakeProvider(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def do_GET(self):
+        FakeProvider.seen.append((self.path, dict(self.headers), None))
+        payload = b'{"data": []}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def log_message(self, *args):
         pass
 
@@ -100,12 +109,14 @@ class MeterTest(unittest.TestCase):
         self.assertEqual(list(headers), [meter.HEADER])  # what the attempt's relay puts on each call
         return headers[meter.HEADER], path
 
-    def call(self, ticket: str | None, path: str, body: dict) -> tuple[int, bytes]:
-        """What reaches the meter from a sandbox: a call with a placeholder key, and the ticket its relay added."""
+    def call(self, ticket: str | None, path: str, body: dict | None) -> tuple[int, bytes]:
+        """What reaches the meter from a sandbox: a call with a placeholder key, and the ticket its relay added.
+        No body is a GET."""
         headers = {"content-type": "application/json", "x-api-key": "pr-eval-placeholder-x"}
         if ticket:
             headers[meter.HEADER] = ticket
-        request = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), headers=headers)
+        request = urllib.request.Request(self.url + path, data=None if body is None else json.dumps(body).encode(),
+                                         headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, response.read()
@@ -224,11 +235,36 @@ class MeterTest(unittest.TestCase):
         [entry] = self.ledger("pi")
         self.assertAlmostEqual(entry["usd"], (400 * 2 + 600 * .10 + 100 * 10) / 1e6)  # its usage, not the worst case
 
+    def test_a_ticket_buys_no_search_fetch_or_code_on_the_providers_side(self):
+        """The relay's rule, again at the meter, which holds the real key: an older image's relay doesn't have it."""
+        ticket, _ = self.attempt("mine", "a@x.co")
+        body = {"model": "claude-opus-5-5", "max_tokens": 10}
+        for edit in ({"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+                     {"mcp_servers": [{"type": "url", "url": "https://mcp.example", "name": "x"}]},
+                     {"messages": [{"role": "user", "content": [{"type": "image", "source": {"type": "url", "url": "https://x"}}]}]}):
+            status, answer = self.call(ticket, "/anthropic/v1/messages", {**body, **edit})
+            self.assertEqual(status, 403)
+            self.assertIn(b"has no network", answer)
+        glm, _ = self.attempt("glm", "a@x.co", baseten_model())
+        linked = {"model": "zai-org/GLM-5.3", "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "https://x.example/a.png"}}]}]}
+        self.assertEqual(self.call(glm, "/baseten/v1/chat/completions", linked)[0], 403)
+        self.assertEqual(FakeProvider.seen, [])
+        self.assertEqual(self.ledger("mine", False) + self.ledger("glm", False), [])
+        self.assertEqual(self.call(ticket, "/anthropic/v1/messages", {**body, "tools": [{"name": "bash", "input_schema": {}}]})[0], 200)
+
     def test_the_caller_never_picks_the_host_the_key_goes_to(self):
         ticket, _ = self.attempt("mine", "a@x.co")
         for path in ("/anthropic@evil.example/v1/messages", "/anthropic/../v1/messages", "/anthropic/v1/../../x"):
             self.assertEqual(self.call(ticket, path, {"model": "claude-opus-5-5"})[0], 403, path)
         self.assertEqual(FakeProvider.seen, [])
+        # A free model lookup can't be walked over to another endpoint, such as the account's files.
+        for path in ("/anthropic/v1/models/../../v1/files", "/anthropic/v1/models/%2e%2e/%2e%2e/v1/files",
+                     "/anthropic/v1/models/./x"):
+            self.assertEqual(self.call(ticket, path, None)[0], 403, path)
+        self.assertEqual(FakeProvider.seen, [])
+        self.assertEqual(self.call(ticket, "/anthropic/v1/models/claude-opus-5-5", None)[0], 200)
+        self.assertEqual(FakeProvider.seen.pop()[0], "/v1/models/claude-opus-5-5")
         # http.server folds a leading "//" to "/" itself; the call still goes to the provider's own host.
         self.assertEqual(self.call(ticket, "//anthropic/v1/messages", {"model": "claude-opus-5-5"})[0], 200)
         self.assertEqual([seen[0] for seen in FakeProvider.seen], ["/v1/messages"])
