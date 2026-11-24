@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -5,8 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPolicy, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
-import { adminApi, SEED, seedAccess } from './access.mjs'
+import { createPolicy, createSiteServer, loadBrand, loadConfig, renderLogin } from '@blaxel/sign-in'
+import { accessHandlers, SEED, seedAccess } from './access.mjs'
 import { visitorCounts } from './visitors.mjs'
 import { resendMailer } from './mailer.mjs'
 import { accessRequests, inviteLink } from './requests.mjs'
@@ -21,23 +22,27 @@ const folder = t => {
 }
 
 /** The admin API behind a plain HTTP server; the test names the signed-in person in a header. */
-async function serve(t, file) {
+async function serve(t, file, { ownerEmail, secret = randomBytes(32).toString('hex') } = {}) {
   const visitors = visitorCounts(':memory:')
   t.after(() => visitors.close())
-  const api = adminApi({ file, visitors, log: quiet })
+  const access = accessHandlers({ file, secret, ownerEmail, visitors, log: quiet })
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://x').pathname
-    if (await api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
+    if (await access.api(req, res, { path, session: { user: { email: req.headers['x-test-email'] } } }) === false) res.writeHead(404).end()
   })
+  access.attach(server)
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(() => server.close())
-  const base = `http://127.0.0.1:${server.address().port}/api/admin/access`
+  const base = `http://127.0.0.1:${server.address().port}`
+  const call = async (path, headers, body) => {
+    const r = await fetch(base + path, { method: body ? 'POST' : 'GET', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    return { status: r.status, body: await r.json() }
+  }
   return {
-    get: async email => { const r = await fetch(base, { headers: { 'x-test-email': email } }); return { status: r.status, body: await r.json() } },
-    post: async (email, body) => {
-      const r = await fetch(base, { method: 'POST', headers: { 'x-test-email': email, 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      return { status: r.status, body: await r.json() }
-    },
+    get: email => call('/api/admin/access', { 'x-test-email': email }),
+    post: (email, body) => call('/api/admin/access', { 'x-test-email': email }, body),
+    request: (email, body) => call('/api/access-requests', { 'x-test-email': email }, body),
+    machine: (body, bearer = secret) => call('/api/worker/access-requests', { authorization: 'Bearer ' + bearer }, body),
   }
 }
 
@@ -85,29 +90,121 @@ test('who may sign in comes only from the access file, which starts with the see
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins[0], 'a@baseten.co')
 })
 
-test('an invited outside email gets in and an uninvited one does not, live from the file an admin edits', async t => {
+test('approval admits one outside email, never a whole domain, and denial keeps access closed', async t => {
   const file = join(folder(t), 'access.json')
   await seedAccess(file, quiet, ADMINS)
   const policy = createPolicy({ file, log: quiet })
   const api = await serve(t, file)
   assert.equal(policy.check('lead@baseten.co'), 'allowed')
   assert.equal(policy.check('someone@blaxel.ai'), 'allowed')
-  assert.equal(policy.check('guest@partner.io'), 'refused')
+  assert.equal(policy.check('guest@example.org'), 'refused')
 
-  const added = await api.post('lead@baseten.co', { list: 'emails', value: ' Guest@Partner.io ' })
-  assert.equal(added.status, 200)
-  assert.deepEqual(added.body.visitors.counts, { 'baseten.co': 0, 'blaxel.ai': 0 })
-  assert.deepEqual(added.body.emails, ['guest@partner.io'])
-  assert.equal(policy.check('guest@partner.io'), 'allowed')
-  assert.equal(policy.check('other@partner.io'), 'refused')
-
-  assert.equal((await api.post('lead@baseten.co', { list: 'domains', value: '@partner.io' })).status, 200)
-  assert.equal(policy.check('other@partner.io'), 'allowed')
-  assert.equal((await api.post('lead@blaxel.ai', { list: 'domains', value: 'partner.io', remove: true })).status, 200)
-  assert.equal((await api.post('lead@blaxel.ai', { list: 'emails', value: 'guest@partner.io', remove: true })).status, 200)
-  assert.equal(policy.check('guest@partner.io'), 'refused')
-  assert.equal(policy.check('other@partner.io'), 'refused')
+  assert.deepEqual((await api.get('lead@baseten.co')).body.visitors.counts, { 'baseten.co': 0, 'blaxel.ai': 0 })
+  const who = 'staff@baseten.co'
+  const ask = target => api.request(who, { target, reason: 'Review the eval', requestedBy: 'other@blaxel.ai', status: 'approved' })
+  const decide = (id, status) => api.machine({ id, status, decidedBy: 'U1234' })
+  const { body: email } = await ask(' Guest@Example.org ')
+  assert.equal(email.status, 'pending')
+  assert.equal(email.requestedBy, who)
+  assert.equal((await ask('guest@example.org')).status, 409)
+  assert.equal(policy.check(email.target), 'refused')
+  assert.equal((await api.request('other@blaxel.ai')).body.requests.length, 0)
+  assert.equal((await api.machine(undefined, '')).status, 401)
+  assert.equal((await api.machine(undefined, 'wrong')).status, 401)
+  assert.equal((await api.machine()).body.requests[0].id, email.id)
+  assert.equal((await decide(email.id, 'approved')).body.status, 'approved')
+  assert.equal(policy.check('guest@example.org'), 'allowed')
+  assert.equal(policy.check('other@example.org'), 'refused')
+  for (const target of ['@example.org', 'example.org']) assert.equal((await ask(target)).status, 400) // never a whole domain
+  assert.equal(policy.check('other@example.org'), 'refused')
+  const { body: raced } = await ask('raced@example.org')
+  const decisions = await Promise.all(['approved', 'denied'].map(status => decide(raced.id, status)))
+  assert.deepEqual(decisions[0].body, decisions[1].body)
+  assert.equal(policy.check('raced@example.org'), decisions[0].body.status === 'approved' ? 'allowed' : 'refused')
+  const denied = (await ask('staff@denied.example')).body
+  await decide(denied.id, 'denied')
+  const later = await decide(denied.id, 'approved')
+  assert.equal(later.body.status, 'denied')
+  assert.equal(policy.check('staff@denied.example'), 'refused')
+  const seen = (await api.request(who)).body.requests
+  assert.ok(seen.some(r => r.id === denied.id && r.decidedAt && r.decidedBy === 'U1234' && r.decisionMethod === 'worker' && r.status === 'denied'))
+  assert.deepEqual((await api.machine()).body.requests, [])
+  assert.equal((await api.post('lead@blaxel.ai', { list: 'emails', value: 'guest@example.org', remove: true })).status, 200)
+  await decide(email.id, 'approved') // a replay cannot restore a later revocation
+  assert.equal(policy.check('guest@example.org'), 'refused')
+  assert.equal(policy.check('other@example.org'), 'refused')
   assert.deepEqual(readdirSync(join(file, '..')), ['access.json']) // written by rename: no temporary file left
+})
+
+test('only the configured current admin can grant outside access while the worker is offline', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  const owner = 'lead@baseten.co'
+  const other = 'lead@blaxel.ai'
+  const api = await serve(t, file, { ownerEmail: ' Lead@Baseten.co ', secret: '' })
+  assert.equal((await api.get(owner)).body.canGrantDirectly, true)
+  assert.equal((await api.get(other)).body.canGrantDirectly, false)
+  assert.equal((await api.request(owner, { target: 'guest@example.org', reason: 'Demo' })).status, 503)
+  const policy = createPolicy({ file, log: quiet })
+  for (const [list, value, email] of [['emails', 'Guest@Example.org', 'guest@example.org'], ['emails', 'Other@Example.net', 'other@example.net']]) {
+    assert.equal((await api.post(other, { list, value, canGrantDirectly: true })).status, 403)
+    assert.equal(policy.check(email), 'refused')
+    assert.equal((await api.post(owner, { list, value })).status, 200)
+    assert.equal(policy.check(email), 'allowed')
+    assert.equal((await api.post(owner, { list, value })).status, 200)
+  }
+  // Not even the owner can let in a whole domain.
+  assert.equal((await api.post(owner, { list: 'domains', value: 'example.net' })).status, 403)
+  assert.equal(policy.check('third@example.net'), 'refused')
+  const restarted = await serve(t, file, { ownerEmail: owner })
+  const { requests } = (await restarted.request(owner)).body
+  assert.equal(requests.length, 2)
+  for (const row of requests) {
+    assert.equal(row.status, 'approved')
+    assert.equal(row.decidedBy, owner)
+    assert.equal(row.decisionMethod, 'direct')
+    assert.ok(row.id && Date.parse(row.decidedAt))
+  }
+  assert.deepEqual(requests.map(r => [r.list, r.target]), [['emails', 'other@example.net'], ['emails', 'guest@example.org']])
+  assert.deepEqual((await restarted.request(other)).body.requests, [])
+  assert.deepEqual((await restarted.machine()).body.requests, [])
+  assert.equal((await restarted.post(owner, { list: 'admins', value: 'guest@example.org' })).status, 403)
+  await restarted.post(other, { list: 'admins', value: owner, remove: true })
+  assert.equal((await restarted.post(owner, { list: 'domains', value: 'example.edu' })).status, 403)
+})
+
+test('a direct grant settles pending requests once and survives a late worker decision', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  const owner = 'lead@baseten.co'
+  const api = await serve(t, file, { ownerEmail: owner })
+  const staff = 'staff@blaxel.ai'
+  const request = { target: 'guest@example.org', reason: 'Review the eval' }
+  const first = (await api.request(staff, request)).body
+  const second = (await api.request('other@baseten.co', request)).body
+  const grant = { list: 'emails', value: request.target }
+  assert.equal((await api.post(owner, grant)).status, 200)
+  assert.deepEqual((await api.machine()).body.requests, [])
+  const history = (await api.request(owner)).body.requests
+  assert.deepEqual(history.map(r => r.id), [second.id, first.id])
+  assert.deepEqual((await api.request(staff)).body.requests, [history[1]])
+  assert.equal(history[1].requestedBy, staff)
+  assert.equal(history[1].reason, request.reason)
+  assert.equal(history[1].decidedBy, owner)
+  assert.equal(history[1].decisionMethod, 'direct')
+  assert.equal((await api.post(owner, { ...grant, remove: true })).status, 200)
+  assert.deepEqual((await api.machine({ id: first.id, status: 'approved', decidedBy: 'U1234' })).body, history[1])
+  assert.deepEqual((await api.get(owner)).body.emails, [])
+})
+
+test('a missing or invalid single owner disables direct grants', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  for (const ownerEmail of [undefined, 'lead@baseten.co,lead@blaxel.ai']) {
+    const api = await serve(t, file, { ownerEmail })
+    assert.equal((await api.get('lead@baseten.co')).body.canGrantDirectly, false)
+    assert.equal((await api.post('lead@baseten.co', { list: 'domains', value: 'example.org' })).status, 403)
+  }
 })
 
 test('domain counts survive restart and count distinct signed-in addresses at the exact domain', t => {
@@ -152,6 +249,51 @@ test('entries follow the sign-in rules, and the last admin stays', async t => {
   assert.equal(last.status, 400)
   assert.match(last.body.error, /last admin/)
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { admins: ['only@baseten.co'], emails: [], domains: [] })
+})
+
+test('direct outside grants and requests by prospects are refused, and submissions stay bounded across restart', async t => {
+  const file = join(folder(t), 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  const api = await serve(t, file)
+  const staff = 'staff@blaxel.ai'
+  const body = { target: 'person@example.com', reason: 'Review the eval' }
+  for (const email of ['guest@example.com', 'user@baseten.co.example', 'missing']) {
+    assert.equal((await api.request(email, body)).status, 403)
+    assert.equal((await api.request(email)).status, 403)
+  }
+  for (const [list, value] of [['admins', 'guest@example.com'], ['emails', 'guest@example.com'], ['domains', 'example.com']]) {
+    assert.equal((await api.post('lead@baseten.co', { list, value })).status, 403)
+  }
+  assert.equal((await api.request(staff, { ...body, reason: '  ' })).status, 400)
+  for (const target of ['gmail.com', 'example.com', '@example.com']) assert.equal((await api.request(staff, { ...body, target })).status, 400)
+  assert.deepEqual(await Promise.all(Array.from({ length: 5 }, (_, i) =>
+    api.request(staff, { ...body, target: `person${i}@example.com` }).then(r => r.status))), [200, 200, 200, 200, 200])
+  const restarted = await serve(t, file)
+  assert.equal((await restarted.request(staff, body)).status, 429)
+  assert.equal((await restarted.machine()).body.requests.length, 5)
+  assert.equal((await restarted.get('lead@baseten.co')).body.requests, undefined)
+})
+
+test('the worker endpoint is the only route ahead of browser sign-in', async t => {
+  const dir = folder(t)
+  const file = join(dir, 'access.json')
+  await seedAccess(file, quiet, ADMINS)
+  const env = { AUTH_STATE_DIR: dir, AUTH_ACCESS_FILE: file }
+  const config = await loadConfig({ env, file: fileURLToPath(new URL('./site.config.mjs', import.meta.url)), log: quiet })
+  const secret = randomBytes(32).toString('hex')
+  const access = accessHandlers({ file, secret })
+  const server = await createSiteServer({ config, env, api: access.api, log: quiet, app: () => assert.fail('upstream reached'),
+    fetcher: () => assert.fail('network reached') })
+  access.attach(server)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const headers = { accept: 'application/json', authorization: 'Bearer ' + secret }
+  for (const path of ['/api/access-requests', '/api/admin/access', '/api/worker/access-requests/extra']) {
+    assert.equal((await fetch(origin + path, { headers })).status, 401)
+  }
+  assert.equal((await fetch(origin + '/api/worker/access-requests')).status, 401)
+  assert.deepEqual(await (await fetch(origin + '/api/worker/access-requests', { headers })).json(), { requests: [], next: null })
 })
 
 test('an access request emails each current admin, and only them, a link that fills in the invite', async t => {

@@ -43,6 +43,7 @@ another Keychain item for a key, e.g. OPENAI_API_KEY_KEYCHAIN_ITEM=my-openai-key
                             the sign-in process only. PR_EVAL_MAIL_FROM sets the sender on its verified domain.
     PR_EVAL_ADMINS          optional: comma-separated emails of the first admins, used only when the volume
                             has no access list yet (the first deploy).
+    PR_EVAL_ACCESS_OWNER    optional: one existing admin email allowed to grant outside access directly.
     PR_EVAL_GITHUB_TOKEN    a fine-grained GitHub token with "Public repositories" read-only access and nothing
                             else (Keychain pr-eval-host-github-token). With it the page reads and runs public
                             repositories for everyone; without it, the page runs the quick sample only.
@@ -137,6 +138,7 @@ SECRETS = {
     "OPENAI_API_KEY": "pr-eval-host-openai-api-key",
 }
 # Optional, and for the sign-in process only: without it the refused page has no "Request access".
+ACCESS_TOKEN = ("PR_EVAL_ACCESS_TOKEN", "pr-eval-host-access-token")
 MAIL_KEY = ("PR_EVAL_MAIL_API_KEY", "pr-eval-host-mail-api-key")
 # Optional: the page's own public-only GitHub token. Without it, the page runs the quick sample only.
 GITHUB_TOKEN = ("PR_EVAL_GITHUB_TOKEN", "pr-eval-host-github-token")
@@ -386,6 +388,11 @@ def start(sandbox, origin: str, meter: str, keys: dict[str, str], release: str) 
     print(f'Public repositories: {"on" if name in env else "off, quick sample only (no " + service + ")"}')
     if admins := os.environ.get("PR_EVAL_ADMINS"):  # the first admins, used only when there is no access list yet
         sign_in_env["PR_EVAL_ADMINS"] = admins
+    if owner := os.environ.get("PR_EVAL_ACCESS_OWNER"):
+        sign_in_env["PR_EVAL_ACCESS_OWNER"] = owner
+    name, service = ACCESS_TOKEN
+    if token := keychain(item(name, service)) or os.environ.get(name):
+        sign_in_env[name] = token
     if key := mail_key():
         sign_in_env |= {MAIL_KEY[0]: key, "PR_EVAL_MAIL_FROM": MAIL_FROM}
     print(f'"Request access": {"on" if key else "off (no " + MAIL_KEY[1] + ")"}')

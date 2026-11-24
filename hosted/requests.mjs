@@ -16,9 +16,9 @@ export function requestMessage({ origin, email, to }) {
     text: [
       `${email} signed in to Eval Sandbox with a verified Blaxel account that isn't on the list, and asked for access.`,
       '',
-      `Add them: ${link}`,
+      `Review the request: ${link}`,
       '',
-      'The link opens the Access page with their address filled in under Invited people. Nothing changes until you press Add.',
+      'The link opens the Access page with their address filled in. Enter the reason and submit it for approval.',
       '',
       `You get this as an Eval Sandbox admin: ${origin}`,
     ].join('\n'),

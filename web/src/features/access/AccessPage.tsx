@@ -5,6 +5,7 @@ import { Confirm } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { post } from "@/lib/api";
+import { RequestAccess } from "./RequestAccess";
 import { day, plural } from "@/lib/format";
 
 // Hosted only: the sign-in server in front of the page answers /api/admin/access, checks that you are
@@ -12,19 +13,20 @@ import { day, plural } from "@/lib/format";
 const URL = "/api/admin/access";
 
 type ListName = "admins" | "emails" | "domains";
-type Access = { admins: string[]; emails: string[]; domains: string[]; you: string; visitors: { since: string; counts: Record<string, number> }; error?: string };
+type Access = { admins: string[]; emails: string[]; domains: string[]; you: string; canGrantDirectly: boolean; visitors: { since: string; counts: Record<string, number> }; error?: string };
 
 const LISTS: { key: ListName; title: string; text: string; placeholder: string }[] = [
-  { key: "admins", title: "Admins", text: "Can sign in, see every run and change this page. The last admin can't be removed.", placeholder: "name@company.com" },
+  { key: "admins", title: "Admins", text: "Internal staff who manage access and can see every run. The last admin must stay.", placeholder: "name@company.com" },
   { key: "emails", title: "Invited people", text: "One address each, at any domain, including Gmail and other public mail.", placeholder: "name@partner.com" },
-  { key: "domains", title: "Whole domains", text: "Everyone with a verified address at exactly this domain, never its subdomains. Public mail domains aren't allowed.", placeholder: "company.com" },
+  { key: "domains", title: "Internal domains", text: "Everyone with a verified address at these domains. Outside people get access one email at a time, never a whole domain.", placeholder: "" },
 ];
 
-/** Who may sign in to the hosted page: admins, invited addresses and whole domains. Changes apply at once. */
-export function AccessPage({ invite }: { invite?: string }) {
+/** Who may sign in to the hosted page: admins, invited addresses and the internal domains. Changes apply at once. */
+export function AccessPage({ invite, admin, canRequest }: { invite?: string; admin: boolean; canRequest: boolean | null }) {
   const [access, setAccess] = React.useState<Access | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => {
+    if (!admin) return;
     fetch(URL, { cache: "no-store", headers: { accept: "application/json" } })
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Access;
@@ -32,30 +34,28 @@ export function AccessPage({ invite }: { invite?: string }) {
         else setError(body.error ?? `The page answered ${res.status}.`);
       })
       .catch(() => setError("The access list didn't load. Reload to try again."));
-  }, []);
+  }, [admin]);
 
   return (
     <Surface>
-      <Tag>Admin</Tag>
-      <h1 className="ev-title mt-6">Who can sign in</h1>
-      <p className="mt-4 max-w-[66ch] text-[16px] leading-[1.4] text-body">
-        A Blaxel account with a verified email gets in when it is on one of these lists. Changes apply at once:
-        someone you remove is signed out on their next request. Baseten and Blaxel teammates see each other's runs. Guests see their own runs. Admins see all runs.
-      </p>
-      {invite && access && !access.emails.includes(invite.toLowerCase()) && !access.admins.includes(invite.toLowerCase()) && (
-        <div role="status" className="bt-notice info mt-8 block max-w-[66ch]">
-          <code className="ev-code">{invite}</code> asked for access. Their address is filled in under Invited people: press Add to let them in.
-        </div>
-      )}
-      <div className="mt-12">
+      <Tag>Access</Tag>
+      <h1 className="ev-title mt-6">Request access</h1>
+      {canRequest === true ? <>
+        <p className="mt-4 max-w-[66ch] text-[16px] leading-[1.4] text-body">Request access for one person by their email address. They can sign in once the request is approved.</p>
+        <RequestAccess invite={invite} />
+      </> : canRequest === false && <p className="ev-small mt-4">Only internal staff can request access.</p>}
+      {admin && <div className="mt-12">
+        <h2 className="h5 mb-4">Who can sign in</h2>
+        <p className="ev-small mb-4">Baseten and Blaxel teammates see each other's runs. Guests see their own runs. Admins see all runs.</p>
+        {access?.canGrantDirectly && <p className="ev-small mb-4">If approvals are unavailable, you can add an email directly. Access takes effect immediately.</p>}
         {error ? <Empty title="Not available">{error}</Empty>
           : !access ? <div className="bt-skeleton h-64" aria-busy />
             : (
               <div className="grid gap-12 lg:grid-cols-3 lg:gap-3">
-                {LISTS.map((list) => <List key={list.key} list={list} access={access} onChange={setAccess} prefill={list.key === "emails" ? invite : undefined} />)}
+                {LISTS.map((list) => <List key={list.key} list={list} access={access} onChange={setAccess} />)}
               </div>
             )}
-      </div>
+      </div>}
     </Surface>
   );
 }
@@ -71,11 +71,10 @@ function removalDescription(list: ListName, entry: string, access: Access) {
   return <><strong className="break-all font-medium">{entry}</strong> will be removed from {list === "emails" ? "Invited people" : "Admins"}. {effect}</>;
 }
 
-function List({ list, access, onChange, prefill }: {
-  list: (typeof LISTS)[number]; access: Access; onChange: (a: Access) => void; prefill?: string;
+function List({ list, access, onChange }: {
+  list: (typeof LISTS)[number]; access: Access; onChange: (a: Access) => void;
 }) {
-  // A request's link fills in the invite list only while that address isn't on it yet.
-  const [value, setValue] = React.useState(() => prefill && !access[list.key].includes(prefill.toLowerCase()) ? prefill : "");
+  const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [problem, setProblem] = React.useState<string | null>(null);
   const entries = access[list.key];
@@ -97,7 +96,7 @@ function List({ list, access, onChange, prefill }: {
     <Column heading={list.title} aside={<span className="label-xs text-muted-foreground">{plural(entries.length, list.key === "domains" ? "domain" : "address", list.key === "domains" ? "domains" : "addresses")}</span>}>
       <div className="grid content-start gap-4">
       <p className="ev-small">{list.text}</p>
-      <form
+      {(list.key === "admins" || (list.key === "emails" && access.canGrantDirectly)) && <form
         className="flex gap-3"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -111,11 +110,10 @@ function List({ list, access, onChange, prefill }: {
           aria-label={`Add to ${list.title.toLowerCase()}`}
           aria-invalid={!!problem}
           autoComplete="off"
-          autoFocus={!!prefill && value === prefill}
           spellCheck={false}
         />
-        <Button type="submit" variant="outline" disabled={busy || !value.trim()}>Add</Button>
-      </form>
+        <Button type="submit" variant="outline" disabled={busy || !value.trim()}>{list.key === "admins" ? "Add" : "Add directly"}</Button>
+      </form>}
       {problem && <p role="alert" className="bt-notice error">{problem}</p>}
       {entries.length ? (
         <ul className="border-t border-lightGrey2">
