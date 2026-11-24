@@ -8,7 +8,7 @@ const text = html => html.replace(/<head>[\s\S]*<\/head>/, '').replace(/<[^>]+>/
 
 test('the sign-in page shows only the site name and one button', () => {
   const html = renderLogin({ brand, next: '/x', blaxelSignOut: signOut })
-  assert.equal(text(html), 'Some Site Continue with Blaxel')
+  assert.equal(text(html), 'Some Site Continue with Baseten')
   assert.match(html, /<title>Some Site<\/title>/)
   assert.match(html, /href="\/auth\/start\?next=%2Fx"/)
 })
@@ -33,17 +33,17 @@ test('an open source site links its repository under the button on every state o
   const refused = { code: 'not_allowed', request: { token: 'sealed' } }
   for (const state of [{}, { code: 'signed_out' }, { code: 'session_ended' }, { code: 'expired' }, refused]) {
     const html = renderLogin({ brand, state, blaxelSignOut: signOut, source })
-    assert.match(text(html), /Continue with Blaxel View the open source repository$/)
+    assert.match(text(html), /Continue with Baseten View the open source repository$/)
     assert.match(html, /<a class="bt-link bt-external source" href="https:\/\/github\.com\/basetenlabs\/self-serve-eval-sandbox" target="_blank" rel="noopener">/)
   }
   assert.doesNotMatch(renderLogin({ brand }), /open source/)
 })
 
 test('signed-out and failed sign-ins add at most one short line', () => {
-  for (const code of ['signed_out', 'session_ended']) assert.equal(text(renderLogin({ brand, state: { code } })), 'Some Site Continue with Blaxel')
-  assert.equal(text(renderLogin({ brand, state: { code: 'expired', message: 'secret detail' } })), 'Some Site Sign-in didn&#39;t finish. Try again. Continue with Blaxel')
+  for (const code of ['signed_out', 'session_ended']) assert.equal(text(renderLogin({ brand, state: { code } })), 'Some Site Continue with Baseten')
+  assert.equal(text(renderLogin({ brand, state: { code: 'expired', message: 'secret detail' } })), 'Some Site Sign-in didn&#39;t finish. Try again. Continue with Baseten')
   const refused = renderLogin({ brand, state: { code: 'not_allowed', message: 'a@b.co is not on the list of @baseten.co', request: { token: 'sealed' } }, blaxelSignOut: signOut })
-  assert.equal(text(refused), 'Some Site This account doesn&#39;t have access. Use a different account Request access Continue with Blaxel')
+  assert.equal(text(refused), 'Some Site This account doesn&#39;t have access. Use a different account Request access Continue with Baseten')
   assert.doesNotMatch(refused, /baseten\.co|a@b\.co/)
 })
 
@@ -60,6 +60,10 @@ test('the public pages take the site stylesheet and textures the app builds with
   // The error pages' theme script, so they follow the system's light or dark setting too.
   assert.deepEqual(assets.get('/auth/theme.js').body, await readFile(new URL('theme.js', here)))
   assert.equal(assets.get('/auth/theme.js').type, 'text/javascript; charset=utf-8')
+  // The sign-in package's own login.js says "Opening Blaxel…" on the button once pressed; ours keeps it neutral.
+  const login = assets.get('/auth/login.js').body.toString()
+  assert.match(login, /Opening sign-in…/)
+  assert.doesNotMatch(login, /Blaxel…/)
   const css = await readFile(new URL('login-page.css', here), 'utf8')
   assert.doesNotMatch(css + renderLogin({ brand }), /url\([^)]*beausite/i)
 })
