@@ -37,6 +37,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   React.useEffect(() => { try { sessionStorage.removeItem(COMMANDS); } catch { /* private window */ } }, []);
   const tries = state.tries ?? 1;
   const quickMinutes = QUICK_MINUTES * tries;
+  const quickMix = Object.entries(state.quick.sizes ?? {}).map(([size, n]) => `${n} ${size}`).join(", ");
   const [chosen, setChosen] = React.useState<number[]>([]);
   const [checked, setChecked] = React.useState<Record<string, PullList | null>>({});
   const [setup, setSetup] = React.useState(handed.setup);
@@ -192,7 +193,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
         <Column heading={<Step n="01">Pull requests</Step>} aside={<span className="label-mono text-muted-foreground">Merged, with tests</span>}>
           <RadioGroup.Root value={source} onValueChange={(v) => setSource(v)} className="ev-sources" aria-label="Pull requests">
             <SourceTile value="quick" title="Quick sample" figure={plural(state.quick.tasks, "PR")}
-              text={`Real fixes, features and security changes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}. ${tries > 1 ? "Up to about" : "About"} ${quickMinutes} minutes.`} />
+              text={`Real fixes, features and security changes from ${state.quick.names?.join(", ") || plural(state.quick.repos, "open-source repo")}${quickMix ? `: ${quickMix}` : ""}. ${tries > 1 ? "Up to about" : "About"} ${quickMinutes} minutes.`} />
             <SourceTile value="repo" title="Your pull requests" figure="Any repo"
               text={`Use merged pull requests from a ${hosted ? "public" : "public or private"} GitHub repository.`} />
           </RadioGroup.Root>

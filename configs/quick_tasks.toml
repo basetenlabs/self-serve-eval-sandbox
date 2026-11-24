@@ -1,8 +1,10 @@
-# The quick sample: ten merged pull requests from PostHog, a large Python codebase, so a first run shows
-# how models do on real product work: fixes, small features and security fixes. Each one's tests fail
-# before its change and pass after it in the trial image without a database, and check only what its
-# request says, not an outside API's undocumented answers. The page's default.
+# The quick sample: eleven merged pull requests from PostHog, a large Python codebase, so a first run shows
+# how models do on real product work: fixes, small features and security fixes. Ten are small (under 100
+# changed lines); #140688 is a large one (770 lines in 10 files), so a run also shows how models do on
+# a bigger change. The page labels each by its size. Each one's tests fail before its change and pass after it
+# in the trial image without a database, and check only what its request says, not an outside API's
+# undocumented answers. The page's default.
 #
 # repository = [PR numbers]
 
-"PostHog/posthog" = [124452, 124483, 124535, 124630, 124740, 124907, 129127, 133664, 134590, 137855]
+"PostHog/posthog" = [124452, 124483, 124535, 124630, 124740, 124907, 129127, 133664, 134590, 137855, 140688]

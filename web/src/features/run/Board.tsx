@@ -107,7 +107,7 @@ function PullTitle({ row }: { row: BoardRow }) {
             <span className="truncate">{row.repo}#{row.pr}</span><External />
           </a>
         ) : <span className="truncate">{row.repo}#{row.pr}</span>}
-        {row.lines ? <span className="shrink-0">±{row.lines}</span> : null}
+        {row.lines ? <span className="shrink-0">{row.size ? `${row.size} ` : ""}±{row.lines}</span> : null}
       </div>
     </div>
   );
