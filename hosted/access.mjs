@@ -79,7 +79,9 @@ function adminChange(data, { list, value, remove }, who, canGrantDirectly, now) 
     if (!internal(entry)) refuse(403, 'Only internal staff can be admins.')
     data.admins = [...new Set([...data.admins, entry])].sort()
   } else {
-    if (!canGrantDirectly) refuse(403, 'Request access for an outside person or domain.')
+    // Outside access is one person at a time, never everyone at a domain: only the internal domains are on that list.
+    if (list === 'domains') refuse(403, 'Outside access is one full email address at a time, never a whole domain.')
+    if (!canGrantDirectly) refuse(403, 'Request access for an outside person.')
     if (data[list].includes(entry)) return
     grantDirectly(data, list, entry, who, now)
   }
@@ -91,7 +93,7 @@ function alreadyAllowed(data, list, target) {
 }
 
 function grantDirectly(data, list, entry, who, now) {
-  if (alreadyAllowed(data, list, entry)) refuse(409, 'That email or domain already has access.')
+  if (alreadyAllowed(data, list, entry)) refuse(409, 'That email already has access.')
   const pending = data.requests.filter(r => r.status === 'pending' && r.list === list && r.target === entry)
   const at = new Date(now).toISOString()
   if (!pending.length) {
@@ -103,13 +105,14 @@ function grantDirectly(data, list, entry, who, now) {
 }
 
 function submit(data, body, who, now) {
-  if (typeof body.target !== 'string' || !body.target.trim()) refuse(400, 'Enter an email or domain.')
+  if (typeof body.target !== 'string' || !body.target.trim()) refuse(400, 'Enter an email address.')
   const raw = body.target.trim()
-  const list = raw.includes('@') && !raw.startsWith('@') ? 'emails' : 'domains'
+  if (!raw.includes('@') || raw.startsWith('@')) refuse(400, 'Enter one full email address. A whole domain can\'t get access.')
+  const list = 'emails'
   const target = checkedEntry(list, raw)
   const reason = typeof body.reason === 'string' && body.reason.trim()
   if (!reason || reason.length > 500) refuse(400, 'Enter a reason of up to 500 characters.')
-  if (alreadyAllowed(data, list, target)) refuse(409, 'That email or domain already has access.')
+  if (alreadyAllowed(data, list, target)) refuse(409, 'That email already has access.')
   const mine = data.requests.filter(r => r.requestedBy === who)
   if (mine.some(r => r.target === target && r.status === 'pending')) refuse(409, 'You already have a pending request for this entry.')
   if (mine.filter(r => Date.parse(r.requestedAt) > now - HOUR).length >= 5) refuse(429, 'You can submit five requests per hour. Try again later.')
@@ -132,6 +135,7 @@ function decide(data, { id, status, decidedBy }, now) {
   if (!row) refuse(404, 'Unknown request.')
   // A retry after a lost reply returns the authoritative outcome, even if a later click differs.
   if (row.status === 'pending') {
+    if (status === 'approved' && row.list !== 'emails') refuse(409, 'A whole domain can\'t get access. Ask for each person\'s email.')
     recordDecision(data, row, status, decidedBy, 'worker', new Date(now).toISOString())
   }
   return row

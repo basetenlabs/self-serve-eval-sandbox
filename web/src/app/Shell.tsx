@@ -33,7 +33,7 @@ export function Shell({ state, route, go, offline, children, canRequest }: {
             <a href={href({ page: "run", id: route.id })} aria-current="page" className="crumb">{run?.title ?? route.id}</a>
           )}
           {(state?.admin || canRequest) && (
-            <Tip content="Request access for an email or domain">
+            <Tip content="Request access for one email">
               <a href={href({ page: "access" })} aria-current={route.page === "access" ? "page" : undefined}>Access</a>
             </Tip>
           )}

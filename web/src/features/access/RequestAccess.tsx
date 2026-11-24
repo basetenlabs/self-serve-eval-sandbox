@@ -60,8 +60,8 @@ export function RequestAccess({ invite }: { invite?: string }) {
           } catch (e) { setProblem(e instanceof Error ? e.message : "The request could not be submitted."); }
           finally { setBusy(false); }
         }}>
-          <label className="grid gap-2"><span className="label-xs">Email or domain</span>
-            <Input value={target} onChange={e => setTarget(e.target.value)} placeholder="name@example.com or example.com" required maxLength={254} spellCheck={false} />
+          <label className="grid gap-2"><span className="label-xs">Email</span>
+            <Input type="email" value={target} onChange={e => setTarget(e.target.value)} placeholder="name@example.com" required maxLength={254} spellCheck={false} />
           </label>
           <label className="grid gap-2"><span className="label-xs">Reason for access</span>
             <textarea className="bt-input min-h-20" value={reason} onChange={e => setReason(e.target.value)} required maxLength={500} rows={2} />

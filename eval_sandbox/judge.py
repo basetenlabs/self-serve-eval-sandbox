@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from . import config
+from . import config, slots
 from .config import Judge, Panel
 from .tasks import Task
 
@@ -240,7 +240,8 @@ def ask_claude(judge: Judge, system: str, user: str) -> dict:
         with tempfile.TemporaryDirectory(prefix="pr-eval-judge-") as home:
             env = {"PATH": os.environ.get("PATH", ""), "HOME": home, "CLAUDE_CONFIG_DIR": home, **CLAUDE_ENV, **credential}
             try:
-                with _processes or contextlib.nullcontext():
+                # Hosted, every run on the page shares the places for Claude Code judges too (slots.py).
+                with _processes or contextlib.nullcontext(), slots.hold("judges"):
                     done = subprocess.run(command, input=user, capture_output=True, text=True, cwd=home, env=env,
                                           timeout=CLAUDE_TIMEOUT)
             except subprocess.TimeoutExpired:

@@ -18,10 +18,10 @@ type Access = { admins: string[]; emails: string[]; domains: string[]; you: stri
 const LISTS: { key: ListName; title: string; text: string; placeholder: string }[] = [
   { key: "admins", title: "Admins", text: "Internal staff who manage access and can see every run. The last admin must stay.", placeholder: "name@company.com" },
   { key: "emails", title: "Invited people", text: "One address each, at any domain, including Gmail and other public mail.", placeholder: "name@partner.com" },
-  { key: "domains", title: "Whole domains", text: "Everyone with a verified address at exactly this domain, never its subdomains. Public mail domains aren't allowed.", placeholder: "company.com" },
+  { key: "domains", title: "Internal domains", text: "Everyone with a verified address at these domains. Outside people get access one email at a time, never a whole domain.", placeholder: "" },
 ];
 
-/** Who may sign in to the hosted page: admins, invited addresses and whole domains. Changes apply at once. */
+/** Who may sign in to the hosted page: admins, invited addresses and the internal domains. Changes apply at once. */
 export function AccessPage({ invite, admin, canRequest }: { invite?: string; admin: boolean; canRequest: boolean | null }) {
   const [access, setAccess] = React.useState<Access | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -41,13 +41,13 @@ export function AccessPage({ invite, admin, canRequest }: { invite?: string; adm
       <Tag>Access</Tag>
       <h1 className="ev-title mt-6">Request access</h1>
       {canRequest === true ? <>
-        <p className="mt-4 max-w-[66ch] text-[16px] leading-[1.4] text-body">Request access for one verified email or everyone at a company domain. They can sign in once the request is approved.</p>
+        <p className="mt-4 max-w-[66ch] text-[16px] leading-[1.4] text-body">Request access for one person by their email address. They can sign in once the request is approved.</p>
         <RequestAccess invite={invite} />
       </> : canRequest === false && <p className="ev-small mt-4">Only internal staff can request access.</p>}
       {admin && <div className="mt-12">
         <h2 className="h5 mb-4">Who can sign in</h2>
         <p className="ev-small mb-4">Baseten and Blaxel teammates see each other's runs. Guests see their own runs. Admins see all runs.</p>
-        {access?.canGrantDirectly && <p className="ev-small mb-4">If approvals are unavailable, you can add an email or domain directly. Access takes effect immediately.</p>}
+        {access?.canGrantDirectly && <p className="ev-small mb-4">If approvals are unavailable, you can add an email directly. Access takes effect immediately.</p>}
         {error ? <Empty title="Not available">{error}</Empty>
           : !access ? <div className="bt-skeleton h-64" aria-busy />
             : (
@@ -96,7 +96,7 @@ function List({ list, access, onChange }: {
     <Column heading={list.title} aside={<span className="label-xs text-muted-foreground">{plural(entries.length, list.key === "domains" ? "domain" : "address", list.key === "domains" ? "domains" : "addresses")}</span>}>
       <div className="grid content-start gap-4">
       <p className="ev-small">{list.text}</p>
-      {(list.key === "admins" || access.canGrantDirectly) && <form
+      {(list.key === "admins" || (list.key === "emails" && access.canGrantDirectly)) && <form
         className="flex gap-3"
         onSubmit={async (e) => {
           e.preventDefault();

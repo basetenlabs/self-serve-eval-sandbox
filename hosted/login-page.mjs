@@ -1,11 +1,12 @@
 // The public sign-in page: on the dotted texture, one White block with the Baseten logo, the site name and one
-// "Continue with Blaxel" button, plus a short line after a failed attempt and, for an open source site, a quiet
+// "Continue with Baseten" button, plus a short line after a failed attempt and, for an open source site, a quiet
 // link to its repository under the button. It says nothing about how sign-in works,
 // who may get in or what the site learns: anyone can load it, so it exposes the minimum. Link previews (Slack, X,
 // iMessage) still get the site name, its one-line description and the public preview card from @blaxel/sign-in's
 // previewMeta: crawlers never sign in, so this page is all they see. Passed to createSiteServer as `renderLogin`;
 // @blaxel/sign-in's own page is the reference for the hooks kept here (#signin, .btn-label, data-auth, data-next for
-// /auth/login.js). The look is the /baseten-design skill's (bt-* parts from /auth/baseten.css) set in Geist, with this
+// /auth/login.js, which hosted/login.js replaces so the button says Baseten while it works too). People still sign in
+// through Blaxel's sign-in page, where Baseten people choose Continue with Baseten. The look is the /baseten-design skill's (bt-* parts from /auth/baseten.css) set in Geist, with this
 // page's own parts in hosted/login-page.css (served as /auth/login.css by hosted/public.mjs, before sign-in).
 // The same files ship in every internal site; change them together.
 import { previewMeta } from '@blaxel/sign-in'
@@ -63,7 +64,7 @@ ${previewMeta({ brand, origin })}
     <picture><source srcset="/auth/brand/logo-dark" media="(prefers-color-scheme: dark)"><img class="logo" src="/auth/brand/logo-light" alt="${escape(brand.company ?? 'Baseten')}" width="117" height="22"></picture>
     <h1>${name}</h1>
     ${notice}
-    <a id="signin" class="bt-button has-chevron full" href="${escape(start)}"><span><span class="label btn-label">Continue with Blaxel</span><span class="chevron" aria-hidden="true">${CHEVRON}</span></span></a>
+    <a id="signin" class="bt-button has-chevron full" href="${escape(start)}"><span><span class="label btn-label">Continue with Baseten</span><span class="chevron" aria-hidden="true">${CHEVRON}</span></span></a>
     ${source ? `<a class="bt-link bt-external source" href="${escape(source)}" target="_blank" rel="noopener">View the open source repository<span class="arrow" aria-hidden="true"></span></a>` : ''}
   </div>
 </main>

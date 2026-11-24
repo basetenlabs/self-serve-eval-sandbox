@@ -90,7 +90,7 @@ test('who may sign in comes only from the access file, which starts with the see
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).admins[0], 'a@baseten.co')
 })
 
-test('approval admits an outside email or domain and denial keeps access closed', async t => {
+test('approval admits one outside email, never a whole domain, and denial keeps access closed', async t => {
   const file = join(folder(t), 'access.json')
   await seedAccess(file, quiet, ADMINS)
   const policy = createPolicy({ file, log: quiet })
@@ -115,15 +115,13 @@ test('approval admits an outside email or domain and denial keeps access closed'
   assert.equal((await decide(email.id, 'approved')).body.status, 'approved')
   assert.equal(policy.check('guest@example.org'), 'allowed')
   assert.equal(policy.check('other@example.org'), 'refused')
-  const { body: domain } = await ask('@example.org')
-  const decisions = await Promise.all(['approved', 'denied'].map(status => decide(domain.id, status)))
+  for (const target of ['@example.org', 'example.org']) assert.equal((await ask(target)).status, 400) // never a whole domain
+  assert.equal(policy.check('other@example.org'), 'refused')
+  const { body: raced } = await ask('raced@example.org')
+  const decisions = await Promise.all(['approved', 'denied'].map(status => decide(raced.id, status)))
   assert.deepEqual(decisions[0].body, decisions[1].body)
-  if (decisions[0].body.status === 'denied') {
-    const retry = await ask('example.org')
-    await decide(retry.body.id, 'approved')
-  }
-  assert.equal(policy.check('other@example.org'), 'allowed')
-  const denied = (await ask('denied.example')).body
+  assert.equal(policy.check('raced@example.org'), decisions[0].body.status === 'approved' ? 'allowed' : 'refused')
+  const denied = (await ask('staff@denied.example')).body
   await decide(denied.id, 'denied')
   const later = await decide(denied.id, 'approved')
   assert.equal(later.body.status, 'denied')
@@ -131,7 +129,6 @@ test('approval admits an outside email or domain and denial keeps access closed'
   const seen = (await api.request(who)).body.requests
   assert.ok(seen.some(r => r.id === denied.id && r.decidedAt && r.decidedBy === 'U1234' && r.decisionMethod === 'worker' && r.status === 'denied'))
   assert.deepEqual((await api.machine()).body.requests, [])
-  assert.equal((await api.post('lead@blaxel.ai', { list: 'domains', value: 'example.org', remove: true })).status, 200)
   assert.equal((await api.post('lead@blaxel.ai', { list: 'emails', value: 'guest@example.org', remove: true })).status, 200)
   await decide(email.id, 'approved') // a replay cannot restore a later revocation
   assert.equal(policy.check('guest@example.org'), 'refused')
@@ -149,13 +146,16 @@ test('only the configured current admin can grant outside access while the worke
   assert.equal((await api.get(other)).body.canGrantDirectly, false)
   assert.equal((await api.request(owner, { target: 'guest@example.org', reason: 'Demo' })).status, 503)
   const policy = createPolicy({ file, log: quiet })
-  for (const [list, value, email] of [['emails', 'Guest@Example.org', 'guest@example.org'], ['domains', 'Example.net', 'other@example.net']]) {
+  for (const [list, value, email] of [['emails', 'Guest@Example.org', 'guest@example.org'], ['emails', 'Other@Example.net', 'other@example.net']]) {
     assert.equal((await api.post(other, { list, value, canGrantDirectly: true })).status, 403)
     assert.equal(policy.check(email), 'refused')
     assert.equal((await api.post(owner, { list, value })).status, 200)
     assert.equal(policy.check(email), 'allowed')
     assert.equal((await api.post(owner, { list, value })).status, 200)
   }
+  // Not even the owner can let in a whole domain.
+  assert.equal((await api.post(owner, { list: 'domains', value: 'example.net' })).status, 403)
+  assert.equal(policy.check('third@example.net'), 'refused')
   const restarted = await serve(t, file, { ownerEmail: owner })
   const { requests } = (await restarted.request(owner)).body
   assert.equal(requests.length, 2)
@@ -165,7 +165,7 @@ test('only the configured current admin can grant outside access while the worke
     assert.equal(row.decisionMethod, 'direct')
     assert.ok(row.id && Date.parse(row.decidedAt))
   }
-  assert.deepEqual(requests.map(r => [r.list, r.target]), [['domains', 'example.net'], ['emails', 'guest@example.org']])
+  assert.deepEqual(requests.map(r => [r.list, r.target]), [['emails', 'other@example.net'], ['emails', 'guest@example.org']])
   assert.deepEqual((await restarted.request(other)).body.requests, [])
   assert.deepEqual((await restarted.machine()).body.requests, [])
   assert.equal((await restarted.post(owner, { list: 'admins', value: 'guest@example.org' })).status, 403)
@@ -265,7 +265,7 @@ test('direct outside grants and requests by prospects are refused, and submissio
     assert.equal((await api.post('lead@baseten.co', { list, value })).status, 403)
   }
   assert.equal((await api.request(staff, { ...body, reason: '  ' })).status, 400)
-  assert.equal((await api.request(staff, { ...body, target: 'gmail.com' })).status, 400)
+  for (const target of ['gmail.com', 'example.com', '@example.com']) assert.equal((await api.request(staff, { ...body, target })).status, 400)
   assert.deepEqual(await Promise.all(Array.from({ length: 5 }, (_, i) =>
     api.request(staff, { ...body, target: `person${i}@example.com` }).then(r => r.status))), [200, 200, 200, 200, 200])
   const restarted = await serve(t, file)
