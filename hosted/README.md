@@ -100,6 +100,15 @@ days after it was created, whatever its lifecycle policy says: `--renew` recreat
 days old and no run is going (runs, access list and sign-in state stay on the volume). A recreated
 sandbox can get a new address; the deploy prints it, and the sign-in registers itself for it.
 
+The page can have an address of its own, such as `https://model-eval.baseten.co`: set
+`PR_EVAL_PUBLIC_ORIGIN` to it when deploying. That needs a DNS record and an HTTPS certificate for the
+name, so that it serves the same site as the preview address (for the preview's CDN, the name added as an
+alternate domain with its certificate). The deploy moves the page there only once that address answers with
+this site's sign-in page; until then it stays on the preview, says what is missing, and the next deploy
+moves it. Once moved, the sign-in comes back to the new address, and the sign-in page and the page itself
+send anyone who opens the old preview address to the same view at the new one. If a recreated sandbox gets a
+new preview address, the DNS record has to follow it.
+
 `npm ci` needs a GitHub token that can read packages (`gh auth refresh -h github.com -s read:packages`)
 and npm pointed at it once per machine, never written into a file:
 `npm config set '//npm.pkg.github.com/:_authToken' '${NODE_AUTH_TOKEN}'`. The release carries the

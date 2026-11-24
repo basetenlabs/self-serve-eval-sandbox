@@ -85,6 +85,17 @@ export function useTrace(runId: string, trial: string, enabled: boolean) {
   return trace;
 }
 
+/** Hosted, the page's own address when this one isn't it (an old preview link): the same view there. */
+export function movedTo(origin: string | null | undefined, here: Pick<Location, "origin" | "pathname" | "search" | "hash">): string | null {
+  let home: string;
+  try {
+    home = new URL(origin ?? "").origin; // as location.origin writes it, so the two compare
+  } catch {
+    return null;
+  }
+  return home.startsWith("https://") && here.origin !== home ? home + here.pathname + here.search + here.hash : null;
+}
+
 /** The page's state; `viewing` names the run on screen, so its board comes along even when it isn't the latest. */
 export function useAppState(viewing?: string) {
   const [state, setState] = useState<AppState | null>(null);
@@ -98,6 +109,8 @@ export function useAppState(viewing?: string) {
     window.clearTimeout(timer.current);
     try {
       const next = await getJSON<AppState>(`/api/state${run.current ? `?run=${encodeURIComponent(run.current)}` : ""}`);
+      const moved = movedTo(next.origin, window.location);
+      if (moved) return window.location.replace(moved);
       setState(next);
       setError(null);
       fast.current = next.busy;

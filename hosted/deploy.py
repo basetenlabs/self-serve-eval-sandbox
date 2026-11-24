@@ -616,6 +616,41 @@ def try_release(sandbox, release: str, keys: dict[str, str], origin: str, task: 
         client().kill(sandbox, name)
 
 
+# The page's own address, set when deploying (say https://model-eval.baseten.co); unset, the page keeps its preview
+# address. It moves there only once that address reaches this sandbox's sign-in, so setting it before the DNS
+# record and certificate exist changes nothing; the deploy says what is missing, and the next one moves.
+PUBLIC_ORIGIN = "PR_EVAL_PUBLIC_ORIGIN"
+
+
+def site_origin(preview: str) -> str:
+    """Where people open the page: PR_EVAL_PUBLIC_ORIGIN once it serves this sandbox's sign-in page, else the preview."""
+    public = (os.environ.get(PUBLIC_ORIGIN) or "").strip().rstrip("/")
+    if not public:
+        return preview
+    if not re.fullmatch(r"https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", public):
+        raise SystemExit(f"{PUBLIC_ORIGIN} is an https origin and nothing else, like https://model-eval.baseten.co")
+    if public == preview or reaches_sign_in(public):
+        return public
+    print(f"{public} doesn't serve this page's sign-in yet, so the page stays on {preview}. It needs a DNS record "
+          f"and an HTTPS certificate for {public.removeprefix('https://')} that send it to {preview}; the next "
+          "deploy moves the page once they do.", file=sys.stderr)
+    return preview
+
+
+def reaches_sign_in(origin: str) -> bool:
+    """Whether `origin` answers with this site's sign-in page (hosted/login-page.mjs), following no redirect."""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args):
+            return None
+    try:
+        with urllib.request.build_opener(NoRedirect).open(urllib.request.Request(origin + "/login", headers={"accept": "text/html"}),
+                                                           timeout=20) as reply:
+            page = reply.read(200_000).decode(errors="replace")
+            return reply.status == 200 and "data-auth" in page and "Continue with Baseten" in page
+    except (OSError, ValueError):  # HTTPError, a name that doesn't resolve, a certificate for another name
+        return False
+
+
 def verify(origin: str, meter: str) -> None:
     """The signed-out answers a healthy deploy gives, and the meter refusing a call with no ticket."""
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -687,8 +722,11 @@ def main() -> int:
         return 0
     keys = secrets()
     step("Sandbox and previews on Baseten (trials run in the same team)")
-    sandbox, origin, meter, created = host(renew=args.renew)
-    print(origin, meter)
+    sandbox, preview, meter, created = host(renew=args.renew)
+    origin = site_origin(preview)
+    print(preview, meter)  # the line the hosted-sites watcher reads the preview address from
+    if origin != preview:
+        print(f"The page's own address: {origin}")
     verified = created or finish_unverified(sandbox, origin, meter, keys)
     if args.renew and not created:
         return 0 if verified else 1

@@ -180,6 +180,8 @@ export interface AppState {
   /** What your runs spent on models in the last 24 hours, and your limit, when there is one. */
   spend?: { spent: number; cap: number } | null;
   github: GitHubAccess;
+  /** Hosted, where people open the page (hosted/deploy.py's PR_EVAL_PUBLIC_ORIGIN, else its preview address). */
+  origin?: string | null;
   favorites: Favorite[];
   /** Hosted: you are an admin, so you see every run and the Access page. */
   admin?: boolean;

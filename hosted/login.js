@@ -7,6 +7,11 @@ const label = signin.querySelector('.btn-label')
 const idleLabel = label.textContent
 const next = root.dataset.next || '/'
 
+// The page has its own address (PR_EVAL_PUBLIC_ORIGIN, hosted/deploy.py): opened at the old preview one, go there.
+let home = ''
+try { home = new URL(root.dataset.origin).origin } catch { /* none given: stay */ }
+if (home.startsWith('https://') && location.origin !== home) location.replace(home + location.pathname + location.search)
+
 // Results are rendered at /auth/callback; show a clean, reload-safe address instead.
 if (location.pathname !== '/login') history.replaceState(null, '', '/login' + (next === '/' ? '' : '?next=' + encodeURIComponent(next)))
 

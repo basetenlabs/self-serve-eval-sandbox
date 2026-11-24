@@ -1766,6 +1766,14 @@ class AppTest(unittest.TestCase):
                 mock.patch.object(app.config, "load", return_value=({}, Panel([]))):
             return page.state(user=user)
 
+    def test_the_hosted_page_says_where_people_open_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            page = app.App(Path(d))
+            with mock.patch.object(app, "APP_ORIGIN", "https://eval.example"):
+                self.assertIsNone(self.hosted_state(page, None)["origin"])  # locally there's no address to move to
+                with mock_env(PR_EVAL_PUBLIC_REPOS_ONLY="1"):
+                    self.assertEqual(self.hosted_state(page, "a@x.co")["origin"], "https://eval.example")
+
     def test_how_many_runs_go_at_once_in_all_and_for_one_person(self):
         quick = next(iter(app.tasks.sample(True))).lower()
         with tempfile.TemporaryDirectory() as d:

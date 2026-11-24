@@ -58,7 +58,7 @@ ${previewMeta({ brand, origin })}
 <script src="/auth/login.js" defer></script>
 </head>
 <body class="sb-auth bt-page">
-<div class="frame" data-auth data-state="idle" data-next="${escape(next)}">
+<div class="frame" data-auth data-state="idle" data-next="${escape(next)}" data-origin="${escape(origin)}">
 <main class="panel" id="main">
   <div class="card">
     <picture><source srcset="/auth/brand/logo-dark" media="(prefers-color-scheme: dark)"><img class="logo" src="/auth/brand/logo-light" alt="${escape(brand.company ?? 'Baseten')}" width="117" height="22"></picture>
