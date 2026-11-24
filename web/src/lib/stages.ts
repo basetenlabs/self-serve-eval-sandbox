@@ -40,6 +40,17 @@ export const isChecking = (row: BoardRow) => CHECK[row.check.stage]?.tone === "c
 export const isFinal = (c: Cell) => c.stage === "solved" || c.stage === "failed" || c.stage === "invalid";
 export const stepIndex = (stage: string) => (STEPS as readonly string[]).indexOf(stage);
 
+/** Whether a run's judges decided solved along with its tests: only runs from before they reviewed beside them. */
+export const judgesDecide = (judge?: { review?: boolean } | null) => !!judge && !judge.review;
+
+/** The judges' review of a finished attempt, for its cell's mark and tip; null when no judge was asked. */
+export function judgeReview(c: Pick<Cell, "judge" | "judge_reason">): { glyph: string; text: string } | null {
+  if (c.judge === "pass") return { glyph: "✓", text: `Judges: pass${c.judge_reason ? `. ${c.judge_reason}` : "."}` };
+  if (c.judge === "fail") return { glyph: "✕", text: `Judges: fail${c.judge_reason ? `. ${c.judge_reason}` : "."}` };
+  if (c.judge === "error") return { glyph: "!", text: "The judges didn't answer. The hidden tests alone scored it, as always." };
+  return null;
+}
+
 /** Why an attempt didn't count as solved, in a few words. */
 export function failReason(c: Pick<Cell, "stage" | "tests_passed" | "judge">): string | null {
   if (c.stage !== "failed") return null;

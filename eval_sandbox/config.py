@@ -115,6 +115,15 @@ class Judge:
     def api_key(self) -> str | None:
         return os.environ.get(self.api_key_env) if self.api_key_env else None
 
+    def needs(self) -> str | None:
+        """What this judge lacks here to run at all, in a word or two (its key, or Claude Code), else None.
+        Asks nothing over the network, so the page can say it on every look."""
+        if self.provider == "anthropic":
+            if not claude_credential():
+                return "ANTHROPIC_API_KEY"
+            return None if shutil.which("claude") else "Claude Code"
+        return None if self.api_key else self.api_key_env
+
     def summary(self) -> dict:
         return {"model": self.model, "label": self.name, "provider": self.provider, "effort": self.effort}
 
@@ -128,12 +137,12 @@ class Judge:
         if self.provider == "anthropic":
             if not shutil.which("claude"):
                 return (f"the {self.name} judge runs through Claude Code: install it "
-                        "(npm install -g @anthropic-ai/claude-code), or leave out --judge to score on tests alone")
+                        "(npm install -g @anthropic-ai/claude-code), or pass --judge none to score on tests alone")
             if not claude_credential():
                 return f"the {self.name} judge needs a Claude credential: {CLAUDE_CREDENTIAL_HELP}"
             return None
         if not self.api_key:
-            return f"the {self.name} judge needs {self.api_key_env}; set it, or leave out --judge to score on tests alone"
+            return f"the {self.name} judge needs {self.api_key_env}; set it, or pass --judge none to score on tests alone"
         cannot = (f"the key in {self.api_key_env} can't use the judge model {self.model}"
                   "{}; use a key that can, or change its [[judge.panel]] entry in configs/models.toml")
         request = urllib.request.Request(f"{self.base_url}/models", headers={"authorization": f"Bearer {self.api_key}"})
@@ -149,9 +158,13 @@ class Judge:
 
 @dataclass
 class Panel:
-    """The judges, each grading every attempt on its own, and the chair that turns their verdicts into one."""
+    """The judges, each reviewing every attempt on its own, and the chair that turns their verdicts into one.
+    Their review sits beside the hidden tests, which alone decide whether an attempt is solved."""
     judges: list[Judge]
-    chair: Judge | None = None  # None when one judge's verdict is final
+    chair: Judge | None = None  # None: the judges' own verdict stands when they agree (judge.grade)
+    # How the run asked for them, so a resume asks the same way: "default" (the configured panel, less any
+    # judge with no key here), or one judge's model id. None for a panel made some other way.
+    choice: str | None = None
 
     @property
     def name(self) -> str:
@@ -176,12 +189,28 @@ class Panel:
         """A panel of just one of these judges, named by model id or label."""
         for judge in [*self.judges, *([self.chair] if self.chair else [])]:
             if model in (judge.model, judge.label):
-                return Panel([judge])
+                return Panel([judge], choice=judge.model)
         raise SystemExit(f"no judge {model!r}; the panel has {', '.join(j.model for j in self.judges)}")
 
+    def without(self, gone: list[Judge]) -> Panel | None:
+        """This panel less the judges in `gone`. The chair stays if it does and has others' reviews to weigh;
+        without it the judges left decide together (judge.together). None when no judge is left."""
+        judges = [j for j in self.judges if j not in gone]
+        if not judges:
+            return None
+        return Panel(judges, self.chair if self.chair in judges and len(judges) > 1 else None, self.choice or "default")
+
+    def available(self) -> Panel | None:
+        """The judges whose provider has a key here (Judge.needs), asking nothing over the network: with only a
+        Claude key, the Claude judge alone. None when no judge can run here."""
+        return self.without([j for j in self.judges if j.needs()])
+
     def as_dict(self) -> dict:
+        # "review": the judges' verdict is a review beside the hidden tests. A run recorded without it is from
+        # before then, when solved also needed the judges' pass; its report still says so.
         return {"model": self.name, "label": self.label, "panel": [j.summary() for j in self.judges],
-                "chair": self.chair.summary() if self.chair else None}
+                "chair": self.chair.summary() if self.chair else None, "review": True,
+                **({"choice": self.choice} if self.choice else {})}
 
 
 def load(path: Path = DEFAULT_MODELS) -> tuple[dict[str, Model], Panel]:

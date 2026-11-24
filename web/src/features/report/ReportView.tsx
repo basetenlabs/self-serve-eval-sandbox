@@ -3,6 +3,7 @@ import { Empty, Eyebrow } from "@/components/brand";
 import { commandsSource } from "@/lib/commands";
 import { day, harness, plural } from "@/lib/format";
 import { ordered, palette } from "@/lib/models";
+import { judgesDecide } from "@/lib/stages";
 import { rank, takeaway } from "@/lib/stats";
 import type { Report } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -140,7 +141,7 @@ export function Results({ report, onOpen, view, onView }: {
     body = (
       <div className="grid gap-14">
         <Banners report={report} sample={!inDetails} commands />
-        <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judged={!!report.run.judge} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
+        <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judgesDecide={judgesDecide(report.run.judge)} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
           sample={inDetails ? smallSample(report.tasks.length, false) : null} />
         <Leaderboard report={report} ranked={ranked} colors={colors} />
         <Scatter models={ranked} S={S} colors={colors} />

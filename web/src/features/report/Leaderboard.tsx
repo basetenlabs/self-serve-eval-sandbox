@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { compact, dur, elapsed, pct, usd } from "@/lib/format";
 import { isOpen, type Swatch as SwatchT } from "@/lib/models";
+import { judgesDecide } from "@/lib/stages";
 import { solvedOn, wilson } from "@/lib/stats";
 import type { Model, Report, Summary } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -49,7 +50,7 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
       </div>
       <ol>
         {ranked.map((m, i) => (
-          <Row key={m.key} m={m} rank={i + 1} s={S[m.key]} swatch={colors[m.key]} judged={!!report.run.judge} tries={report.run.tries ?? 1}
+          <Row key={m.key} m={m} rank={i + 1} s={S[m.key]} swatch={colors[m.key]} judged={!!report.run.judge} decide={judgesDecide(report.run.judge)} tries={report.run.tries ?? 1}
             leads={{
               solved: best.solved != null && !!S[m.key]?.valid && S[m.key].tasks_solved === best.solved,
               cost: best.cost != null && S[m.key]?.cost_per_solved === best.cost,
@@ -63,8 +64,10 @@ export function Leaderboard({ report, ranked, colors }: { report: Report; ranked
 
 const GRID = "md:grid-cols-[2.5rem_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_2rem]";
 
-function Row({ m, rank, s, swatch, leads, judged, tries }: {
-  m: Model; rank: number; s: Summary | undefined; swatch?: SwatchT; leads: { solved?: boolean; cost?: boolean; time?: boolean }; judged: boolean; tries: number;
+function Row({ m, rank, s, swatch, leads, judged, decide, tries }: {
+  m: Model; rank: number; s: Summary | undefined; swatch?: SwatchT; leads: { solved?: boolean; cost?: boolean; time?: boolean };
+  /** The judges reviewed this run; `decide`: and, on runs from before they only reviewed, decided solved with the tests. */
+  judged: boolean; decide: boolean; tries: number;
 }) {
   const [open, setOpen] = React.useState(false);
   if (!s) return null;
@@ -88,7 +91,7 @@ function Row({ m, rank, s, swatch, leads, judged, tries }: {
           <span className="label-xs mt-1 block text-muted-foreground">{isOpen(m) ? "Open · served on Baseten" : "Closed · comparison"}</span>
         </span>
         <span className={cn("grid size-4 place-items-center justify-self-end text-darkGrey2 transition-transform md:order-last", open && "rotate-180")}><Down /></span>
-        <Figure label="Solved" lead={leads.solved} value={`${s.tasks_solved} solved`} note={judged ? "Tests pass, judges agree" : "Hidden tests pass"} />
+        <Figure label="Solved" lead={leads.solved} value={`${s.tasks_solved} solved`} note={decide ? "Tests pass, judges agree" : "Hidden tests pass"} />
         <Figure label="Cost per solved" lead={leads.cost} value={usd(s.cost_per_solved)} note={`${usd(s.cost_per_attempt)} per attempt${tries > 1 ? ", every try" : ""}`} />
         <Figure label="Time per task" lead={leads.time} value={dur(s.median_seconds)} note="Median, agent time" />
         <Figure label="Total wall clock" value={elapsed(t?.elapsed_seconds)} note={`${t && t.timed_attempts < s.attempts ? "≥ " : ""}${elapsed(t?.total_working_seconds)} agent time`} />
@@ -102,7 +105,7 @@ function Row({ m, rank, s, swatch, leads, judged, tries }: {
             ...(tries > 1 ? [["Solved on", solvedOn(s.solved_on)] as const] : [])]} />
           <Details items={[["Total cost", usd(s.cost_usd)], ["Tokens per attempt", `${compact(s.mean_input_tokens)} in / ${compact(s.mean_output_tokens)} out`]]} />
           <Details items={[["Median turns", s.median_turns == null ? "–" : String(Math.round(s.median_turns))], ["Hit the time limit", String(s.agent_timeouts || 0)]]} />
-          <Details items={[["Not scored (infrastructure)", String(s.invalid || 0)], ...(judged ? [["Passed tests, judges said no", String(s.judge_disagreements || 0)] as const] : [])]} />
+          <Details items={[["Not scored (infrastructure)", String(s.invalid || 0)], ...(judged ? [[decide ? "Passed tests, judges said no" : "Solved, judges said no", String(s.judge_disagreements || 0)] as const] : [])]} />
         </div>
       )}
     </li>

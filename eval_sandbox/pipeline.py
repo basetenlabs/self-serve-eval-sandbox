@@ -276,12 +276,13 @@ def public_to_anyone(repo: str) -> bool:
         return False
 
 
-def preflight(model_keys: list[str], judge_choice: str = "none",
+def preflight(model_keys: list[str], judge_choice: str = "default",
               models_config: Path = config.DEFAULT_MODELS) -> tuple[list[config.Model], config.Panel | None]:
     """The models and judges for a run, or SystemExit saying what is missing.
 
-    `judge_choice` is "none" for the hidden tests alone, "default" for the configured panel,
-    or one judge's model id or label to grade with that judge alone.
+    `judge_choice` is "default" for the configured panel less the judges that can't run here
+    (judges_here: none at all when no judge has a key), "none" for the hidden tests alone, or one
+    judge's model id or label for that judge alone. The judges only review: the tests decide.
     """
     catalog, judge = config.load(models_config)
     if retired := [k for k in model_keys if k in RETIRED and k not in catalog]:
@@ -294,11 +295,56 @@ def preflight(model_keys: list[str], judge_choice: str = "none",
         config.credential_env(model)  # fail now, not inside every container
     if judge_choice == "none":
         return models, None
-    if judge_choice != "default":
-        judge = judge.only(judge_choice)
+    if judge_choice == "default":
+        return models, judges_here(judge)
+    judge = judge.only(judge_choice)  # asked for by name, so it must run
     if problem := judge.problem():
         raise SystemExit(problem)
     return models, judge
+
+
+def judges_here(panel: config.Panel) -> config.Panel | None:
+    """The panel less each judge that can't run here: no key for its provider (Judge.needs), or a key that
+    can't use its model (Judge.problem). The chair goes with its key, and the judges left then decide
+    together. Says whom it left out; None when no judge is left, so the run is scored on its tests alone."""
+    here = panel.available()
+    cannot = [j for j in here.judges if j.problem()] if here else []
+    here = here.without(cannot) if here else None
+    if gone := [j for j in panel.judges if not here or j not in here.judges]:
+        print(f"Judges left out, as they can't run here: {', '.join(j.name for j in gone)}. "
+              + (f"{here.label} {'review' if len(here.judges) > 1 else 'reviews'} each attempt." if here
+                 else "The hidden tests alone score this run."), flush=True)
+    return here
+
+
+# What one judge's answer counts in an estimate before any run measured it: above the measured means
+# (about $0.01 to $0.04 an answer), as a missing measure shouldn't read as cheap.
+JUDGE_ANSWER_COST = 0.05
+
+
+def judges_offer(panel: config.Panel, *, hosted: bool = False, measured: dict[str, float] | None = None) -> dict:
+    """What the page's LLM judges switch shows, from the same panel and keys `pr-eval run` uses: whether
+    judges can review a run started now, which, who has the final word, one short line saying so, and
+    what their review of one attempt costs (`measured`: USD per answer by judge model, from earlier runs).
+    Off when no judge has a key here. Asks nothing over the network. Hosted, it never names a variable."""
+    lacking = {j.model: j.needs() for j in panel.judges}  # as Panel.available() reads it, each asked once
+    gone = [j for j in panel.judges if lacking[j.model]]
+    here = panel.without(gone)
+    if not here:
+        needs = list(dict.fromkeys(lacking[j.model] for j in gone))
+        note = ("No judge is configured." if not needs else "No judge has a key here." if hosted
+                else "No judge can run here without "
+                + (needs[0] if len(needs) == 1 else f"{', '.join(needs[:-1])} or {needs[-1]}") + ".")
+    else:
+        note = (f"{here.label} {'review' if len(here.judges) > 1 else 'reviews'} each attempt beside its tests"
+                + (f"; {here.chair.name} has the final word." if here.chair and len(here.judges) > 1 else "."))
+        if gone:
+            note += " Left out: " + ", ".join(j.name if hosted else f"{j.name} (no {lacking[j.model]})" for j in gone) + "."
+    answers = [*here.judges, *([here.chair] if here.chair else [])] if here else []  # the chair answers twice
+    cost = sum((measured or {}).get(j.model, JUDGE_ANSWER_COST) for j in answers)
+    return {"on": here is not None, "judges": [j.name for j in here.judges] if here else [],
+            "chair": here.chair.name if here and here.chair else None,
+            "left_out": [j.name for j in gone], "note": note, "cost_per_attempt": round(cost, 4)}
 
 
 def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
@@ -636,6 +682,8 @@ def resumed_judge(meta: dict, choice: str | None) -> str:
     judge = meta["judge"]
     if not judge:
         return "none"
+    if judge.get("choice"):  # how it asked: the available judges, or one by name
+        return judge["choice"]
     if "panel" not in judge:  # a run from before judge panels: its single judge
         return judge["model"]
     return "default" if judge.get("chair") else judge["panel"][0]["model"]
