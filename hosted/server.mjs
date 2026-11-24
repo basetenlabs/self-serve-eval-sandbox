@@ -17,7 +17,7 @@ import { baseHeaders, createSiteServer, listen, loadConfig, proxySite, runMain, 
 import { renderLogin } from './login-page.mjs'
 import { publicAssets, servePublicAssets } from './public.mjs'
 
-// The page's open source repository, linked under "Continue with Blaxel".
+// The page's open source repository, linked under "Continue with Baseten".
 const SOURCE = 'https://github.com/basetenlabs/self-serve-eval-sandbox'
 
 /** Whether a `pr-eval run` process is going in this sandbox (the page starts them as `python -m eval_sandbox run`). */
