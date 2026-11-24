@@ -69,6 +69,8 @@ export interface BoardRow {
   language: string;
   url?: string;
   lines?: number;
+  /** By changed lines: small (up to 100), medium (up to 400) or large. */
+  size?: "small" | "medium" | "large";
   check: { stage: CheckStage; why?: string; at?: string };
   cells: Cell[];
 }
@@ -166,7 +168,7 @@ export interface AppState {
   models: CatalogModel[];
   runs: Run[];
   /** `ready`: its tasks are collected, so it starts without reading GitHub. */
-  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean; at_once?: number };
+  quick: { tasks: number; repos: number; names?: string[]; ready?: boolean; at_once?: number; sizes?: Partial<Record<"small" | "medium" | "large", number>> };
   /** Tries per attempt a run started here gets: a try the model fails runs again, up to this many. */
   tries?: number;
   /** The LLM judges switch; missing from a server from before it. */

@@ -8,7 +8,7 @@ The finished setup runs the page at http://127.0.0.1:8765, where you pick merged
 
 ## What it costs and what it touches
 
-- **Model calls** go to Anthropic (Claude models), Baseten Model APIs (the open models) and OpenAI (GPT models). The LLM judges, on by default for every judge whose key is set, ask one model at each to review each attempt, about 5 to 10 cents an attempt; the page's **LLM judges** switch or `--judge none` turns them off. The quick sample, 10 PostHog pull requests with the three default models, costs about $11, plus about $3 for the judges, and takes about 35 minutes, longer when a model needs a second or third try.
+- **Model calls** go to Anthropic (Claude models), Baseten Model APIs (the open models) and OpenAI (GPT models). The LLM judges, on by default for every judge whose key is set, ask one model at each to review each attempt, about 5 to 10 cents an attempt; the page's **LLM judges** switch or `--judge none` turns them off. The quick sample, 11 PostHog pull requests (10 small, 1 large) with the three default models, costs about $12, plus about $3 for the judges, and takes about 35 minutes, longer when a model needs a second or third try.
 - **Compute** runs in Baseten Sandboxes, in the team of the Baseten key from step 4. The coding agent, Pi, is in the trial image there, so there is nothing to install for it. Nothing runs in Docker on your machine.
 - **Your code**: repository clones stay on your machine, in `data/repos/`. Each attempt uploads the code from before the change to a sandbox. The README's "Where your code goes" section has the details.
 

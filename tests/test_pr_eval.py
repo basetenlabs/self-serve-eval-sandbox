@@ -468,10 +468,11 @@ class RecipeTest(unittest.TestCase):
         self.assertEqual(sum(map(len, sample.values())), 42)
         self.assertIn(1159, sample["go-chi/chi"])
 
-    def test_the_quick_sample_is_ten_posthog_pull_requests(self):
+    def test_the_quick_sample_is_posthog_pull_requests_with_a_large_one(self):
         quick = tasks.sample(quick=True)
         self.assertEqual(list(quick), ["PostHog/posthog"])
-        self.assertEqual(len(set(quick["PostHog/posthog"])), 10)
+        self.assertEqual(len(set(quick["PostHog/posthog"])), 11)
+        self.assertIn(140688, quick["PostHog/posthog"])  # 770 lines in 10 files, beside ten small ones
         self.assertEqual(pipeline.Request(quick=True).describe(), "the quick sample")
         self.assertTrue(pipeline.default_name(pipeline.Request(quick=True)).startswith("quick-"))
 
@@ -487,6 +488,19 @@ class RecipeTest(unittest.TestCase):
             quick = app.quick_sample()
         self.assertEqual(quick["tasks"], 3)  # the screened-out and the failing ones are left out; a sandbox error runs again
         self.assertEqual((quick["repos"], quick["names"], quick["at_once"]), (1, ["o/r"], app.QUICK_CONCURRENCY))
+
+    def test_the_quick_sample_card_says_its_mix_of_sizes(self):
+        sizes = {1: "small", 2: "large", 3: "small", 4: "large", 5: None}  # 3 is left out; 5 isn't collected yet
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(tasks, "DEFAULT_TASKS", Path(d)), \
+                mock.patch.object(tasks, "sample", return_value={"o/r": list(sizes)}):
+            for n, size in sizes.items():
+                (Path(d) / f"o__r-{n}" / "validation").mkdir(parents=True)
+                if size:
+                    (Path(d) / f"o__r-{n}" / "task.toml").write_text(f'[task]\nsize_bucket = "{size}"\n')
+            (Path(d) / "o__r-3" / "validation" / "result.json").write_text(json.dumps({"status": "reference-fails"}))
+            quick = app.quick_sample()
+        self.assertEqual(list(quick["sizes"].items()), [("small", 1), ("large", 2)])  # small first, then up
 
     def test_spread_mixes_repositories(self):
         rows = [{"repo": "a", "n": i} for i in range(5)] + [{"repo": "b", "n": i} for i in range(5)]
@@ -1386,7 +1400,8 @@ class AppTest(unittest.TestCase):
             for task_id, pr in (("o__r-1", 1), ("o__r-2", 2), ("o__r-3", 3)):
                 (tasks_dir / task_id / "validation").mkdir(parents=True)
                 (tasks_dir / task_id / "task.toml").write_text(
-                    f'[task]\nid = "{task_id}"\nrepo = "o/r"\npr_number = {pr}\ntitle = "Fix {pr}"\nlanguage = "Go"\n')
+                    f'[task]\nid = "{task_id}"\nrepo = "o/r"\npr_number = {pr}\ntitle = "Fix {pr}"\nlanguage = "Go"\n'
+                    f'size_bucket = "{"large" if pr == 1 else "small"}"\nlines_changed = {770 if pr == 1 else 10}\n')
             job = jobs / "quick-1"
             (job / "trials" / "o__r-1__m__1").mkdir(parents=True)
             (job / "trials" / "o__r-1__m__1" / "stage.json").write_text(json.dumps({"stage": "agent", "at": "x"}))
@@ -1410,6 +1425,7 @@ class AppTest(unittest.TestCase):
         rows = {r["id"]: r for r in board["rows"]}
         self.assertEqual((rows["o__r-2"]["cells"][0]["judge"], rows["o__r-2"]["cells"][0]["judge_reason"]), ("pass", None))
         self.assertEqual(rows["o__r-1"]["title"], "Fix 1")
+        self.assertEqual((rows["o__r-1"]["size"], rows["o__r-1"]["lines"], rows["o__r-2"]["size"]), ("large", 770, "small"))
         self.assertEqual(rows["o__r-1"]["cells"][0]["stage"], "agent")
         self.assertEqual((rows["o__r-2"]["cells"][0]["stage"], rows["o__r-2"]["cells"][0]["seconds"]), ("solved", 125))
         self.assertEqual((rows["o__r-3"]["check"]["stage"], rows["o__r-3"]["cells"][0]["stage"]), ("base", "setup"))

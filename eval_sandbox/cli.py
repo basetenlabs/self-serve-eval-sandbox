@@ -4,7 +4,7 @@
     pr-eval run owner/repo              the same from the terminal: PRs -> check -> models -> report
     pr-eval run <PR link> <PR link>     exactly these pull requests (or owner/repo#123)
     pr-eval run                         the sample tasks instead of a repository
-    pr-eval run --quick                 the quick sample: ten PostHog PRs, about 35 minutes
+    pr-eval run --quick                 the quick sample: 11 PostHog PRs, about 35 minutes
 
 (Not `eval`: that is a shell builtin, so a command by that name can never be called.)
 """
@@ -170,7 +170,7 @@ def add_task_options(p: argparse.ArgumentParser, limit_help: str) -> None:
     p.add_argument("--test", help="command that runs the tests; {test_files} becomes the PR's changed test files "
                                   "(default: worked out when the run starts)")
     p.add_argument("--language", help="override the repository's language as GitHub reports it")
-    p.add_argument("--quick", action="store_true", help="the quick sample: ten PostHog pull requests (configs/quick_tasks.toml)")
+    p.add_argument("--quick", action="store_true", help="the quick sample: 11 PostHog pull requests, 10 small and 1 large (configs/quick_tasks.toml)")
     p.add_argument("--max-lines", type=int, default=tasks.DEFAULT_MAX_LINES,
                    help=f"when picking recent PRs, skip ones that change more lines than this (default {tasks.DEFAULT_MAX_LINES}; --pr allows up to {tasks.MAX_LINES})")
 

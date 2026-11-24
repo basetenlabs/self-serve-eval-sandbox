@@ -382,7 +382,7 @@ class App:
                     reported = {t["id"]: t for t in report.earlier_tasks(job_dir / "report.json")}
                 if t := reported.get(task_id):
                     info = {**info, **{k: t.get(v) for k, v in (("title", "title"), ("language", "language"),
-                                                               ("url", "url"), ("lines", "lines_changed"))}}
+                                                               ("url", "url"), ("lines", "lines_changed"), ("size", "size"))}}
             if task_id in kept:
                 check = {"stage": "passed"}
             elif task_id in left:
@@ -417,7 +417,7 @@ class App:
                 return {"repo": repo_of(path.name), "pr": path.name.rsplit("-", 1)[-1], "title": "", "language": ""}
             self.task_info[path] = {"repo": meta["repo"], "pr": meta["pr_number"], "title": meta.get("title", ""),
                                     "language": meta.get("language", ""), "url": meta.get("url"),
-                                    "lines": meta.get("lines_changed")}
+                                    "lines": meta.get("lines_changed"), "size": meta.get("size_bucket")}
         return self.task_info[path]
 
     def estimates(self, runs: list[dict]) -> dict[str, dict]:
@@ -776,7 +776,25 @@ def quick_sample() -> dict:
     sample = tasks.sample(True)
     left_out = quick_left_out()
     return {"tasks": sum(len(prs) for prs in sample.values()) - len(left_out), "repos": len(sample),
-            "names": list(sample), "ready": quick_collected(), "at_once": QUICK_CONCURRENCY}
+            "names": list(sample), "ready": quick_collected(), "at_once": QUICK_CONCURRENCY,
+            "sizes": quick_sizes(left_out)}
+
+
+def quick_sizes(left_out: set[str]) -> dict[str, int]:
+    """How many of the quick sample's kept PRs are small, medium and large, by changed lines (tasks.py's
+    size buckets), so the page can say what mix a run gets. Only the tasks collected here count."""
+    sizes: dict[str, int] = {}
+    for repo, prs in tasks.sample(True).items():
+        for n in prs:
+            task_id = f"{repo.replace('/', '__')}-{n}"
+            if task_id in left_out:
+                continue
+            try:
+                size = tomllib.loads((tasks.DEFAULT_TASKS / task_id / "task.toml").read_text())["task"]["size_bucket"]
+            except (OSError, tomllib.TOMLDecodeError, KeyError):
+                continue
+            sizes[size] = sizes.get(size, 0) + 1
+    return {size: sizes[size] for size in ("small", "medium", "large") if size in sizes}
 
 
 def quick_left_out() -> set[str]:

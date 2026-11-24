@@ -107,7 +107,7 @@ SMOKE_TIMEOUT = 1800  # seconds for the whole attempt: sandboxes, install, agent
 SMOKE_OWNER = "deploy-smoke"
 LABELS = {"app": "pr-eval-host"}
 # One team's sandboxes and one set of keys serve everyone: runs going at once, in all and per person, and what runs
-# spent on models in the last 24 hours, in all and per person (a quick sample is about $11). However many runs go,
+# spent on models in the last 24 hours, in all and per person (a quick sample is about $12). However many runs go,
 # they share the page's places (eval_sandbox/slots.py): 40 attempts at once, about 80 sandboxes at most, as two
 # quick samples took before, and 4 Claude Code judges, about 400 MB of this sandbox's memory each.
 LIMITS = {name: os.environ.get(name, default) for name, default in {
