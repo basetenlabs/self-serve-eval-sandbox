@@ -4,7 +4,7 @@
 // read in place so the sign-in pages always take the stylesheet the app builds with; hosted/deploy.py ships them).
 // Everything else, the page included, stays behind sign-in.
 // /auth/login.css and /auth/theme.js replace @blaxel/sign-in's own, so its error pages (renderMessage) take the same
-// look as our sign-in page, dark included.
+// look as our sign-in page, dark included; /auth/login.js, so the button keeps saying Baseten once pressed.
 // Beausite is never served here: before sign-in the pages set in Geist, which the sign-in package serves.
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -18,6 +18,7 @@ const FILES = {
   '/auth/texture-dark.png': ['../web/src/styles/texture-dark.png', 'image/png'],
   '/auth/icons/external-link.svg': ['../web/src/styles/icons/external-link.svg', 'image/svg+xml'],
   '/auth/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
+  '/auth/login.js': ['login.js', 'text/javascript; charset=utf-8'],
 }
 
 /** path -> { type, body }, read once at startup. */

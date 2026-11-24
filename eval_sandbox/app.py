@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import causes, commands, config, meter, pipeline, report, runner, runtime, tasks, trace
+from . import causes, commands, config, meter, pipeline, report, runner, runtime, slots, tasks, trace
 from .pipeline import alive, repo_of
 from .rundir import ACCESS, OVER_LIMIT, SPEND_LEDGER, read_json
 
@@ -149,9 +149,10 @@ class App:
                 run["owner"] = access.get("owner")
             runs.append(run)
         runs.sort(key=lambda r: r["active_at"], reverse=True)
+        shared = slots.usage("attempts")  # hosted: the places every run's attempts share, and how many wait
         for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
-                run["board"] = self.board(run)
+                run["board"] = {**self.board(run), "shared": shared}
         found, judging = self.measured(runs)
         estimates = borrowed(found, catalog)
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "maker": m.maker, "model": m.model,
@@ -179,10 +180,15 @@ class App:
         """`blocked`: why this person can't start a run now, if they can't. `spend`: what their runs
         started in the last day cost, and their limit, when there is one."""
         going = mine = 0
+        reserved = reserved_mine = 0.0
+        unpriced = self.unpriced(everyone)
         for d, run in everyone:
             if run["phase"] in pipeline.ACTIVE:
-                going, mine = going + 1, mine + (bool(user) and read_json(d / ACCESS).get("owner") == user)
-        spent, by_owner = spending(everyone, self.unpriced(everyone))
+                owner = read_json(d / ACCESS).get("owner")
+                going, mine = going + 1, mine + (bool(user) and owner == user)
+                left = still_to_spend(d, unpriced)
+                reserved, reserved_mine = reserved + left, reserved_mine + (left if user and owner == user else 0.0)
+        spent, by_owner = spending(everyone, unpriced)
         my_spent = by_owner.get(user, 0.0) if user else 0.0
         mine_cap = SPEND_PER_PERSON if user else None
         if user and mine >= RUNS_PER_PERSON:
@@ -200,8 +206,8 @@ class App:
                        "Each attempt stops counting a day after it ran.")
         else:
             blocked = None
-        return {"blocked": blocked, "spend": {"spent": my_spent, "cap": mine_cap} if mine_cap else None,
-                "spent_total": spent}
+        return {"blocked": blocked, "spend": {"spent": my_spent, "cap": mine_cap, "reserved": reserved_mine} if mine_cap else None,
+                "spent_total": spent, "reserved_total": reserved}
 
     def enforce_spending(self) -> list[str]:
         """Stop every going run whose owner, or the whole page, has reached its spending limit: a run
@@ -554,10 +560,9 @@ class App:
                 return info
             private = private or bool(info.get("private"))
         claim = None if quick else {name.lower() for name in repos}
-        if problem := self.taken(claim) or self.over_budget(state, keys, state["quick"]["tasks"] if quick else
-                                                            sum(map(len, pulls.values())) or limit,
-                                                            quick_scope() if quick else ",".join(sorted(claim)), user,
-                                                            judged=judged):
+        count = state["quick"]["tasks"] if quick else sum(map(len, pulls.values())) or limit
+        scope = quick_scope() if quick else ",".join(sorted(claim))
+        if problem := self.taken(claim) or self.over_budget(state, keys, count, scope, user, judged=judged):
             return {"error": problem}
         run_id = named = f"{repos[0].split('/')[-1] if repos else 'quick'}-{datetime.now():%Y%m%d-%H%M%S}"
         for n in range(2, 100):  # two people may start the same kind of run in the same second
@@ -570,9 +575,12 @@ class App:
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         argv += [] if judged else ["--judge", "none"]
-        if user:  # whose run it is: only they see it, and it counts toward their limits
+        if user:  # whose run it is: only they see it, and it counts toward their limits, as does what it should cost
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
-            (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
+            limited = SPEND_TOTAL or SPEND_PER_PERSON
+            (self.jobs_dir / run_id / ACCESS).write_text(json.dumps(
+                {"owner": user, "private": private, **({"estimate": round(self.cost_of(state, keys, count, scope, judged=judged), 2)}
+                                                       if limited else {})}))
         self.claims[run_id] = claim
         self.spawn(run_id, argv)
         return {"id": run_id}
@@ -612,6 +620,25 @@ class App:
         whichever is more, for every try. `judged`: with the judges' review of each attempt."""
         if not (SPEND_TOTAL or (SPEND_PER_PERSON and user)):
             return None
+        cost = App.cost_of(state, keys, count, scope, tries, judged)
+        mine = state.get("spend")
+        # Runs going are expected to spend more yet: what each was estimated to cost when it started, less what it
+        # has spent since. Several runs at once must not add up past a limit before any of them has paid.
+        if mine and cost > (left := mine["cap"] - mine["spent"] - mine.get("reserved", 0.0)):
+            going = ", counting what your runs going are expected to spend" if mine.get("reserved") else ""
+            return (f"This run would cost about {usd(cost)}, and you have {usd(max(0, left))} "
+                    f"left of your {usd(mine['cap'])} for the last 24 hours{going}. Choose fewer pull requests or models.")
+        if SPEND_TOTAL and cost > (left := SPEND_TOTAL - state["spent_total"] - state.get("reserved_total", 0.0)):
+            going = ", counting what the runs going are expected to spend" if state.get("reserved_total") else ""
+            return (f"This run would cost about {usd(cost)}, and this page has {usd(max(0, left))} "
+                    f"left of its {usd(SPEND_TOTAL)} for the last 24 hours{going}. Choose fewer pull requests or models.")
+        return None
+
+    @staticmethod
+    def cost_of(state: dict, keys: list[str], count: int, scope: str, tries: int = pipeline.DEFAULT_TRIES,
+                judged: bool = False) -> float:
+        """What a run of `count` pull requests with these models is expected to cost, as over_budget counts it,
+        with the judges' review of each attempt when `judged`."""
         known = {m["key"]: m for m in state["models"]}
         seen = [each["cost_per_try"] for m in state["models"]
                 for each in [m, *(m.get("by_scope") or {}).values()] if each.get("cost_per_try") is not None]
@@ -620,16 +647,9 @@ class App:
         estimate = [None if each.get("cost_per_try") is None else
                     each["cost_per_try"] * expected_tries(each.get("solve_rate"), tries) for each in found]
         cost = sum(unknown if each is None else each for each in estimate) * count
-        if judged:
+        if judged:  # the judges' review of each attempt
             cost += (state.get("judges") or {}).get("cost_per_attempt", 0) * count * len(found)
-        mine = state.get("spend")
-        if mine and cost > mine["cap"] - mine["spent"]:
-            return (f"This run would cost about {usd(cost)}, and you have {usd(max(0, mine['cap'] - mine['spent']))} "
-                    f"left of your {usd(mine['cap'])} for the last 24 hours. Choose fewer pull requests or models.")
-        if SPEND_TOTAL and cost > SPEND_TOTAL - state["spent_total"]:
-            return (f"This run would cost about {usd(cost)}, and this page has {usd(max(0, SPEND_TOTAL - state['spent_total']))} "
-                    f"left of its {usd(SPEND_TOTAL)} for the last 24 hours. Choose fewer pull requests or models.")
-        return None
+        return cost
 
     @staticmethod
     def chosen_pulls(value) -> dict[str, list[int]] | str:
@@ -680,6 +700,11 @@ class App:
         if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user, tries,
                                                               judged)):
             return {"error": problem}
+        access = read_json(self.jobs_dir / run_id / ACCESS)
+        if access.get("owner") and keys and (SPEND_TOTAL or SPEND_PER_PERSON):  # what it should cost from here, on top of what it has spent
+            paid = ledger_cost(self.jobs_dir / run_id / SPEND_LEDGER, "", self.unpriced(self.everyone()))
+            access["estimate"] = round(paid + self.cost_of(state, keys, -(-max(left, 0) // len(keys)), scope, tries, judged), 2)
+            (self.jobs_dir / run_id / ACCESS).write_text(json.dumps(access))
         if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
             return {"error": NO_PAGE_TOKEN}
         if hosted() and read_json(self.jobs_dir / run_id / ACCESS).get("private"):
@@ -824,6 +849,15 @@ def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[s
             found[key] = {**scale(source), "by_scope": {k: scale(v) for k, v in source["by_scope"].items()}}
             break
     return found
+
+
+def still_to_spend(job_dir: Path, unpriced: dict[str, float]) -> float:
+    """What a run going is still expected to spend: the estimate it started (or resumed) with, less what its
+    ledger shows it has spent. A run with no estimate (started locally, or before estimates were kept) holds none."""
+    estimate = read_json(job_dir / ACCESS).get("estimate")
+    if not isinstance(estimate, (int, float)) or estimate <= 0:
+        return 0.0
+    return max(0.0, estimate - ledger_cost(job_dir / SPEND_LEDGER, "", unpriced))
 
 
 def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:

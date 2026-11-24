@@ -85,6 +85,11 @@ function Fleet({ run, colors }: { run: Run; colors: Record<string, SwatchT> }) {
             <span className="inline-flex items-center gap-2"><i className="size-2.5 bg-darkGrey1" />Hidden tests</span>
             <span className="inline-flex items-center gap-2"><i className="ev-tone idle size-2.5" />Free</span>
           </div>
+          {b.shared && b.shared.waiting > 0 && b.shared.held >= b.shared.limit && (
+            <p className="mt-4 text-[13px] text-muted-foreground">
+              Everyone's runs share {b.shared.limit} attempts at once on this page, and all are in use. The rest of yours start as places free up, the next one to the run with the fewest going.
+            </p>
+          )}
         </>
       )}
     </Column>

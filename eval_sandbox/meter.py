@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import http.server
+import importlib.util
 import json
 import os
 import re
@@ -48,6 +49,11 @@ DROP = {"authorization", "x-api-key", HEADER.lower(), "host", "content-length", 
         "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
         "accept-encoding", "x-forwarded-email"}
 KEEP_BACK = re.compile(r"content-type|request-id|x-request-id|retry-after|anthropic-.*|x-ratelimit-.*", re.I)
+# The relay's own rules for what leaves a trial (plain paths, no provider-side tool or fetch), checked again here:
+# the meter holds the real key, and a run resumed on an older image has an older relay.
+_spec = importlib.util.spec_from_file_location("pr_eval_relay", Path(__file__).resolve().parents[1] / "docker" / "proxy.py")
+relay = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(relay)
 
 
 def url() -> str | None:
@@ -229,7 +235,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             run_dir, entry = ticket(self.jobs_dir, self.headers.get(HEADER))
             provider, _, rest = self.path.removeprefix("/").partition("/")
-            path = "/" + rest.split("?", 1)[0].rstrip("/")
+            path, _, query = ("/" + rest).partition("?")
+            if not relay.PLAIN_PATH.fullmatch(path):
+                raise Refused(403, "The meter forwards plain paths only.")
+            path = path.rstrip("/")
             if provider != entry.get("provider"):
                 raise Refused(403, f"This attempt's model runs on {entry.get('provider')}, not {provider or 'nothing'}.")
             shape = PRICED[provider].get(path) if raw is not None else None
@@ -249,6 +258,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                               prices=entry.get("prices") or {})
                 if rates.rate_for(model_id) is None:
                     raise Refused(403, f"The meter has no price for {model_id}, so it doesn't forward the call.")
+                if why := relay.reaches_out(body):
+                    raise Refused(403, f"An attempt has no network, so the meter doesn't forward this: {why}.")
                 if shape == "responses":
                     if "service_tier" not in body:  # left out, it is the project's own tier, not always standard
                         body["service_tier"] = "default"
@@ -265,8 +276,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in DROP}
         headers[header] = value
         headers["Accept-Encoding"] = "identity"
-        # The provider's own host, and a path the checks above matched: never a host the caller names.
-        request = urllib.request.Request(UPSTREAMS[provider] + "/" + rest, data=raw,
+        # The provider's own host, and the plain path the checks above matched: never a host the caller names.
+        request = urllib.request.Request(UPSTREAMS[provider] + path + ("?" + query if query else ""), data=raw,
                                          headers=headers, method=self.command)
         usage = Usage(shape or "")
         trial_dir = run_dir / "trials" / entry["trial"]

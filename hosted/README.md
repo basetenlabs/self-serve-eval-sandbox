@@ -62,8 +62,11 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   open, then the agent, and the hidden tests after it, run in a jail with none. The team's sandbox
   count is shared by every run: when it is full, a new sandbox waits for one to finish. While a
   run is going, the sign-in server keeps the page's sandbox awake.
-- **Limits:** two runs go at once, one per person, and two runs never share a repository (both
-  would clone it and check its pull requests at once), except two quick samples. Runs in
+- **Limits:** up to 20 runs go at once, three per person, and two runs never share a repository (both
+  would clone it and check its pull requests at once), except quick samples. However many go, they
+  share the page's places: 40 attempts at once in all (about 80 sandboxes) and 4 Claude Code judges.
+  Each next free place goes to the run holding the fewest, so a small run started beside a big one
+  starts at once; the rest of a run's attempts wait their turn. Runs in
   the last 24 hours may spend $1,000 in all and $500 per person on models. Each run keeps a
   ledger (`spend.jsonl`) of every model call it pays for, written as each finishes: every call
   through the key meter, including from attempts that ended invalid, were stopped or run again on
@@ -71,10 +74,12 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   so a run resumed days later counts too. Sandbox compute isn't included. A charge with no price
   never counts as free: an agent attempt counts its model's latest cost per attempt (else $5,
   or the dearest attempt seen if more), a judge's answer $0.25. A run (or a resume) whose estimate,
-  its judges' review of each attempt included, would go over waits; a run going stops (resumable) within 30 seconds once its owner or the page
-  reaches the limit, and the attempts it had going still count, so a person can end a little over. Set them with
-  `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`, `PR_EVAL_SPEND_TOTAL` and
-  `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time and no spending limit.
+  its judges' review of each attempt included, would go over waits, counting what the runs already going are still expected to spend (each run's
+  estimate when it started, less what it has spent since); a run going stops (resumable) within 30 seconds
+  once its owner or the page reaches the limit, and the attempts it had going still count, so a person can
+  end a little over. Set them with `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`,
+  `PR_EVAL_ATTEMPTS_AT_ONCE`, `PR_EVAL_JUDGES_AT_ONCE`, `PR_EVAL_SPEND_TOTAL` and
+  `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time, no shared places and no spending limit.
 - **Private repositories:** a run's clone and task folders go when it ends (its report and results
   stay). With `PR_EVAL_PRIVATE_RETENTION_DAYS` set when deploying, a private run's transcripts go
   that many days after it ends; unset keeps them.

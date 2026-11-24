@@ -27,7 +27,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import causes, meter, pi, runtime, tasks
+from . import causes, meter, pi, runtime, slots, tasks
 from . import judge as judge_mod
 from .config import API_KEYS, PROVIDER_URLS, Model, Panel, credential_env, redact_file, redact_known, sandbox_credential
 from .rundir import charge, now, read_json, write_json
@@ -1099,7 +1099,8 @@ def unstated_name(output: str, task: Task) -> str | None:
 
 def validate_all(tasks: list[Task], settings: Settings, run_id: str, on_result=None) -> None:
     todo = [t for t in tasks if needs_check(t, settings)]
-    in_parallel(todo, lambda t: validate_task(t, settings, run_id), settings.concurrency, run_id, on_result)
+    in_parallel(todo, lambda t: validate_task(t, settings, run_id), settings.concurrency, run_id, on_result,
+                needs_place=lambda job: False)  # checks take no place (see check_and_run)
 
 
 def validation_status(task: Task, settings: Settings | None = None) -> str | None:
@@ -1406,28 +1407,38 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
         return item[2] + (attempts if kind == "early" and not verdicts[item[0].id].known.is_set() else 0)
 
     # Checks first, then trials attempt by attempt, so a stopped run is left balanced.
-    in_parallel(jobs, work, settings.concurrency, run_id, then=then, order=order, halt=SameFailure())
+    # A check takes no place: attempts set up beside it hold theirs while they wait for it, so it must never wait
+    # behind them.
+    in_parallel(jobs, work, settings.concurrency, run_id, then=then, order=order, halt=SameFailure(),
+                needs_place=lambda job: job[0] != "check")
 
 
 def in_parallel(jobs: list, work, workers: int, run_id: str, on_result=None, *, then=None, order=None,
-                halt=None) -> None:
+                halt=None, needs_place=lambda job: True) -> None:
     """`work` on each job, `workers` at a time; `on_result(result, done, total)` as each lands.
 
     `then(job, result)` may return more jobs to do. They wait behind the others, unless
     `order` (a sort key) puts them sooner. Once `halt(result)` gives a reason, nothing more
     starts: the work in flight finishes, then Halted says that reason. Ctrl-C, or Stop on the
     page, drops what hasn't finished and removes the run's sandboxes, so the work in flight
-    fails fast instead of being waited for.
+    fails fast instead of being waited for. Hosted, each job for which `needs_place(job)` holds one of
+    the page's places for attempts while it works (slots.py), shared fairly with the other runs.
     """
     waiting, running, done, total, halted = list(jobs), {}, 0, len(jobs), None
     pool = ThreadPoolExecutor(max_workers=workers)
+
+    def placed(job):  # hosted, every run on the page shares the places for attempts (slots.py)
+        if not needs_place(job):
+            return work(job)
+        with slots.hold("attempts", run_id, STOPPING.is_set) as held:
+            return work(job) if held else None
     try:
         while (waiting and not halted) or running:
             if order:
                 waiting.sort(key=order)
             while waiting and len(running) < workers and not halted:
                 job = waiting.pop(0)
-                running[pool.submit(work, job)] = job
+                running[pool.submit(placed, job)] = job
             finished, _ = wait(running, return_when=FIRST_COMPLETED)
             for future in finished:
                 job, result = running.pop(future), future.result()

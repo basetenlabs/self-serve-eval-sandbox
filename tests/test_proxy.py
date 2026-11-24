@@ -193,10 +193,9 @@ class TheRelayIsTheAgentsOneWayOut(unittest.TestCase):
             self.addCleanup(server.shutdown)
         self.addCleanup(self.tmp.cleanup)
 
-    def ask(self, target: str, headers: dict) -> tuple[int, bytes]:
+    def ask(self, target: str, headers: dict, body: bytes = b'{"model": "claude-opus-5-5"}') -> tuple[int, bytes]:
         connection = OverSocket(self.path)
-        connection.request("POST", target, body=b'{"model": "claude-opus-5-5"}',
-                           headers={"content-type": "application/json", **headers})
+        connection.request("POST", target, body=body, headers={"content-type": "application/json", **headers})
         response = connection.getresponse()
         answer = response.status, response.read()
         connection.close()
@@ -225,6 +224,46 @@ class TheRelayIsTheAgentsOneWayOut(unittest.TestCase):
             with self.subTest(target):
                 self.assertEqual(self.ask(target, {"x-api-key": "pr-eval-placeholder-1"})[0], 400)
         self.assertEqual(Upstream.seen, [])
+
+    def test_no_path_turns_into_another_endpoint_on_the_host(self):
+        for target in ("/v1/models/../../v1/files", "/v1/models/%2e%2e/%2e%2e/v1/files", "/v1/./messages", "/v1//messages"):
+            with self.subTest(target):
+                self.assertEqual(self.ask(target, {"x-api-key": "pr-eval-placeholder-1"})[0], 400)
+        self.assertEqual(Upstream.seen, [])
+
+    def test_the_provider_never_searches_fetches_or_runs_code_for_the_agent(self):
+        """The jail's no-network rule holds on the provider's side too: none of its own tools, and no media it would
+        download. Claude Code's web tools are switched off, but the agent could call the relay itself."""
+        model = {"model": "claude-opus-5-5", "max_tokens": 10}
+        image = lambda source: {"role": "user", "content": [{"type": "image", "source": source}]}
+        refused = [
+            {**model, "tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+            {**model, "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]},
+            {**model, "tools": [{"type": "code_execution_20250825", "name": "code_execution"}]},
+            {**model, "mcp_servers": [{"type": "url", "url": "https://mcp.example", "name": "x"}]},
+            {**model, "messages": [image({"type": "url", "url": "https://example.com/a.png"})]},
+            {**model, "messages": [{"role": "user", "content": [{"type": "document", "source": {"type": "file", "file_id": "f"}}]}]},
+            # Responses: a hosted tool added along the way, and an image or file the provider would fetch.
+            {"model": "gpt", "input": [{"type": "additional_tools", "tools": [{"type": "web_search"}]}]},
+            {"model": "gpt", "input": [{"role": "user", "content": [{"type": "input_image", "image_url": "https://x.example/a.png"}]}]},
+            {"model": "gpt", "input": [{"role": "user", "content": [{"type": "input_file", "file_url": "https://x.example/a.pdf"}]}]},
+            # Chat Completions: an image by link.
+            {"model": "glm", "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x.example/a.png"}}]}]},
+        ]
+        for body in refused:
+            with self.subTest(body):
+                status, answer = self.ask("/v1/messages", {}, json.dumps(body).encode())
+                self.assertEqual(status, 403)
+                self.assertIn(b"the agent has no network", answer)
+        self.assertEqual(Upstream.seen, [])
+        # The agent's own tools, inline media, and a tool call whose arguments happen to name a link all go through.
+        tool = {"name": "bash", "input_schema": {"type": "object", "properties": {"image_url": {"type": "string"}}}}
+        fine = {**model, "tools": [tool, {**tool, "type": "custom"}], "messages": [
+            image({"type": "base64", "media_type": "image/png", "data": "AAAA"}),
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "bash", "input": {"file_url": "https://x"}}]},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}]}
+        self.assertEqual(self.ask("/v1/messages", {}, json.dumps(fine).encode())[0], 200)
+        self.assertEqual(len(Upstream.seen), 1)
 
     def test_the_credential_comes_from_the_environment_and_then_leaves_it(self):
         secret = {"PROXY_UPSTREAM_HEADERS": '{"Authorization": "Bearer the-real-key"}'}
