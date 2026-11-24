@@ -169,6 +169,8 @@ class App:
                 "busy": any(r["phase"] in pipeline.ACTIVE for _, r in everyone),
                 **self.limits(everyone, runs, user),
                 "github": {"hosted": hosted(), "public": bool(PAGE_GITHUB_TOKEN)},
+                # Hosted, where people open the page; one opened at another address (its old preview) goes there.
+                "origin": APP_ORIGIN if hosted() else None,
                 "favorites": self.favorites(user), "admin": admin}
 
     def everyone(self) -> list[tuple[Path, dict]]:

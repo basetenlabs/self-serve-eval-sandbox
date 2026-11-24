@@ -20,6 +20,11 @@ test('the sign-in page follows the system\'s light or dark setting, with the log
   assert.match(html, /<source srcset="\/auth\/brand\/logo-dark" media="\(prefers-color-scheme: dark\)">/)
 })
 
+test('the sign-in page names the site\'s own address, so an old preview link can move there', () => {
+  const html = renderLogin({ brand, origin: 'https://eval.example' })
+  assert.match(html, /data-origin="https:\/\/eval\.example"/)
+})
+
 test('link previews carry the name, the description and the public card', () => {
   const html = renderLogin({ brand: { ...brand, card: { type: 'image/png' } }, origin: 'https://site.example' })
   assert.match(html, /<meta property="og:title" content="Some Site">/)

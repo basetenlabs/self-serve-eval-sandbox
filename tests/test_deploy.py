@@ -90,6 +90,34 @@ class SignInAcrossReleases(unittest.TestCase):
             self.assertEqual(owner, "owner@example.org" if name.startswith("pr-eval-sign-in") else None)
 
 
+class SiteOrigin(unittest.TestCase):
+    PREVIEW = "https://abc.preview.example"
+
+    def origin(self, value: str | None, reaches: bool = False) -> tuple[str, list]:
+        asked = []
+        env = {k: v for k, v in os.environ.items() if k != deploy.PUBLIC_ORIGIN} | ({deploy.PUBLIC_ORIGIN: value} if value is not None else {})
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(deploy, "reaches_sign_in", side_effect=lambda o: asked.append(o) or reaches), \
+                mock.patch("sys.stderr"):
+            return deploy.site_origin(self.PREVIEW), asked
+
+    def test_unset_keeps_the_preview_and_asks_nothing(self):
+        self.assertEqual(self.origin(None), (self.PREVIEW, []))
+        self.assertEqual(self.origin(""), (self.PREVIEW, []))
+
+    def test_the_page_moves_once_its_address_serves_this_sign_in(self):
+        self.assertEqual(self.origin("https://eval.example/", reaches=True), ("https://eval.example", ["https://eval.example"]))
+
+    def test_until_then_it_stays_on_the_preview(self):
+        self.assertEqual(self.origin("https://eval.example", reaches=False), (self.PREVIEW, ["https://eval.example"]))
+
+    def test_only_a_bare_https_origin_is_taken(self):
+        for bad in ("http://eval.example", "https://eval.example/path", "eval.example", "https://eval.example:8443",
+                    "https://user@eval.example"):
+            with self.subTest(bad), self.assertRaises(SystemExit):
+                self.origin(bad)
+
+
 class SmokeVerdict(unittest.TestCase):
     def test_an_attempt_that_went_end_to_end_passes_whether_or_not_it_solved(self):
         self.assertIsNone(deploy.verdict({}, WENT))
