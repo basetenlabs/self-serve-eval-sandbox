@@ -4,7 +4,7 @@ import { External } from "@/components/brand/icons";
 import { Tip } from "@/components/ui/tooltip";
 import { clock, secondsSince, usd } from "@/lib/format";
 import { INK_BLACK, type Swatch as SwatchT } from "@/lib/models";
-import { CHECK, failReason, isFinal, isLive, STAGE, STEPS, stepIndex, type Tone } from "@/lib/stages";
+import { CHECK, failReason, isFinal, isLive, judgeReview, STAGE, STEPS, stepIndex, type Tone } from "@/lib/stages";
 import type { BoardRow, Cell, Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -153,15 +153,19 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
     sub = <div className="mt-0.5 truncate text-[12px]" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
   }
   const glyph = c.stage === "solved" ? "✓ " : c.stage === "failed" ? "✕ " : c.stage === "invalid" ? "! " : "";
+  // The judges' review sits beside the tests' outcome, in their gold: it never changes it.
+  const review = c.stage === "solved" || c.stage === "failed" ? judgeReview(c) : null;
   const cell = (
     <div key={c.stage} className={cn("flex h-12 animate-fade flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
         <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}{live && c.try ? ` · try ${c.try}` : ""}</span>
         {live && c.started_at && <span className="num font-mono text-[12px]">{clock(secondsSince(c.started_at, now))}</span>}
+        {review && <span className="ev-judge-mark" aria-label={review.text}>{review.glyph}</span>}
       </div>
       {sub}
     </div>
   );
+  if (review) return <Tip content={review.text}>{cell}</Tip>;
   return c.stage === "invalid" ? <Tip content="Lost to setup, sandbox or provider trouble, not the model. Resume runs it again.">{cell}</Tip> : cell;
 }
 

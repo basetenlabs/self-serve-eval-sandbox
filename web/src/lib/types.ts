@@ -53,7 +53,10 @@ export interface Cell {
   cost?: number | null;
   diff?: { files: number; added: number; removed: number } | null;
   tests_passed?: boolean | null;
-  judge?: string | null;
+  /** The judges' review beside the tests, which alone decide solved: "pass", "fail", or "error" when they gave
+   * none, with its reason. Missing when no judge was asked. */
+  judge?: "pass" | "fail" | "error" | string | null;
+  judge_reason?: string | null;
   /** The try this is, from the second on: live, the one running; finished, the last. */
   try?: number;
 }
@@ -140,6 +143,22 @@ export interface Again {
   setup?: string | null;
   test?: string | null;
   models: string[];
+  /** The LLM judges switch as the run had it; missing on Run again links from before the switch. */
+  judges?: boolean;
+}
+
+/** The LLM judges switch, as the server works it out from the keys it has (pipeline.judges_offer). */
+export interface JudgesOffer {
+  /** Some judge has a key here; off and disabled otherwise. */
+  on: boolean;
+  judges: string[];
+  /** Who writes the final verdict; null when the judges left decide together. */
+  chair?: string | null;
+  left_out: string[];
+  /** One short line: who reviews, or why none can. */
+  note: string;
+  /** The judges' review of one attempt, in USD. */
+  cost_per_attempt: number;
 }
 
 export interface AppState {
@@ -150,6 +169,8 @@ export interface AppState {
   quick: { tasks: number; repos: number; names?: string[]; ready?: boolean; at_once?: number };
   /** Tries per attempt a run started here gets: a try the model fails runs again, up to this many. */
   tries?: number;
+  /** The LLM judges switch; missing from a server from before it. */
+  judges?: JudgesOffer;
   max_limit: number;
   pr_size?: { lines: number; pasted_lines: number; files: number };
   /** Some run is going, anyone's: the page polls faster. */
@@ -335,6 +356,8 @@ export interface Vote {
   label?: string;
   verdict?: string;
   reason?: string;
+  /** What it found wrong, listed before its verdict; missing from reviews written before. */
+  problems?: string[];
   error?: string;
 }
 
@@ -357,7 +380,8 @@ export interface Report {
     /** "pi", or "claude-code" (every run from before Pi). */
     harness?: string;
     harness_version?: string;
-    judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null } | null;
+    /** `review`: the judges only review, beside the tests. Without it (runs from before), solved also needed their pass. */
+    judge?: { model?: string; effort?: string; label?: string; panel?: { label: string }[]; chair?: { label: string } | null; review?: boolean } | null;
     note?: string | null;
     status?: { phase?: string; detail?: string } | null;
     request?: { quick?: boolean; repos?: string[]; pulls?: Record<string, number[]> } | null;

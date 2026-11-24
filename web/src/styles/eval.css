@@ -163,6 +163,9 @@ textarea.bt-input.ev-pulls { min-block-size: 36px; max-block-size: 192px; resize
 .ev-plan-stat > .value { font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ev-plan-rows { grid-template-columns: auto minmax(0, 1fr); column-gap: 16px; }
 .ev-plan-rows dd { font-size: 14px; }
+/* The LLM judges switch above the plan's rows: its label and switch on one line, the server's line about the judges under them. */
+.ev-judges { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--color-lightGrey2); }
+.ev-judges > .ev-small { grid-column: 1 / -1; }
 
 /* Pull request lists: rows on hairlines, Light Grey 1 when chosen or hovered. */
 .bt-input.ev-search { block-size: 40px; font-size: 14px; }
@@ -257,6 +260,8 @@ label.ev-pull:hover, .ev-pull[data-on] { background: var(--color-lightGrey1); }
 .ev-tone.setup { background: var(--color-lightGrey2); }
 .ev-tone.tests { background: var(--color-darkGrey1); color: var(--color-white); }
 .ev-tone.judge { background: var(--color-lightGold); }
+/* The judges' review on a finished attempt: a 16px Light Gold square (the judges are gold) holding their verdict's glyph. */
+.ev-judge-mark { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; inline-size: 16px; block-size: 16px; background: var(--color-lightGold); color: var(--color-black); font: 400 10px/1 var(--geist-mono); }
 .ev-tone.failed { background: var(--color-lightGrey1); color: var(--color-darkGrey2); }
 .ev-tone.invalid { background: var(--color-lightGold); color: var(--color-darkGrey1); }
 .ev-tone.idle { background: var(--color-white); border: 1px dashed var(--color-lightGrey3); color: var(--color-darkGrey2); }

@@ -974,6 +974,10 @@ class PipelineTest(unittest.TestCase):
         panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
         self.assertEqual(pipeline.resumed_judge({"judge": panel.as_dict()}, None), "default")
         self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")]).as_dict()}, None), "a")
+        # How the run asked for them: the judges that can run here, even when that left out the chair.
+        self.assertEqual(pipeline.resumed_judge({"judge": Panel([Judge(model="a")], choice="default").as_dict()}, None),
+                         "default")
+        self.assertEqual(pipeline.resumed_judge({"judge": panel.only("b").as_dict()}, None), "b")
 
     def job(self, d, request):
         return pipeline.new_job(request, [baseten_model()], None, name="r1", jobs_dir=Path(d) / "jobs",
@@ -1250,8 +1254,8 @@ class PipelineTest(unittest.TestCase):
             cli.main(["run", "--resume", str(jobs / "r1")])
             self.assertEqual(tries("r1"), 1)  # a run from before tries were recorded had one
 
-    def test_judges_grade_a_run_only_when_asked_for_and_a_resume_keeps_them(self):
-        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"))
+    def test_judges_review_a_run_by_default_and_a_resume_keeps_the_switch(self):
+        panel = Panel([Judge(model="a"), Judge(model="b")], Judge(model="b"), "default")
 
         def preflight(keys, choice, *_):
             return [baseten_model()], None if choice == "none" else panel if choice == "default" else panel.only(choice)
@@ -1265,13 +1269,15 @@ class PipelineTest(unittest.TestCase):
             def run(*argv):
                 cli.main(["run", *argv, "--jobs", str(jobs)])
                 return checked.call_args.args[1], execute.call_args.args[2].judge
-            self.assertEqual(run("o/r", "--name", "tests"), ("none", None))  # the default: the hidden tests alone
-            self.assertEqual(run("o/r", "--name", "panel", "--judge"), ("default", panel))  # today's panel and chair
+            self.assertEqual(run("o/r", "--name", "panel"), ("default", panel))  # the default: the judges here
+            self.assertEqual(run("o/r", "--name", "tests", "--judge", "none"), ("none", None))  # the hidden tests alone
             self.assertEqual(run("o/r", "--name", "one", "--judge", "a")[0], "a")
             self.assertIsNone(pipeline.Job(jobs / "tests").meta["judge"])
             self.assertEqual(pipeline.Job(jobs / "panel").meta["judge"]["chair"]["model"], "b")
+            self.assertEqual(pipeline.Job(jobs / "panel").meta["judge"]["choice"], "default")
             self.assertEqual(run("--resume", str(jobs / "tests")), ("none", None))  # stays tests only
             self.assertEqual(run("--resume", str(jobs / "panel")), ("default", panel))  # keeps its judges
+            self.assertEqual(run("--resume", str(jobs / "one"))[0], "a")  # and its one judge
             self.assertEqual(run("--resume", str(jobs / "tests"), "--judge")[0], "default")
             with self.assertRaisesRegex(SystemExit, "at least 1"):
                 cli.main(["run", "o/r", "--jobs", str(jobs), "--name", "r3", "--tries", "0"])
@@ -1400,8 +1406,9 @@ class AppTest(unittest.TestCase):
                 run = page.describe(job)
                 board = page.board(run)
         self.assertEqual(run["title"], "Quick sample")
-        self.assertEqual(run["again"], {"quick": True, "models": ["m"]})
+        self.assertEqual(run["again"], {"quick": True, "models": ["m"], "judges": False})
         rows = {r["id"]: r for r in board["rows"]}
+        self.assertEqual((rows["o__r-2"]["cells"][0]["judge"], rows["o__r-2"]["cells"][0]["judge_reason"]), ("pass", None))
         self.assertEqual(rows["o__r-1"]["title"], "Fix 1")
         self.assertEqual(rows["o__r-1"]["cells"][0]["stage"], "agent")
         self.assertEqual((rows["o__r-2"]["cells"][0]["stage"], rows["o__r-2"]["cells"][0]["seconds"]), ("solved", 125))
@@ -1414,7 +1421,9 @@ class AppTest(unittest.TestCase):
         latest = {"request": {"repos": ["o/my-repo"], "limit": 10, "setup": "npm ci", "test": "npx t"}, "models": models,
                   "candidates": ["o__my-repo-1", "o__my-repo-2", "o__my-repo-3"], "tasks": ["o__my-repo-3", "o__my-repo-1"]}
         # the PRs the check kept, not the repository's latest merges, which move on
-        self.assertEqual(app.again(latest), {"pulls": {"o/my-repo": [3, 1]}, "setup": "npm ci", "test": "npx t", "models": ["a", "b"]})
+        self.assertEqual(app.again(latest), {"pulls": {"o/my-repo": [3, 1]}, "setup": "npm ci", "test": "npx t", "models": ["a", "b"],
+                                             "judges": False})
+        self.assertTrue(app.again({**latest, "judge": Panel([Judge(model="j")]).as_dict()})["judges"])  # the switch as it was
         stopped = {"request": {"pulls": {"o/r": [5], "x/y": [2]}}, "candidates": ["o__r-5", "x__y-2"], "tasks": [], "models": []}
         self.assertEqual(app.again(stopped)["pulls"], {"o/r": [5], "x/y": [2]})  # stopped while checking
         self.assertIsNone(app.again({"request": {"repos": ["o/r"]}, "models": models}))  # stopped before it found any
@@ -1423,7 +1432,7 @@ class AppTest(unittest.TestCase):
     def test_run_again_puts_the_standard_model_in_place_of_a_retired_fast_one(self):
         fast = [{"key": "claude-opus"}, {"key": "deepseek-v4.1-flash-1017-fast"}, {"key": "glm-5.3-fast"}, {"key": "glm-5.3"}]
         self.assertEqual(app.again({"request": {"quick": True}, "models": fast}),
-                         {"quick": True, "models": ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]})
+                         {"quick": True, "models": ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"], "judges": False})
 
     def test_a_run_with_a_retired_model_is_not_resumed(self):
         page = app.App(Path("/nonexistent"))
@@ -1545,7 +1554,7 @@ class AppTest(unittest.TestCase):
             (jobs / "mine" / "report.json").write_text("{}")
             page = app.App(jobs)
             with mock.patch.object(page, "checks", return_value={"sandboxes": True}), \
-                    mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
+                    mock.patch.object(app.config, "load", return_value=({}, Panel([]))):
                 seen = {u: sorted(r["id"] for r in page.state(user=u)["runs"]) for u in ("a@x.co", "b@x.co", None)}
             # Signed in: only their own runs; "open" has no owner recorded, so it is no one's. Locally: all but theirs.
             self.assertEqual(seen, {"a@x.co": ["mine"], "b@x.co": [], None: ["open"]})
@@ -1710,26 +1719,32 @@ class AppTest(unittest.TestCase):
         self.assertEqual(access, {"owner": "a@x.co", "private": True})
         spawn.assert_called_once()
 
-    def test_the_page_starts_runs_graded_on_their_hidden_tests_alone(self):
-        with tempfile.TemporaryDirectory() as d:
-            page = app.App(Path(d))
-            checks = {"sandboxes": True, "gh": True}
-            with mock.patch.object(page, "state", return_value={"busy": False, "runs": [], "checks": checks}), \
-                    mock.patch.object(page, "spawn") as spawn, \
-                    mock.patch.object(app.pipeline, "preflight") as preflight, \
-                    mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
-                self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"], "judge": "default"}))
-        self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys only: no judge is asked
-        spawn.assert_called_once()
-        self.assertFalse([a for a in spawn.call_args.args[1] if a.startswith("--judge")])  # nor turned on by the form
+    def test_the_page_starts_runs_with_its_llm_judges_switch(self):
+        def started(form: dict, judges_on: bool = True) -> list[str]:
+            with tempfile.TemporaryDirectory() as d:
+                page = app.App(Path(d))
+                state = {"busy": False, "runs": [], "checks": {"sandboxes": True, "gh": True},
+                         "judges": {"on": judges_on, "cost_per_attempt": 0.1}}
+                with mock.patch.object(page, "state", return_value=state), \
+                        mock.patch.object(page, "spawn") as spawn, \
+                        mock.patch.object(app.pipeline, "preflight") as preflight, \
+                        mock.patch.object(page, "repo_info", return_value={"repo": "o/a", "defaults": True}):
+                    self.assertIn("id", page.start({"pulls": {"o/a": [1]}, "models": ["m"], **form}))
+            self.assertEqual(preflight.call_args.args[1], "none")  # the models' keys; the run picks its judges
+            return [a for a in spawn.call_args.args[1] if a in ("--judge", "none")]
+        self.assertEqual(started({}), [])  # on by default: the run's own default, the judges that can run
+        self.assertEqual(started({"judges": True}), [])
+        self.assertEqual(started({"judges": False}), ["--judge", "none"])  # off: the hidden tests alone
+        self.assertEqual(started({"judges": True}, judges_on=False), ["--judge", "none"])  # no judge key here
 
     def test_judges_are_asked_only_when_a_run_wants_them(self):
-        panel = SimpleNamespace(problem=mock.Mock(return_value="the judge needs KEY"))
+        panel = mock.Mock(spec=Panel)
         with mock.patch.object(app.pipeline.config, "load", return_value=({}, panel)):
-            self.assertEqual(app.pipeline.preflight([]), ([], None))  # the hidden tests alone decide
-            panel.problem.assert_not_called()
-            with self.assertRaises(SystemExit):  # asked for, a judge that can't run stops the run before it starts
-                app.pipeline.preflight([], "default")
+            self.assertEqual(app.pipeline.preflight([], "none"), ([], None))  # the hidden tests alone decide
+            panel.available.assert_not_called()
+            panel.only.return_value.problem.return_value = "the judge needs KEY"
+            with self.assertRaises(SystemExit):  # named, a judge that can't run stops the run before it starts
+                app.pipeline.preflight([], "a")
 
     @staticmethod
     def add_run(jobs: Path, run_id: str, owner: str | None, phase: str = "running", cost: float = 0.0,
@@ -1748,7 +1763,7 @@ class AppTest(unittest.TestCase):
 
     def hosted_state(self, page: app.App, user: str | None) -> dict:
         with mock.patch.object(page, "checks", return_value={"sandboxes": True}), mock.patch.object(app, "alive", return_value=True), \
-                mock.patch.object(app.config, "load", return_value=({}, SimpleNamespace(problem=lambda: None))):
+                mock.patch.object(app.config, "load", return_value=({}, Panel([]))):
             return page.state(user=user)
 
     def test_how_many_runs_go_at_once_in_all_and_for_one_person(self):
@@ -2359,14 +2374,136 @@ class JudgeTest(unittest.TestCase):
             problem = Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY").problem()
         self.assertIn("can't use the judge model m", problem)
 
-    def test_solved_needs_the_tests_and_the_judges(self):
-        cases = [(True, {"verdict": "pass"}, ("solved", None)), (True, {"verdict": "fail"}, ("failed", None)),
-                 (False, {"verdict": "pass"}, ("failed", None)), (True, {"error": "HTTP 500"}, ("invalid", "judge-error"))]
-        for passed, verdict, expected in cases:
+    def test_the_judges_review_an_attempt_and_never_decide_it(self):
+        for verdict in ({"verdict": "pass"}, {"verdict": "fail", "reason": "gamed"}, {"error": "HTTP 500"}):
             with tempfile.TemporaryDirectory() as d, mock.patch.object(runner.judge_mod, "grade", return_value=dict(verdict)):
-                _, outcome, reason = runner.judge_attempt(Panel([self.judge]), self.task, "diff", {"passed": passed}, "", Path(d))
-                self.assertTrue((Path(d) / "judge.json").is_file())
-            self.assertEqual((outcome, reason), expected, (passed, verdict))
+                saved = runner.judge_attempt(Panel([self.judge]), self.task, "diff", {"passed": True}, "", Path(d))
+                self.assertEqual(json.loads((Path(d) / "judge.json").read_text())["seconds"], saved["seconds"])
+            self.assertEqual({k: saved[k] for k in verdict}, verdict)  # the verdict only: no outcome comes back
+
+    def test_a_review_lists_its_problems_before_its_verdict(self):
+        for prompt in (judge.SYSTEM, judge.CHAIR):
+            self.assertLess(prompt.index("First ask what is wrong"), prompt.index("Only then"))
+            self.assertIn('{"problems": [', prompt)
+        reply = ('{"problems": ["It never handles the empty page.", "", "Edits an unrelated file."], '
+                 '"verdict": "fail", "reason": "Misses the empty case."}')
+        self.assertEqual(judge.answer(judge.parse(reply)),
+                         {"verdict": "fail", "reason": "Misses the empty case.",
+                          "problems": ["It never handles the empty page.", "Edits an unrelated file."]})
+        self.assertEqual(judge.answer(judge.parse('{"problems": [], "verdict": "pass", "reason": "ok"}'))["problems"], [])
+        many = json.dumps({"problems": ["x" * 999] * 20, "verdict": "fail", "reason": "r"})
+        self.assertEqual([len(p) for p in judge.parse(many)["problems"]], [judge.MAX_PROBLEM_CHARS] * judge.MAX_PROBLEMS)
+        self.assertNotIn("problems", judge.answer(judge.parse('{"verdict": "pass", "reason": "ok"}')))  # a screen's
+        with mock_env(PR_EVAL_TEST_KEY="k"), \
+                mock.patch.object(judge.urllib.request, "urlopen", return_value=chat_reply(reply)):
+            graded = judge.ask_chat(Judge(model="m", base_url="http://x", api_key_env="PR_EVAL_TEST_KEY"), "s", "u")
+        self.assertEqual((graded["verdict"], len(graded["problems"])), ("fail", 2))
+
+
+class JudgesHereTest(unittest.TestCase):
+    """The judges a run gets by default: every configured judge whose provider has a key here, on the page and in
+    `pr-eval run` alike. The chair goes with its key; with no judge key the run is scored on its tests alone."""
+    KEYS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "BASETEN_API_KEY")
+    panel = config.load()[1]
+
+    @contextlib.contextmanager
+    def keys(self, *names, claude: str | None = "/bin/claude", problem=None):
+        env = {k: v for k, v in os.environ.items() if k not in self.KEYS} | {n: "k" for n in names}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(config, "keychain", return_value=None), \
+                mock.patch.object(config.shutil, "which", return_value=claude), \
+                mock.patch.object(Judge, "problem", autospec=True, side_effect=problem or (lambda j: None)), \
+                contextlib.redirect_stdout(io.StringIO()) as said:
+            yield said
+
+    def test_every_judge_and_the_chair_review_by_default_with_every_key(self):
+        with self.keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BASETEN_API_KEY") as said:
+            _, here = pipeline.preflight([])
+            offer = pipeline.judges_offer(self.panel)
+        self.assertEqual((here.name, here.choice), (self.panel.name, "default"))
+        self.assertEqual(said.getvalue(), "")  # nobody left out
+        self.assertEqual((offer["on"], offer["judges"], offer["chair"], offer["left_out"]),
+                         (True, [j.name for j in self.panel.judges], self.panel.chair.name, []))
+        self.assertIn(f"{self.panel.chair.name} has the final word", offer["note"])
+
+    def test_only_a_claude_key_gives_the_claude_judge_alone(self):
+        with self.keys("ANTHROPIC_API_KEY") as said:
+            _, here = pipeline.preflight([])
+            offer = pipeline.judges_offer(self.panel)
+            hosted = pipeline.judges_offer(self.panel, hosted=True)
+        self.assertEqual(([j.provider for j in here.judges], here.chair, here.choice), (["anthropic"], None, "default"))
+        self.assertIn("left out", said.getvalue())
+        self.assertEqual((offer["on"], offer["judges"], offer["chair"]), (True, [here.judges[0].name], None))
+        self.assertIn("(no OPENAI_API_KEY)", offer["note"])
+        self.assertNotIn("_KEY", hosted["note"])  # the hosted page never names a variable
+        with self.keys("BASETEN_API_KEY"):  # the chair alone is one judge: asked once, not twice
+            _, here = pipeline.preflight([])
+        self.assertEqual(([j.model for j in here.judges], here.chair), ([self.panel.chair.model], None))
+
+    def test_no_judge_key_turns_the_judges_off_and_says_why(self):
+        with self.keys() as said:
+            self.assertEqual(pipeline.preflight([]), ([], None))
+            offer = pipeline.judges_offer(self.panel)
+            hosted = pipeline.judges_offer(self.panel, hosted=True)
+        self.assertIn("tests alone", said.getvalue())
+        self.assertEqual((offer["on"], offer["judges"], offer["cost_per_attempt"]), (False, [], 0))
+        self.assertIn("ANTHROPIC_API_KEY", offer["note"])
+        self.assertNotIn("_KEY", hosted["note"])
+        with self.keys("CLAUDE_CODE_OAUTH_TOKEN", claude=None):  # a Claude key without Claude Code
+            self.assertIn("Claude Code", pipeline.judges_offer(self.panel)["note"])
+
+    def test_judge_none_and_a_named_judge(self):
+        with self.keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BASETEN_API_KEY"):
+            self.assertEqual(pipeline.preflight([], "none"), ([], None))
+            _, one = pipeline.preflight([], self.panel.judges[1].model)
+        self.assertEqual(([j.model for j in one.judges], one.as_dict()["choice"]),
+                         ([self.panel.judges[1].model], self.panel.judges[1].model))
+        with self.keys("ANTHROPIC_API_KEY", problem=lambda j: "no key" if j.provider != "anthropic" else None), \
+                self.assertRaises(SystemExit):
+            pipeline.preflight([], self.panel.judges[1].model)  # named, it must run
+
+    def test_a_key_that_cannot_use_its_judge_leaves_that_judge_out(self):
+        cannot = lambda j: "can't use the judge model" if j.api_key_env == "OPENAI_API_KEY" else None  # noqa: E731
+        with self.keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BASETEN_API_KEY", problem=cannot) as said:
+            _, here = pipeline.preflight([])
+        self.assertNotIn("OPENAI_API_KEY", [j.api_key_env for j in here.judges])
+        self.assertEqual(here.chair.model, self.panel.chair.model)
+        self.assertIn("left out", said.getvalue())
+
+    def test_the_estimate_prices_each_answer_of_one_review(self):
+        with self.keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BASETEN_API_KEY"):
+            guessed = pipeline.judges_offer(self.panel)["cost_per_attempt"]
+            measured = pipeline.judges_offer(self.panel, measured={j.model: 0.01 for j in self.panel.judges})
+        answers = len(self.panel.judges) + 1  # and the chair's
+        self.assertAlmostEqual(guessed, pipeline.JUDGE_ANSWER_COST * answers)
+        self.assertAlmostEqual(measured["cost_per_attempt"], 0.01 * answers)
+
+    def test_a_report_keeps_what_each_judges_answers_cost_and_the_page_estimates_from_it(self):
+        trials = [{"judge": {"panel": [{"model": "a", "cost_usd": 0.02}, {"model": "b", "cost_usd": None}],
+                             "chair": {"model": "a", "cost_usd": 0.04}}}, {"judge": None}, {}]
+        self.assertEqual(report.judging(trials), {"a": {"answers": 2, "cost_usd": 0.06}})
+        with tempfile.TemporaryDirectory() as d:
+            for run_id, data in (("new", {"judging": {"a": {"answers": 2, "cost_usd": 0.06}}}),
+                                 ("old", {"judging": {"a": {"answers": 1, "cost_usd": 1.0}, "b": {"answers": 1, "cost_usd": 0.5}}})):
+                (Path(d) / run_id).mkdir()
+                (Path(d) / run_id / "report.json").write_text(json.dumps(data))
+            _, judging = app.App(Path(d)).measured([{"id": "new"}, {"id": "old"}])  # newest first
+        self.assertEqual({k: round(v, 4) for k, v in judging.items()}, {"a": 0.03, "b": 0.5})
+
+    def test_the_spending_estimate_includes_the_judges_when_they_are_on(self):
+        state = {"models": [{"key": "m", "cost_per_try": 1.0, "solve_rate": 1.0}], "spend": {"cap": 10.5, "spent": 0},
+                 "spent_total": 0, "judges": {"cost_per_attempt": 0.1}}
+        with mock.patch.object(app, "SPEND_PER_PERSON", 100), mock.patch.object(app, "SPEND_TOTAL", 0):
+            self.assertIsNone(app.App.over_budget(state, ["m"], 10, "", "a@x.co"))  # $10
+            self.assertIn("about $11.00", app.App.over_budget(state, ["m"], 10, "", "a@x.co", judged=True))
+
+    def test_the_board_shows_the_judges_review_beside_the_tests(self):
+        def judged(verdict):
+            return app.cell("m", 1, {"outcome": "solved", "tests": {"passed": True}, "judge": verdict})
+        self.assertEqual({k: judged({"verdict": "fail", "reason": "gamed"})[k] for k in ("stage", "judge", "judge_reason")},
+                         {"stage": "solved", "judge": "fail", "judge_reason": "gamed"})
+        self.assertEqual(judged({"error": "HTTP 500"})["judge"], "error")
+        self.assertNotIn("judge", judged(None))  # a run without judges
+        self.assertNotIn("judge", judged({"verdict": "fail", "skipped": True}))  # nothing to review
 
 
 class PanelTest(unittest.TestCase):
@@ -2392,6 +2529,29 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(graded["chair"]["label"], "C")
         self.assertIn("- B: fail. gamed", asked[-1])  # the chair sees the judges' reasons
         self.assertEqual(graded["model"], "a+b+c>c")
+
+    def test_the_chair_reads_each_judges_problems_and_gives_its_own(self):
+        votes = {"a": {"verdict": "pass", "reason": "fine", "problems": []},
+                 "b": {"verdict": "fail", "reason": "gamed", "problems": ["Hardcodes the expected value."]},
+                 "c": {"verdict": "pass", "reason": "ok", "problems": []}}
+        graded, asked = self.grade(votes, {"verdict": "fail", "reason": "B is right.", "problems": ["Hardcoded."]})
+        self.assertIn("- B: fail. gamed\n  - problem: Hardcodes the expected value.", asked[-1])
+        self.assertEqual(graded["problems"], ["Hardcoded."])
+
+    def test_without_a_chair_the_judges_decide_together(self):
+        def grade(votes: dict) -> dict:
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(judge, "ask", side_effect=lambda j, s, u: dict(votes[j.model])):
+                return judge.grade(Panel([Judge(model=m, label=m.upper()) for m in votes]), judged_task(d), "diff",
+                                   {"passed": True}, "")
+        one = grade({"a": {"verdict": "fail", "reason": "incomplete", "problems": ["Half done."]}})
+        self.assertEqual((one["verdict"], one["reason"], one["problems"]), ("fail", "incomplete", ["Half done."]))
+        both = grade({"a": {"verdict": "pass", "reason": "fine"}, "b": {"verdict": "pass", "reason": "ok"}})
+        self.assertEqual((both["verdict"], both["reason"]), ("pass", "All 2 judges agreed; fine"))
+        split = grade({"a": {"verdict": "pass", "reason": "fine", "problems": []},
+                       "b": {"verdict": "fail", "reason": "gamed", "problems": ["Hardcodes it."]}})
+        self.assertEqual((split["verdict"], split["reason"], split["problems"]),
+                         ("fail", "The judges split; B said no: gamed", ["Hardcodes it."]))  # a pass needs them all
+        self.assertNotIn("chair", split)
 
     def test_a_judge_that_fails_to_answer_leaves_the_rest_of_the_panel(self):
         votes = {"a": {"verdict": "pass", "reason": "fine"}, "b": {"error": "HTTP 503"}, "c": {"verdict": "pass", "reason": "ok"}}

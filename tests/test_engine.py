@@ -76,8 +76,8 @@ def sandboxes(prepare=None, create=None, tests=None):
         yield
 
 
-def run_one(d: Path, the_task=None, tries: int = 1) -> dict:
-    trial = runner.trial_runner([MODEL], runner.Settings(), "run-one", tries)
+def run_one(d: Path, the_task=None, tries: int = 1, judge_panel=None) -> dict:
+    trial = runner.trial_runner([MODEL], runner.Settings(judge=judge_panel), "run-one", tries)
     the_task = the_task or task(d)
     return trial((the_task, MODEL, 1, d / "trials" / runner.trial_name(the_task, MODEL, 1)))
 
@@ -225,6 +225,34 @@ class GradingTests(unittest.TestCase):
                 trial = runner.trial_runner([MODEL], runner.Settings(judge=panel), "run-one")
                 result = trial((the_task, MODEL, 1, Path(d) / "trials" / runner.trial_name(the_task, MODEL, 1)))
             self.assertEqual((result["outcome"], (result.get("judge") or {}).get("verdict")), ("failed", verdict))
+
+    def test_the_tests_decide_solved_whatever_the_judges_say(self):
+        """On by default, the judges review each attempt beside its tests: their verdict, or their failing to
+        give one, never changes whether it is solved."""
+        panel = config.Panel([config.Judge(model="j")])
+        for verdict in ({"verdict": "fail", "reason": "gamed"}, {"error": "HTTP 500"}, {"verdict": "pass", "reason": "ok"}):
+            with tempfile.TemporaryDirectory() as d, sandboxes(), \
+                    mock.patch.object(judge, "grade", return_value=dict(verdict)) as graded:
+                result = run_one(Path(d), judge_panel=panel)
+                saved = json.loads((Path(d) / "trials" / result["trial"] / "result.json").read_text())
+            graded.assert_called_once()
+            self.assertEqual((saved["outcome"], saved["invalid_reason"]), ("solved", None), verdict)
+            self.assertEqual({k: saved["judge"][k] for k in verdict}, verdict)  # shown beside the tests
+
+    def test_the_judges_review_the_try_that_counts_not_the_ones_tried_again(self):
+        panel = config.Panel([config.Judge(model="j")])
+        for passing, tries, judged_try in (({2}, 3, 2), (set(), 2, 2), (set(), 1, 1)):
+            runs = []
+
+            def tests(name, *_):
+                runs.append(name)
+                passed = len(runs) in passing
+                return {"passed": passed, "timed_out": False, "output": "", "summary": "1 passed" if passed else "1 failed"}
+            with tempfile.TemporaryDirectory() as d, sandboxes(tests=tests), \
+                    mock.patch.object(judge, "grade", return_value={"verdict": "pass", "reason": "ok"}) as graded:
+                result = run_one(Path(d), tries=tries, judge_panel=panel)
+            self.assertEqual((graded.call_count, result["try"], result["judge"]["verdict"]), (1, judged_try, "pass"))
+            self.assertEqual([t["judge"] for t in result.get("earlier_tries", [])], [None] * (judged_try - 1))
 
 
 class TriesTests(unittest.TestCase):
