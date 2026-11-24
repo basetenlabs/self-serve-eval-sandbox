@@ -23,9 +23,10 @@ type Side = { m: Model; fill: string; ink: string };
  * The chip names the better of the best open model and the closed one, who serves it and by how much
  * ("Baseten's DeepSeek V4.1 Flash is 71% cheaper"); the line under it says what the chip leaves out.
  */
-export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, tries = 1, onOpen, sample }: {
+export function HeadToHead({ t, S, ranked, colors, trials, judgesDecide, attempts, tries = 1, onOpen, sample }: {
   t: Takeaway; S: Record<string, Summary>; ranked: Model[]; colors: Record<string, Swatch>; trials: Trial[];
-  judged: boolean; attempts: number; tries?: number; onOpen?: (taskId: string) => void; sample?: string | null;
+  /** Solved also needed the judges' pass: runs from before they only reviewed. */
+  judgesDecide: boolean; attempts: number; tries?: number; onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   const grid = !!t.pairs?.n;
   const scored = ranked.filter((m) => S[m.key]?.valid);
@@ -54,7 +55,7 @@ export function HeadToHead({ t, S, ranked, colors, trials, judged, attempts, tri
       }
     >
       <div>
-        {grid && <Solved p={t.pairs!} sides={sides} by={solvedBy(trials)} S={S} judged={judged} attempts={attempts} tries={tries} onOpen={onOpen} sample={sample} />}
+        {grid && <Solved p={t.pairs!} sides={sides} by={solvedBy(trials)} S={S} judgesDecide={judgesDecide} attempts={attempts} tries={tries} onOpen={onOpen} sample={sample} />}
         {metrics.map((metric) => {
           const values = sides.map((s) => S[s.m.key]?.[metric.key] ?? null);
           const max = metric.max ?? (Math.max(...values.map((v) => v ?? 0)) || 1);
@@ -110,8 +111,8 @@ const CARDS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "
 
 /** What each model solved on the headline's PRs, big, with its cost per solved task. The solve rate,
  *  its 95% range and each PR's result stay in a details row under it. */
-function Solved({ p, sides: shown, by, S, judged, attempts, tries, onOpen, sample }: {
-  p: Paired; sides: Side[]; by: Map<string, Map<string, boolean>>; S: Record<string, Summary>; judged: boolean; attempts: number; tries: number;
+function Solved({ p, sides: shown, by, S, judgesDecide, attempts, tries, onOpen, sample }: {
+  p: Paired; sides: Side[]; by: Map<string, Map<string, boolean>>; S: Record<string, Summary>; judgesDecide: boolean; attempts: number; tries: number;
   onOpen?: (taskId: string) => void; sample?: string | null;
 }) {
   // How to read the rates, said only once someone opens them.
@@ -138,7 +139,7 @@ function Solved({ p, sides: shown, by, S, judged, attempts, tries, onOpen, sampl
         <h3 className="text-[20px] leading-7 font-normal">Solved</h3>
         <div className="label-mono mt-0.5 text-muted-foreground">The same {plural(p.n, "PR")} · higher is better</div>
         <p className="mt-3 max-w-[34ch] text-[14px] leading-5 text-muted-foreground">
-          Solved = the PR's own hidden tests pass{judged ? " and the judges agree" : ""}. The model never sees the tests or the merged diff.
+          Solved = the PR's own hidden tests pass{judgesDecide ? " and the judges agree" : ""}. The model never sees the tests or the merged diff.
           {attempts > 1 ? " A PR counts as solved when at least half its attempts were." : ""}
         </p>
       </div>

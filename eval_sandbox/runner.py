@@ -7,7 +7,8 @@ reaches through one socket and that calls the model provider and nothing else.
 The agent's patch is saved and its entire sandbox deleted. A second sandbox,
 set up the same way while the agent works, then gets the patch and the hidden
 tests. The reference patch is used only by separate validation sandboxes and,
-on a run with judges, the host-side judges. On a task still being checked, an
+on a run with judges, the host-side judges, who review a change beside its tests
+but never decide whether it is solved. On a task still being checked, an
 attempt's own sandbox is set up alongside the check, and its agent starts only
 once the check passes.
 """
@@ -771,9 +772,11 @@ LOGS = {"workspace-error": "setup.log", "setup-error": "setup.log", "setup-timeo
 
 
 def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: str, settings: Settings,
-              ready: Ready | None = None) -> dict:
-    """One attempt, in a sandbox `ready` from prepare_trial or one of its own.
+              ready: Ready | None = None, tries: int = 1) -> dict:
+    """One attempt, in a sandbox `ready` from prepare_trial or one of its own, as try `try` of `tries`.
 
+    The hidden tests alone decide whether it is solved. On a run with judges they review the change
+    beside the tests, unless the try failed and another follows it from scratch (trial_runner).
     An attempt that isn't scored says why (causes.py): `step`, `cause` and `log`, and `transient`
     when trying it again could go differently.
     """
@@ -941,22 +944,24 @@ def run_trial(task: Task, model: Model, attempt: int, trial_dir: Path, run_id: s
 
     if result.get("cleanup_error"):
         return finish("invalid", "sandbox-cleanup-error", log="error.log")
-    if not patch.strip():
-        if settings.judge is not None:  # a run with judges says why they weren't asked
-            result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
-        return finish("failed")
+    outcome = "solved" if patch.strip() and tests["passed"] else "failed"  # the hidden tests alone decide
     if settings.judge is None:
-        return finish("solved" if tests["passed"] else "failed")
+        return finish(outcome)
+    if not patch.strip():  # a run with judges says why they weren't asked
+        result["judge"] = {"verdict": "fail", "reason": "The agent made no changes.", "skipped": True}
+        return finish(outcome)
+    if outcome == "failed" and result["try"] < tries:  # tried again from scratch: the judges review the last try
+        return finish(outcome)
     stage(live, "judge", **since, diff=result["diff"], tests_passed=tests["passed"])
-    result["judge"], outcome, reason = judge_attempt(settings.judge, task, patch, tests, test_output, trial_dir)
-    return finish(outcome, reason)
+    result["judge"] = judge_attempt(settings.judge, task, patch, tests, test_output, trial_dir)
+    return finish(outcome)
 
 
-def judge_attempt(judge: Panel, task: Task, patch: str, tests: dict, test_output: str,
-                  trial_dir: Path) -> tuple[dict, str, str | None]:
-    """Grade one attempt and save the verdict. Returns (verdict, outcome, invalid reason).
+def judge_attempt(judge: Panel, task: Task, patch: str, tests: dict, test_output: str, trial_dir: Path) -> dict:
+    """The judges' review of one attempt, saved as judge.json and charged to the run: their verdict, reason
+    and problems, or the error that kept them from giving one.
 
-    Solved needs both: the hidden tests passed and the judges' final verdict was pass.
+    A review only, shown beside the tests: neither the verdict nor an error changes the attempt's outcome.
     """
     started = time.monotonic()
     verdict = judge_mod.grade(judge, task, patch, tests, test_output)
@@ -965,9 +970,7 @@ def judge_attempt(judge: Panel, task: Task, patch: str, tests: dict, test_output
         if vote.get("cost_usd") is not None or vote.get("input_tokens") is not None:  # it answered, so it was paid
             charge(trial_dir, "judge", vote.get("model") or "", vote.get("cost_usd"))
     write_json(trial_dir / "judge.json", verdict)
-    if verdict.get("error"):
-        return verdict, "invalid", "judge-error"
-    return verdict, ("solved" if tests["passed"] and verdict["verdict"] == "pass" else "failed"), None
+    return verdict
 
 
 def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> dict:
@@ -1180,7 +1183,7 @@ def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: in
     """Runs one pending trial within its model's own limit, and once more if it was lost to something
     passing (causes.transient). A broken trial is saved, never raised.
 
-    A try the model fails (tests fail, judges on a run with them say no, it gave up or ran out of time) is
+    A try the model fails (its tests fail, or it gave up or ran out of time) is
     followed by another from scratch, up to `tries` in all, the same for every model; the first that solves
     it ends the attempt. A try lost to infrastructure isn't one of them: it keeps the handling above."""
     limits = {m.key: threading.Semaphore(m.max_concurrent or settings.concurrency) for m in models}
@@ -1188,7 +1191,7 @@ def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: in
     def once(job, ready: Ready | None) -> dict:
         task, model, attempt, path = job
         try:
-            return run_trial(task, model, attempt, path, run_id, settings, ready)
+            return run_trial(task, model, attempt, path, run_id, settings, ready, tries)
         except Exception as exc:  # noqa: BLE001 - one broken trial must not stop the run
             result = {"trial": trial_name(task, model, attempt), "task_id": task.id, "model": model.key,
                       "attempt": attempt, "outcome": "invalid", "invalid_reason": "runner-error", "step": "runner",
@@ -1454,11 +1457,13 @@ def cleanup(run_id: str) -> list[str]:
 
 def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = DEFAULT_CONCURRENCY,
             force: bool = False) -> list[dict]:
-    """Grade finished attempts again with these judges, without re-running any agent.
+    """Review finished attempts again with these judges, without re-running any agent.
 
-    Skips attempts already graded by the same judges and prompt version unless
+    Skips attempts already reviewed by the same judges and prompt version unless
     `force`. Attempts that never reached the judge (setup, provider or verifier errors,
-    empty diffs) are left as they are.
+    empty diffs) are left as they are. The hidden tests decide each outcome: an attempt
+    graded when the judges' verdict counted too, or made invalid by their error, gets the
+    outcome its tests give.
     """
     def one(trial_dir: Path) -> dict | None:
         path = trial_dir / "result.json"
@@ -1472,10 +1477,14 @@ def rejudge(job_dir: Path, tasks_dir: Path, judge: Panel, *, concurrency: int = 
         if not force and old.get("model") == judge.name and old.get("prompt_version") == judge_mod.PROMPT_VERSION:
             return None
         before = result["outcome"]
-        verdict, result["outcome"], result["invalid_reason"] = judge_attempt(
+        verdict = judge_attempt(
             judge, load_task(tasks_dir / result["task_id"]), patch_path.read_text(errors="replace"), result["tests"],
             (trial_dir / "verifier.log").read_text(errors="replace"), trial_dir)
         result["judge"] = verdict
+        result["outcome"] = "solved" if result["tests"].get("passed") else "failed"
+        result["invalid_reason"] = None
+        for key in ("step", "cause", "log", "transient"):  # what an invalid attempt said of itself
+            result.pop(key, None)
         write_json(path, result)
         return {"trial": result["trial"], "before": before, "after": result["outcome"],
                 "reason": verdict.get("reason") or verdict.get("error")}

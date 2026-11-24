@@ -134,7 +134,7 @@ class App:
     def state(self, viewing: str = "", user: str | None = None) -> dict:
         for child in list(self.children.values()):
             child.poll()
-        catalog, _ = config.load(self.models_config)
+        catalog, panel = config.load(self.models_config)
         everyone = self.everyone()
         admin = self.admin(user)
         runs = []
@@ -152,12 +152,15 @@ class App:
         for i, run in enumerate(runs):  # the board: every run going, the latest one and the one on screen
             if i == 0 or run["phase"] in pipeline.ACTIVE or run["id"] == viewing:
                 run["board"] = self.board(run)
-        estimates = borrowed(self.estimates(runs), catalog)
+        found, judging = self.measured(runs)
+        estimates = borrowed(found, catalog)
         models = [{"key": m.key, "label": m.label, "kind": m.kind, "provider": m.provider, "maker": m.maker, "model": m.model,
                    "missing": config.missing_credential(m), "default": m.key in pipeline.DEFAULT_MODELS,
                    **estimates.get(m.key, {})} for m in catalog.values()]
         return {"checks": self.checks(), "models": models, "runs": runs,
                 "quick": quick_sample(), "tries": pipeline.DEFAULT_TRIES,
+                # The LLM judges switch: who would review a run started now, as `pr-eval run` would pick them.
+                "judges": pipeline.judges_offer(panel, hosted=hosted(), measured=judging),
                 "max_limit": MAX_LIMIT,
                 # Which PRs can be tasks, for the page's guidance: a repository's list keeps PRs up to `lines`,
                 # a PR named by its link may go up to `pasted_lines`.
@@ -413,17 +416,27 @@ class App:
         """Cost and time per attempt for each model, from the most recent run that has them, and from the
         most recent over each set of repositories (`by_scope`): a large repository costs far more per attempt.
         Measured per try, then counted for an attempt of up to DEFAULT_TRIES tries (see expected_tries)."""
+        return self.measured(runs)[0]
+
+    def measured(self, runs: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
+        """estimates(), and what one answer of each judge model cost in the most recent run it answered in,
+        from one read of each report."""
         found: dict[str, dict] = {}
+        judges: dict[str, float] = {}
         for run in runs:  # newest first
             job_dir = self.jobs_dir / run["id"]
             meta = read_json(job_dir / "run.json")
+            data = read_json(job_dir / "report.json")
             # By repositories, the quick sample's too: its set of repositories changes over time.
             scope = ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
-            for key, s in (read_json(job_dir / "report.json").get("summary") or {}).items():
+            for key, s in (data.get("summary") or {}).items():
                 if s.get("valid") and s.get("cost_per_attempt") is not None:
                     each = per_try(s)
                     found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(scope, each)
-        return found
+            for model, each in (data.get("judging") or {}).items():
+                if each.get("answers"):
+                    judges.setdefault(model, each["cost_usd"] / each["answers"])
+        return found, judges
 
     def repo_info(self, text: str, user: str | None = None) -> dict:
         repo = parse_repo(text)
@@ -518,10 +531,12 @@ class App:
         keys = [k for k in form.get("models") or [] if isinstance(k, str)]
         if not keys:
             return {"error": "Choose at least one model."}
-        try:  # the models' keys: the page's runs are graded on their hidden tests alone, so no judge is asked
+        try:  # the models' keys; the run itself picks the judges that can run here (pipeline.judges_here)
             pipeline.preflight(keys, "none", self.models_config)
         except SystemExit as exc:
             return {"error": str(exc.code)}
+        # The LLM judges switch, on unless turned off: off, the hidden tests alone and no judge is paid for.
+        judged = form.get("judges") is not False and (state.get("judges") or {}).get("on", True)
         try:
             limit = int(form.get("limit") or pipeline.DEFAULT_LIMIT)
         except ValueError:
@@ -541,7 +556,8 @@ class App:
         claim = None if quick else {name.lower() for name in repos}
         if problem := self.taken(claim) or self.over_budget(state, keys, state["quick"]["tasks"] if quick else
                                                             sum(map(len, pulls.values())) or limit,
-                                                            quick_scope() if quick else ",".join(sorted(claim)), user):
+                                                            quick_scope() if quick else ",".join(sorted(claim)), user,
+                                                            judged=judged):
             return {"error": problem}
         run_id = named = f"{repos[0].split('/')[-1] if repos else 'quick'}-{datetime.now():%Y%m%d-%H%M%S}"
         for n in range(2, 100):  # two people may start the same kind of run in the same second
@@ -553,6 +569,7 @@ class App:
         argv += ["--models", ",".join(keys), "--name", run_id]
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
+        argv += [] if judged else ["--judge", "none"]
         if user:  # whose run it is: only they see it, and it counts toward their limits
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
             (self.jobs_dir / run_id / ACCESS).write_text(json.dumps({"owner": user, "private": private}))
@@ -588,11 +605,11 @@ class App:
 
     @staticmethod
     def over_budget(state: dict, keys: list[str], count: int, scope: str, user: str | None,
-                    tries: int = pipeline.DEFAULT_TRIES) -> str | None:
+                    tries: int = pipeline.DEFAULT_TRIES, judged: bool = False) -> str | None:
         """Why a run of `count` pull requests with these models, up to `tries` tries each, would go over a
         spending limit, from each model's cost per try and how often it needed another, as the page
         estimates them. A model with no earlier run counts as UNKNOWN_ATTEMPT_COST or the dearest try seen,
-        whichever is more, for every try."""
+        whichever is more, for every try. `judged`: with the judges' review of each attempt."""
         if not (SPEND_TOTAL or (SPEND_PER_PERSON and user)):
             return None
         known = {m["key"]: m for m in state["models"]}
@@ -603,6 +620,8 @@ class App:
         estimate = [None if each.get("cost_per_try") is None else
                     each["cost_per_try"] * expected_tries(each.get("solve_rate"), tries) for each in found]
         cost = sum(unknown if each is None else each for each in estimate) * count
+        if judged:
+            cost += (state.get("judges") or {}).get("cost_per_attempt", 0) * count * len(found)
         mine = state.get("spend")
         if mine and cost > mine["cap"] - mine["spent"]:
             return (f"This run would cost about {usd(cost)}, and you have {usd(max(0, mine['cap'] - mine['spent']))} "
@@ -657,7 +676,9 @@ class App:
         again = sum(runner.tries_left(read_json(p), tries) for p in (self.jobs_dir / run_id / "trials").glob("*/result.json"))
         left = run["progress"]["total"] - run["progress"]["done"] + run["lost"] + again
         scope = quick_scope() if quick else ",".join(sorted(self.repos_of(self.jobs_dir / run_id)))
-        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user, tries)):
+        judged = bool(read_json(self.jobs_dir / run_id / "run.json").get("judge"))  # it resumes with its own
+        if keys and left > 0 and (problem := self.over_budget(state, keys, -(-left // len(keys)), scope, user, tries,
+                                                              judged)):
             return {"error": problem}
         if hosted() and not PAGE_GITHUB_TOKEN and not (quick and quick_collected()):
             return {"error": NO_PAGE_TOKEN}
@@ -834,8 +855,9 @@ def again(meta: dict) -> dict | None:
     request = meta.get("request") or {}
     # A model no longer offered comes back as the one that replaced it, which the form shows before Start.
     models = list(dict.fromkeys(pipeline.RETIRED.get(m["key"], m["key"]) for m in meta.get("models") or []))
+    judges = bool(meta.get("judge"))  # the LLM judges switch as the run had it
     if request.get("quick"):
-        return {"quick": True, "models": models}
+        return {"quick": True, "models": models, "judges": judges}
     pulls: dict[str, list[int]] = {}
     for task_id in meta.get("tasks") or meta.get("candidates") or []:
         number = task_id.rsplit("-", 1)[-1]
@@ -843,11 +865,13 @@ def again(meta: dict) -> dict | None:
             pulls.setdefault(repo_of(task_id), []).append(int(number))
     if not pulls or sum(map(len, pulls.values())) > MAX_LIMIT:
         return None
-    return {"pulls": pulls, "setup": request.get("setup"), "test": request.get("test"), "models": models}
+    return {"pulls": pulls, "setup": request.get("setup"), "test": request.get("test"), "models": models,
+            "judges": judges}
 
 
 def cell(model: str, attempt: int, result: dict) -> dict:
-    """A finished attempt on the board: its outcome, time, cost (every try's), and what the tests and judge said."""
+    """A finished attempt on the board: its outcome, time, cost (every try's), what the tests said, and the
+    judges' review beside them: "pass", "fail" or "error" with its reason (none when they weren't asked)."""
     spans = [(x.get("started_at"), x.get("finished_at")) for x in report.tries_of(result)]
     seconds = round(sum((datetime.fromisoformat(f) - datetime.fromisoformat(s)).total_seconds() for s, f in spans)) \
         if all(s and f for s, f in spans) else None
@@ -858,8 +882,17 @@ def cell(model: str, attempt: int, result: dict) -> dict:
             "reason": causes.short(result), "seconds": seconds,
             "cost": None if None in costs else sum(costs), "diff": result.get("diff"),
             "tests_passed": (result.get("tests") or {}).get("passed"),
-            "judge": (result.get("judge") or {}).get("verdict"),
+            **review(result.get("judge")),
             **({"try": result["try"]} if (result.get("try") or 1) > 1 else {})}
+
+
+def review(verdict: dict | None) -> dict:
+    """The judges' review of an attempt as its cell shows it; nothing when they weren't asked."""
+    if not verdict or verdict.get("skipped"):  # no change to review: the tests already say it failed
+        return {}
+    if verdict.get("error"):
+        return {"judge": "error", "judge_reason": "The judges didn't answer."}
+    return {"judge": verdict.get("verdict"), "judge_reason": verdict.get("reason")}
 
 
 def usd(x: float) -> str:

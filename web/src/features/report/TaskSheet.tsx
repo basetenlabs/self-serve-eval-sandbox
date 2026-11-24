@@ -33,7 +33,7 @@ function Body({ task: t, report, ranked, colors, trialsFor }: { task: Task; repo
         <Eyebrow parts={[`${t.repo} #${t.pr ?? ""}`, t.language, t.size && `${t.size}${t.lines_changed ? `, ${t.lines_changed} lines in ${t.files_changed} files` : ""}`, t.merged_at && `Merged ${day(t.merged_at)}`]} />
         <SheetTitle className="mt-3 text-[24px] leading-[1.3] font-normal tracking-[-0.01em]">{t.title}</SheetTitle>
         <SheetDescription className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[14px] text-muted-foreground">
-          <span>Graded with {scope}{!report.run.judge ? "" : (report.run.judge.panel?.length ?? 1) > 1 ? ", then a panel of judges" : ", then the judge"}.</span>
+          <span>Graded with {scope}{!report.run.judge ? "" : `${report.run.judge.review ? ", reviewed by" : ", then"} ${(report.run.judge.panel?.length ?? 1) > 1 ? "a panel of judges" : "the judge"}`}.</span>
           {t.url && (
             <a href={t.url} target="_blank" rel="noopener" className="bt-link text-black">
               Merged PR <External />
@@ -163,13 +163,18 @@ function Tries({ r, earlier }: { r: Trial; earlier: EarlierTry[] }) {
   );
 }
 
-/** The final verdict with the chair's overview, then each judge's own vote. */
+/** The final verdict with the chair's overview and the problems found, then each judge's own vote. */
 function Verdicts({ judge: j }: { judge: NonNullable<Trial["judge"]> }) {
   const votes: Vote[] = (j.panel?.length ?? 0) > 1 ? j.panel! : [];
   return (
     <>
       <Lead word={j.verdict === "pass" ? "Pass" : "Fail"} rest={j.reason ? ` · ${j.reason}` : ""} />
       {j.chair?.label && <span className="text-muted-foreground"> ({j.chair.label}, chair)</span>}
+      {(j.problems?.length ?? 0) > 0 && (
+        <ul className="mt-2 grid list-disc gap-1 pl-5 text-[14px] leading-snug" aria-label="Problems the judges found">
+          {j.problems!.map((p, i) => <li key={i}>{p}</li>)}
+        </ul>
+      )}
       {votes.length > 0 && (
         <ul className="mt-2 grid gap-1.5 border-l border-lightGrey2 pl-3 text-[14px] leading-snug" aria-label="Each judge's vote">
           {votes.map((v, i) => (

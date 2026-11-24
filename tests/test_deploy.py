@@ -193,7 +193,7 @@ class SmokeStaysAwake(unittest.TestCase):
         import inspect
         started = inspect.getsource(deploy.smoke)
         self.assertIn("--tries 1", started)  # a failed try run again would only make the deploy slower
-        self.assertNotIn("--judge", started)  # the page's runs have no judges, so neither does the smoke test
+        self.assertNotIn("--judge", started)  # the page's runs have the judges a run picks by default, and so does this
 
 
 class PageSandboxes(unittest.TestCase):

@@ -58,7 +58,7 @@ def cmd_run(args) -> int:
         job.save()
     else:
         repos, pulls = wanted(args)
-        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge or "none", args.models_config)
+        models, judge = pipeline.preflight(args.models or pipeline.DEFAULT_MODELS, args.judge or "default", args.models_config)
         if args.quick and (args.repos or args.task):
             sys.exit("--quick is the quick sample; it doesn't take repositories or --task")
         request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
@@ -115,15 +115,17 @@ def cmd_rejudge(args) -> int:
     _, judge = config.load(args.models_config)
     if args.judge:
         judge = judge.only(args.judge)
-    if problem := judge.problem():
-        sys.exit(problem)
+        if problem := judge.problem():
+            sys.exit(problem)
+    elif not (judge := pipeline.judges_here(judge)):
+        sys.exit("no judge can run here: set a key for one of them (configs/models.toml lists them)")
     meta = json.loads((args.job / "run.json").read_text())
     tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
     changed = runner.rejudge(args.job, tasks_dir, judge, concurrency=args.concurrency, force=args.force)
     flips = [c for c in changed if c["before"] != c["after"]]
     for c in flips:
         print(f"{c['trial']}: {c['before']} -> {c['after']} ({c['reason']})")
-    print(f"regraded {len(changed)} attempt(s) with {judge.label}; {len(flips)} changed outcome")
+    print(f"reviewed {len(changed)} attempt(s) with {judge.label}; {len(flips)} changed outcome")
     print(report.build(args.job))
     return 0
 
@@ -196,11 +198,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="the coding agent every model runs in (default pi; a resumed run keeps its own)")
     r.add_argument("--name", help="run id (default: the repository's name and the time)")
     r.add_argument("--task", action="append", help="run exactly this task folder's id; repeatable")
-    # Off by default, so the hidden tests alone decide and no judge is paid for.
+    # The hidden tests always decide what is solved; the judges review each attempt beside them.
     r.add_argument("--judge", nargs="?", const="default", metavar="MODEL",
-                   help="also grade with the LLM judges: alone, the configured panel and its chair; with a judge's model "
-                        "id, that judge alone; 'none' for none (default: the hidden tests alone decide; on --resume, "
-                        "the run's own)")
+                   help="the LLM judges that review each attempt beside its hidden tests, which alone decide what is "
+                        "solved: 'none' for no judges and no judge cost; a judge's model id for that judge alone "
+                        "(default: every configured judge with a key here, and its chair when it has one; none without "
+                        "any judge key; on --resume, the run's own)")
     r.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY,
                    help=f"attempts and checks at once (default {runner.DEFAULT_CONCURRENCY})")
     r.add_argument("--memory", type=int, default=4096, help="memory per sandbox in MiB (default 4096; on --resume, raises the run's size)")
@@ -231,10 +234,10 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--judge", action="store_true", help="also have the judges' chair check that each request says enough to pass its tests")
     v.set_defaults(func=cmd_validate)
 
-    j = sub.add_parser("rejudge", help="grade a finished run again (new judge model or prompt) without re-running agents")
+    j = sub.add_parser("rejudge", help="review a finished run again (new judge model or prompt) without re-running agents")
     j.add_argument("job", type=Path)
-    j.add_argument("--judge", help="grade with this one judge from the panel (default: the whole panel)")
-    j.add_argument("--force", action="store_true", help="also regrade attempts this judge already graded")
+    j.add_argument("--judge", help="review with this one judge from the panel (default: every judge with a key here)")
+    j.add_argument("--force", action="store_true", help="also review attempts these judges already reviewed")
     j.add_argument("--concurrency", type=int, default=runner.DEFAULT_CONCURRENCY)
     j.add_argument("--models-config", type=Path, default=config.DEFAULT_MODELS)
     j.set_defaults(func=cmd_rejudge)

@@ -70,8 +70,8 @@ any of this to run pr-eval yourself. Its sign-in package, Blaxel's `@blaxel-ai/s
   resume, and every judge's answer. The limits add up the entries from the last 24 hours, by when each was spent,
   so a run resumed days later counts too. Sandbox compute isn't included. A charge with no price
   never counts as free: an agent attempt counts its model's latest cost per attempt (else $5,
-  or the dearest attempt seen if more), a judge's answer $0.25. A run (or a resume) whose estimate
-  would go over waits; a run going stops (resumable) within 30 seconds once its owner or the page
+  or the dearest attempt seen if more), a judge's answer $0.25. A run (or a resume) whose estimate,
+  its judges' review of each attempt included, would go over waits; a run going stops (resumable) within 30 seconds once its owner or the page
   reaches the limit, and the attempts it had going still count, so a person can end a little over. Set them with
   `PR_EVAL_MAX_RUNS`, `PR_EVAL_RUNS_PER_PERSON`, `PR_EVAL_SPEND_TOTAL` and
   `PR_EVAL_SPEND_PER_PERSON` when deploying; locally a run at a time and no spending limit.

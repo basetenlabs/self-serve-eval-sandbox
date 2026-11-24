@@ -95,7 +95,8 @@ SHARED = ["jobs", "tasks", "data"]  # linked into each release, where its code l
 KEEP_RELEASES = 3  # besides the live one and any a process still runs from
 KEEP_SMOKE_RUNS = 6  # the smoke runs of the last three deploys stay on the volume, with their logs
 # The smoke test: one real attempt end to end, on the quick sample's largest task with the cheapest default
-# model, graded on its hidden tests as the page's runs are, in one try: a failed try isn't run again.
+# model, scored on its hidden tests and reviewed by the judges as the page's runs are (both by default),
+# in one try: a failed try isn't run again.
 # A release must pass it before people get it and again once they have.
 SMOKE_MODEL = "deepseek-v4.1-flash"
 # The agent stops after this many seconds, as at any time limit: its change so far gets the hidden tests.
@@ -557,8 +558,10 @@ def smoke(sandbox, release: str, keys: dict[str, str], origin: str, meter: str, 
     took = f"{(time.time() - began) / 60:.1f} min, ${spent:.2f} on models"
     if why:
         raise SmokeFailed(f"{why}\n(run {job} on the volume; {took})")
-    print(f"smoke ok: {result['outcome']}, hidden tests {'passed' if result['tests'].get('passed') else 'failed'}; "
-          f"{took}", flush=True)
+    review = result.get("judge") or {}
+    judges = f", judges {review.get('verdict') or 'gave no verdict'}" if review else ""
+    print(f"smoke ok: {result['outcome']}, hidden tests {'passed' if result['tests'].get('passed') else 'failed'}"
+          f"{judges}; {took}", flush=True)
 
 
 def roll_back(sandbox, origin: str, meter: str, keys: dict[str, str], previous: str) -> None:

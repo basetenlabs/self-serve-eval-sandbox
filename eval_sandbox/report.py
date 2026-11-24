@@ -1,8 +1,12 @@
 """One-page report for a finished run: report.json plus a self-contained report.html.
 
 Definitions:
-- An attempt is *valid* unless setup, the harness, the provider, the verifier or the
-  judge broke. Invalid attempts are reported separately and never count as failures.
+- An attempt is *valid* unless setup, the harness, the provider or the verifier broke
+  (or, in a run from before the judges only reviewed, the judges). Invalid attempts are
+  reported separately and never count as failures.
+- *Solved* means the PR's hidden tests passed. On a run with judges, their verdict and the
+  problems they found are a review shown beside that, never part of it. A run recorded
+  before then (its judge has no "review") needed the judges' pass too.
 - *Solve rate* (pass@1) is solved attempts / valid attempts.
 - *Solved at least once* (pass@k) counts tasks with at least one solved attempt.
 - *Cost per solved task* is everything spent on valid attempts / solved attempts, so a
@@ -237,8 +241,22 @@ def build_data(job_dir: Path) -> dict:
     return {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "run": meta, "models": models, "summary": per_model, "slices": slices,
             "timing": summarize_timing(trials, meta.get("created_at")),
-            "tasks": list(task_meta.values()), "trials": trials,
+            "tasks": list(task_meta.values()), "trials": trials, "judging": judging(trials),
             "complete": len(trials) == len(meta.get("tasks", [])) * len(models) * meta.get("attempts", 1)}
+
+
+def judging(trials: list[dict]) -> dict[str, dict]:
+    """What the judges' priced answers cost in this run, by judge model: {model: {"answers", "cost_usd"}}.
+    The page prices a new run's judges from the latest run that measured each (app.App.measured)."""
+    found: dict[str, dict] = {}
+    for t in trials:
+        verdict = t.get("judge") or {}
+        for vote in [*(verdict.get("panel") or []), *([verdict["chair"]] if verdict.get("chair") else [])]:
+            if vote.get("model") and vote.get("cost_usd") is not None:
+                each = found.setdefault(vote["model"], {"answers": 0, "cost_usd": 0.0})
+                each["answers"] += 1
+                each["cost_usd"] = round(each["cost_usd"] + vote["cost_usd"], 6)
+    return found
 
 
 def earlier_tasks(path: Path) -> list[dict]:
