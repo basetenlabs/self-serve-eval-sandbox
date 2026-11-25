@@ -122,7 +122,7 @@ function RunHeader({ run, state, sentence, hurry, go }: {
           <Eyebrow parts={[run.tasks ? plural(run.tasks, "PR") : null, vs, run.judged === false ? "Hidden tests only" : "Hidden tests + judges", when(run.started), run.owner ? `By ${run.owner}` : null]} />
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <h1 className="ev-title">{run.title}</h1>
-            <PhaseBadge phase={run.phase} className="mt-1" />
+            <PhaseBadge phase={run.phase} step={run.step} className="mt-1" />
           </div>
           {/* A live run says what it's doing; its takeaway so far, once attempts finish, sits under that. */}
           {active && (

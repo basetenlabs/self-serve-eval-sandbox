@@ -120,8 +120,10 @@ const PHASES: Record<string, { label: string; variant: "live" | "default" | "war
 export const isActive = (phase: Phase) => phase === "collecting" || phase === "checking" || phase === "running";
 
 /** A run's phase as a status badge with its word; live phases carry a pulsing square. */
-export function PhaseBadge({ phase, className }: { phase: Phase; className?: string }) {
-  const p = PHASES[phase] ?? { label: phase, variant: "default" as const };
+/** The run's phase; a run still finding PRs that has moved on to working out a repository's commands says so. */
+export function PhaseBadge({ phase, step, className }: { phase: Phase; step?: string | null; className?: string }) {
+  const p = phase === "collecting" && step === "commands" ? { label: "Setting up", variant: "live" as const }
+    : PHASES[phase] ?? { label: phase, variant: "default" as const };
   return (
     <Badge variant={p.variant} className={className}>
       {isActive(phase) ? <LiveDot /> : null}

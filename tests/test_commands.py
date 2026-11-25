@@ -345,6 +345,14 @@ class EnvironmentTest(unittest.TestCase):
         self.assertIn("leave them empty so the run works them out", said)
         self.assertIn("(--setup, --test)", pipeline.none_passed(3, statuses))
 
+    def test_the_most_common_reason_counts_every_pr_left_out_for_it(self):
+        statuses = {"a": "reference-fails", "b": "reference-fails", "c": "setup-error"}
+        hints = {"a": "they look up the host db, and tests run without network or other services",
+                 "b": "they download something while they run, and tests run without network",
+                 "c": "the sandbox has no `bun`"}
+        said = pipeline.none_passed(3, statuses, hints)
+        self.assertIn("(2 because: its tests fail even with the merged change)", said)
+
 
 class RunStepTest(unittest.TestCase):
     def test_the_run_records_each_named_repositorys_commands(self):

@@ -571,12 +571,15 @@ def none_passed(count: int, statuses: dict[str, str | None], hints: dict[str, st
                 given: bool = False) -> str:
     """Why a run has nothing to run: its most common reason, in words, and what to do about it."""
     hints = hints or {}
-    reasons = [left_out_why(s, hints.get(t)) for t, s in statuses.items() if s != "valid"]
+    left = [(s, hints.get(t)) for t, s in statuses.items() if s != "valid"]
+    reasons = [s for s, _ in left]
     common = max(set(reasons), key=reasons.count) if reasons else None
+    said = {h for s, h in left if s == common and h}  # what the sandbox lacked, when those PRs agree on it
+    why = left_out_why(common, said.pop() if len(said) == 1 else None) if common else None
     advice = ("If installing failed, fix the install and test commands, or leave them empty so the run works "
               "them out." if given else "If installing failed, give the install and test commands (--setup, --test).")
     return (f"None of the {count} pull requests passed the check" + (f" ({reasons.count(common)} because: "
-            f"{common.rstrip('.')})" if common else "") + ". " + advice)
+            f"{why.rstrip('.')})" if why else "") + ". " + advice)
 
 
 def left_out_why(status: str | None, hint: str | None = None) -> str:
