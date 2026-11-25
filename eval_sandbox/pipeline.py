@@ -472,10 +472,17 @@ def settle_commands(job: Job, candidates: list[tasks.Task], settings: runner.Set
             continue
         done[repo], settled = commands.settle(
             job.path, repo, mine, settings, job.id, setup=request.get("setup"), test=request.get("test"),
-            status=lambda text: job.status("collecting", text, step="commands"))
+            status=lambda text: job.status("collecting", text, step="commands"),
+            progress=lambda record, repo=repo: shown_setup(job, repo, record))
         found |= {t.id: t for t in settled}
         job.save()
     return [found[t.id] for t in candidates]
+
+
+def shown_setup(job: Job, repo: str, record: dict) -> None:
+    """Keep how working out a repository's commands is going in run.json, where the page reads it."""
+    job.meta.setdefault("setup", {})[repo] = record
+    job.save()
 
 
 def fit_memory(job: Job, settings: runner.Settings) -> None:
@@ -551,22 +558,35 @@ def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Mo
         for repo, used in (job.meta.get("commands") or {}).items():
             if used.get("source") == "saved":  # they may have gone stale: the next run works them out afresh
                 commands.keep(repo, None)
-        raise SystemExit(none_passed(len(candidates), statuses))
+        raise SystemExit(none_passed(len(candidates), statuses, job.meta.get("left_out_hints"), given(job)))
 
 
-def none_passed(count: int, statuses: dict[str, str | None]) -> str:
-    """Why a run has nothing to run: its most common reason, in words."""
-    reasons = [left_out_why(s) for s in statuses.values() if s != "valid"]
+def given(job: Job) -> bool:
+    """Whether the run was started with install or test commands of its own."""
+    request = job.meta.get("request") or {}
+    return bool(request.get("setup") or request.get("test"))
+
+
+def none_passed(count: int, statuses: dict[str, str | None], hints: dict[str, str] | None = None,
+                given: bool = False) -> str:
+    """Why a run has nothing to run: its most common reason, in words, and what to do about it."""
+    hints = hints or {}
+    left = [(s, hints.get(t)) for t, s in statuses.items() if s != "valid"]
+    reasons = [s for s, _ in left]
     common = max(set(reasons), key=reasons.count) if reasons else None
+    said = {h for s, h in left if s == common and h}  # what the sandbox lacked, when those PRs agree on it
+    why = left_out_why(common, said.pop() if len(said) == 1 else None) if common else None
+    advice = ("If installing failed, fix the install and test commands, or leave them empty so the run works "
+              "them out." if given else "If installing failed, give the install and test commands (--setup, --test).")
     return (f"None of the {count} pull requests passed the check" + (f" ({reasons.count(common)} because: "
-            f"{common.rstrip('.')})" if common else "") + ". If installing failed, give the install and test commands "
-            "(--setup, --test).")
+            f"{why.rstrip('.')})" if why else "") + ". " + advice)
 
 
-def left_out_why(status: str | None) -> str:
-    """A check's status in words: why its task was left out."""
+def left_out_why(status: str | None, hint: str | None = None) -> str:
+    """A check's status in words: why its task was left out, and what the sandbox lacked when its log said."""
     status = status or "not checked"
-    return LEFT_OUT.get(status) or status.removeprefix("sandbox-error: ")
+    why = LEFT_OUT.get(status) or status.removeprefix("sandbox-error: ")
+    return f"{why}: {hint}" if hint else why
 
 
 def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> list[tasks.Task]:
@@ -582,7 +602,7 @@ def check(job: Job, candidates: list[tasks.Task], settings: runner.Settings) -> 
     kept = [t for t in candidates if statuses[t.id] == "valid"]
     leave_out(job, statuses)
     if not kept:
-        raise SystemExit(none_passed(len(candidates), statuses))
+        raise SystemExit(none_passed(len(candidates), statuses, job.meta.get("left_out_hints"), given(job)))
     return kept
 
 
@@ -590,6 +610,9 @@ def leave_out(job: Job, statuses: dict[str, str | None]) -> None:
     # A resumed run checks only the tasks it kept, so the ones left out before stay left out.
     earlier = {t: s for t, s in job.meta.get("left_out", {}).items() if t not in statuses}
     job.meta["left_out"] = earlier | {t: s for t, s in statuses.items() if s != "valid"}
+    tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
+    hints = {t: h for t in job.meta["left_out"] if (h := runner.validation_hint(tasks_dir / t))}
+    job.meta["left_out_hints"] = {**(job.meta.get("left_out_hints") or {}), **hints}
     if job.meta["left_out"]:
         print(f"leaving out {len(job.meta['left_out'])} task(s) that failed the check (a setup problem, "
               f"not a model's): {', '.join(job.meta['left_out'])}")

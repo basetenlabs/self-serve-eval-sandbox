@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval_sandbox import commands, pipeline, runner, tasks  # noqa: E402
+from eval_sandbox import causes, commands, config, pipeline, runner, tasks  # noqa: E402
 from eval_sandbox.commands import Proof  # noqa: E402
 
 
@@ -268,6 +268,90 @@ class SettleTest(unittest.TestCase):
         prove.assert_not_called()
         self.assertTrue(commands.curated("honojs/hono"))
         self.assertFalse(commands.curated("o/r"))
+
+
+    def test_the_page_sees_each_try_as_it_goes(self):
+        mine = [make_task(self.root)]
+        answers = iter([{"action": "run", "command": "cat package.json"},
+                        {"action": "try", "setup": "pnpm install", "test": "vitest run {test_files}"}])
+        proofs = iter([Proof(False, "tests", "(exit 1) FAIL src/a.test.ts\nError: Cannot find module 'x'\n1 failed in 2s"),
+                       Proof(True, "", "1 passed")])
+        bench = mock.Mock(**{"run.return_value": "exit 0\n{}"})
+        bench.name = "scratch"
+        seen = []
+        with mock.patch.object(commands, "prove", side_effect=lambda *a: next(proofs)), \
+                mock.patch.object(commands, "Bench", return_value=bench):
+            _, _, status = self.settle(mine, ask=lambda m: (json.dumps(next(answers)), 0.01), progress=seen.append)
+        label = config.load()[0][commands.MODEL].label
+        last = seen[-1]
+        self.assertEqual((last["state"], last["of"], last["pr"], last["sandboxes"]), ("done", 5, 1, 0))
+        self.assertEqual([(t["n"], t["by"], t["step"]) for t in last["tries"]], [(1, "guess", "tests"), (2, label, "passed")])
+        self.assertEqual(last["tries"][0]["error"], "Error: Cannot find module 'x'")  # the line that says why
+        self.assertIsNone(last["tries"][1]["error"])
+        guessing = next(s for s in seen if s["tries"] and "step" not in s["tries"][-1])
+        self.assertEqual(guessing["sandboxes"], 1)  # the try's sandbox
+        looking = next(s for s in seen if s["now"].startswith("looking around"))
+        self.assertEqual(looking["sandboxes"], 1)  # the model's scratch sandbox
+        self.assertTrue(any("(try 2 of 5)" in s for s in status))  # counted with the first guess
+
+    def test_a_setup_that_fails_keeps_its_tries_and_why(self):
+        mine = [make_task(self.root)]
+        seen = []
+        with mock.patch.object(commands, "prove", return_value=Proof(False, "setup", "bash: line 1: bun: command not found")), \
+                mock.patch.object(commands, "Bench"), self.assertRaises(SystemExit):
+            self.settle(mine, ask=lambda m: (json.dumps({"action": "give_up", "reason": "needs bun"}), 0.0), progress=seen.append)
+        self.assertEqual((seen[-1]["state"], seen[-1]["sandboxes"]), ("failed", 0))
+        self.assertIn("needs bun", seen[-1]["why"])
+        self.assertEqual(seen[-1]["tries"][0]["error"], "bash: line 1: bun: command not found")
+
+    def test_nothing_is_shown_when_nothing_is_worked_out(self):
+        seen = []
+        with mock.patch.object(commands, "prove") as prove:
+            self.settle([make_task(self.root)], setup="npm ci", test="jest {test_files}", progress=seen.append)
+        prove.assert_not_called()
+        self.assertEqual(seen, [])
+
+    def test_the_gist_is_the_line_that_says_why(self):
+        out = ("ERROR tests/test_a.py - FileNotFoundError: [Errno 2] No such file or directory: '/home/x.json'\n"
+               "ERROR tests/test_b.py\n!!!!! Interrupted: 2 errors during collection !!!!!\n2 errors in 1.27s\n")
+        self.assertIn("FileNotFoundError", commands.gist(out))
+        self.assertEqual(commands.gist("all good\n3 passed\n"), "3 passed")
+        self.assertEqual(commands.gist(""), "")
+
+
+class EnvironmentTest(unittest.TestCase):
+    def test_a_check_log_says_what_the_sandbox_lacked(self):
+        e = causes.environment
+        self.assertEqual(e("bash: line 1: bun: command not found\n"), "the sandbox has no `bun`")
+        self.assertEqual(e("sh: 1: cargo: not found"), "the sandbox has no `cargo`")
+        self.assertEqual(e("OperationalError: failed to resolve host 'db': [Errno -3] Temporary failure in name resolution"),
+                         "they look up the host db, and tests run without network or other services")
+        self.assertIn("download", e("Failed starting Temporal dev server: failed to download ephemeral server executable: "
+                                    "error sending request for url (https://example.com)"))
+        self.assertEqual(e('connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused'),
+                         "they need a service on port 5432 that the sandbox doesn't run")
+        self.assertEqual(e("Error: connect ECONNREFUSED 127.0.0.1:6379"), "they need a service on port 6379 that the sandbox doesn't run")
+        for plain in ("AssertionError: 1 != 2", "KeyError: 'x' not in map", ""):
+            self.assertIsNone(e(plain))
+
+    def test_left_out_reasons_carry_it(self):
+        self.assertEqual(pipeline.left_out_why("reference-fails", "they need the network, and tests run without it"),
+                         "its tests fail even with the merged change: they need the network, and tests run without it")
+        self.assertEqual(pipeline.left_out_why("reference-fails"), "its tests fail even with the merged change")
+        statuses = {"a": "setup-error", "b": "setup-error", "c": "valid"}
+        hints = {"a": "the sandbox has no `bun`", "b": "the sandbox has no `bun`"}
+        said = pipeline.none_passed(3, statuses, hints, given=True)
+        self.assertIn("2 because: installing dependencies failed: the sandbox has no `bun`", said)
+        self.assertIn("leave them empty so the run works them out", said)
+        self.assertIn("(--setup, --test)", pipeline.none_passed(3, statuses))
+
+    def test_the_most_common_reason_counts_every_pr_left_out_for_it(self):
+        statuses = {"a": "reference-fails", "b": "reference-fails", "c": "setup-error"}
+        hints = {"a": "they look up the host db, and tests run without network or other services",
+                 "b": "they download something while they run, and tests run without network",
+                 "c": "the sandbox has no `bun`"}
+        said = pipeline.none_passed(3, statuses, hints)
+        self.assertIn("(2 because: its tests fail even with the merged change)", said)
 
 
 class RunStepTest(unittest.TestCase):

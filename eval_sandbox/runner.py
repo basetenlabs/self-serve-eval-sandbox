@@ -1004,6 +1004,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
         step = "tests"
         if reason:
             record["status"] = reason
+            record["hint"] = causes.environment(log_text(log_dir / "setup.log"))
             return record
         stage(live, "base", run_id=run_id)
         base = run_tests(container, task, log_dir / "base.log")
@@ -1022,6 +1023,7 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
             record["status"] = "timeout"
         elif not reference["passed"]:
             record["status"] = "reference-fails"
+            record["hint"] = causes.environment(reference.get("output") or log_text(log_dir / "reference.log"))
         elif base["passed"]:
             record["status"] = "non-discriminating"
         else:
@@ -1041,6 +1043,19 @@ def validate_task(task: Task, settings: Settings, run_id: str = "validate") -> d
         if not STOPPING.is_set():  # a check cut short by a stop proves nothing; run it again next time
             write_json(log_dir / "result.json", record)
         live.unlink(missing_ok=True)
+
+
+def log_text(path: Path, chars: int = 200_000) -> str:
+    """The end of a log, for reading why a step failed."""
+    try:
+        return path.read_text(errors="replace")[-chars:]
+    except OSError:
+        return ""
+
+
+def validation_hint(task_dir: Path) -> str | None:
+    """What the task's check found the sandbox lacking (causes.environment), when it said."""
+    return read_json(task_dir / "validation" / "result.json").get("hint")
 
 
 # Check results that say nothing about the task itself; such a task is checked again.

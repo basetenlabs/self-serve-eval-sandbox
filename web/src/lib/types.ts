@@ -38,7 +38,7 @@ export interface Checks {
 
 export type Phase = "collecting" | "checking" | "running" | "judging" | "reporting" | "done" | "stopped" | "failed" | string;
 
-export type CheckStage = "sandboxes" | "setup" | "base" | "reference" | "passed" | "left-out" | "queued" | "stopped";
+export type CheckStage = "sandboxes" | "setup" | "base" | "reference" | "passed" | "left-out" | "queued" | "stopped" | "setup-wait";
 export type LiveStage = "sandboxes" | "setup" | "agent" | "tests" | "judge";
 export type CellStage = LiveStage | "solved" | "failed" | "invalid" | "queued" | "waiting" | "not-run" | "left-out";
 
@@ -78,6 +78,8 @@ export interface BoardRow {
 export interface Board {
   rows: BoardRow[];
   sandboxes: number;
+  /** Of those, the ones working out a repository's install and test commands. */
+  setup_sandboxes?: number;
   concurrency?: number | null;
   /** Hosted: the places every run's attempts share, how many are taken and how many attempts wait for one. */
   shared?: { held: number; waiting: number; limit: number } | null;
@@ -124,6 +126,40 @@ export interface Run {
   step?: string | null;
   /** The install and test commands each named repository ran with. */
   commands?: Record<string, CommandsUsed>;
+  /** How working out each repository's commands went, try by try (repositories with none saved). */
+  setup?: Record<string, SetupProgress>;
+}
+
+/** Working out a repository's install and test commands at the start of a run, as it goes. */
+export interface SetupProgress {
+  repo: string;
+  /** The pull request the tries run on. */
+  pr: number;
+  /** Tries it may take in all. */
+  of: number;
+  started_at: string;
+  finished_at?: string;
+  state: "working" | "done" | "failed";
+  /** What it's doing now, in a few words. */
+  now: string;
+  /** Why it stopped, when it failed. */
+  why?: string;
+  /** Sandboxes it holds now. */
+  sandboxes: number;
+  tries: SetupTry[];
+}
+
+export interface SetupTry {
+  n: number;
+  /** Who proposed the commands: "default", "guess" (read from its files) or the model's label. */
+  by: string;
+  setup: string;
+  started_at: string;
+  /** Where it stopped ("setup", "apply", "tests" or "sandbox"), or "passed"; absent while it runs. */
+  step?: string;
+  seconds?: number;
+  /** The line of its output that says why it failed. */
+  error?: string | null;
 }
 
 /** A repository's install and test commands in a run, and where they came from. */

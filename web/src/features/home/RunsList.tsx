@@ -85,7 +85,7 @@ function Title({ run, link = true }: { run: Run; link?: boolean }) {
 
 /** The run's phase as the same badge the run page shows. */
 function Status({ run }: { run: Run }) {
-  return <PhaseBadge phase={run.phase} />;
+  return <PhaseBadge phase={run.phase} step={run.step} />;
 }
 
 /** What each model solved, with its cost per solved task; or how far a live run has got. */

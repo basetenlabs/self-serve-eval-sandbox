@@ -346,6 +346,7 @@ class App:
         lost = sum(map(runner.lost, data.get("trials") or []))  # resume runs these again
         candidates = meta.get("candidates") or []
         tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
+        hints = meta.get("left_out_hints") or {}
         return {
             "id": job_dir.name, "title": title, "started": meta.get("created_at"), "tasks": len(run_tasks),
             "active_at": max(last),  # ISO times in UTC sort as text
@@ -355,8 +356,9 @@ class App:
             "progress": {"done": done, "total": total},
             "checking": {"done": sum((tasks_dir / c / "validation" / "result.json").is_file() for c in candidates),
                          "total": len(candidates)},
-            "left_out": [{"id": t, "pr": t.rsplit("-", 1)[-1], "why": pipeline.left_out_why(s)}
+            "left_out": [{"id": t, "pr": t.rsplit("-", 1)[-1], "why": pipeline.left_out_why(s, hints.get(t))}
                          for t, s in (meta.get("left_out") or {}).items()],
+            "setup": meta.get("setup") or {},
             "summary": summary, "report": f"{job_dir.name}/report.html" if (job_dir / "report.html").is_file() else None,
             "cost": sum(s.get("cost_usd") or 0 for s in (data.get("summary") or {}).values()),  # so far, while it goes
             "log": report.tail(log, 15) if phase in ("failed", "stopped") else None, "lost": lost,
@@ -371,7 +373,11 @@ class App:
         meta = read_json(job_dir / "run.json")
         tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
         active = run["phase"] in pipeline.ACTIVE
-        kept, left = set(meta.get("tasks") or []), meta.get("left_out") or {}
+        kept, left, hints = set(meta.get("tasks") or []), meta.get("left_out") or {}, meta.get("left_out_hints") or {}
+        setting_up = active and run.get("step") == "commands"
+        # Sandboxes working out a repository's install and test commands: a try's, and the model's scratch one.
+        setup_sandboxes = sum(r.get("sandboxes") or 0 for r in (meta.get("setup") or {}).values()
+                              if r.get("state") == "working") if setting_up else 0
         models, attempts = [m["key"] for m in meta.get("models") or []], meta.get("attempts", 1)
         rows, sandboxes = [], 0
         reported = None
@@ -386,7 +392,9 @@ class App:
             if task_id in kept:
                 check = {"stage": "passed"}
             elif task_id in left:
-                check = {"stage": "left-out", "why": pipeline.left_out_why(left[task_id])}
+                check = {"stage": "left-out", "why": pipeline.left_out_why(left[task_id], hints.get(task_id))}
+            elif setting_up:  # no PR is checked until the repository's commands are worked out
+                check = {"stage": "setup-wait"}
             else:
                 live = read_json(tasks_dir / task_id / "validation" / "stage.json")
                 check = live if active and live.get("run_id") == run["id"] else {"stage": "queued" if active else "stopped"}
@@ -404,9 +412,11 @@ class App:
                         cells.append({"model": key, "attempt": attempt, **live})
                     else:
                         cells.append({"model": key, "attempt": attempt,
-                                      "stage": ("queued" if task_id in kept else "waiting") if active else "not-run"})
+                                      "stage": ("queued" if task_id in kept else "setup-wait" if setting_up else "waiting")
+                                      if active else "not-run"})
             rows.append({"id": task_id, **info, "check": check, "cells": cells})
-        return {"rows": rows, "sandboxes": sandboxes, "concurrency": meta.get("concurrency")}
+        return {"rows": rows, "sandboxes": sandboxes + setup_sandboxes, "setup_sandboxes": setup_sandboxes,
+                "concurrency": meta.get("concurrency")}
 
     def task(self, path: Path) -> dict:
         """A task's repository, PR and title; cached, since a task folder doesn't change."""

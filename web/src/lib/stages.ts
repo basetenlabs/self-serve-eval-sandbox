@@ -1,5 +1,5 @@
 import { plural } from "./format";
-import type { BoardRow, Cell, CellStage, CheckStage, Run } from "./types";
+import type { BoardRow, Cell, CellStage, CheckStage, Run, SetupProgress } from "./types";
 
 // An attempt's steps in order. Its own sandbox and the verifier's boot together, so the first
 // three steps hold two sandboxes and the hidden tests hold one.
@@ -11,6 +11,7 @@ export type Tone = "boot" | "setup" | "agent" | "tests" | "judge" | "check" | "s
 export const STAGE: Record<string, { label: string; tone: Tone; verb?: string }> = {
   queued: { label: "Queued", tone: "idle" },
   waiting: { label: "Waiting for check", tone: "idle" },
+  "setup-wait": { label: "Waiting for setup", tone: "idle" },
   "not-run": { label: "Not run", tone: "idle" },
   "left-out": { label: "Left out", tone: "idle" },
   interrupted: { label: "Stopped", tone: "idle" },
@@ -29,6 +30,7 @@ export const CHECK: Record<CheckStage | string, { label: string; tone: Tone }> =
   "left-out": { label: "Left out", tone: "idle" },
   queued: { label: "Queued", tone: "idle" },
   stopped: { label: "Not checked", tone: "idle" },
+  "setup-wait": { label: "Waiting for setup", tone: "idle" },
   sandboxes: { label: "Booting sandbox", tone: "check" },
   setup: { label: "Installing deps", tone: "check" },
   base: { label: "Tests before fix", tone: "check" },
@@ -62,6 +64,19 @@ export function failReason(c: Pick<Cell, "stage" | "tests_passed" | "judge">): s
 /** "repo#123", short enough for a feed line. */
 export const prName = (row: Pick<BoardRow, "repo" | "pr">) => `${row.repo.split("/").pop()}#${row.pr}`;
 
+/** The repository whose install and test commands a live run is working out now, if any. */
+export function settingUp(r: Run): SetupProgress | null {
+  if (r.step !== "commands") return null;
+  return Object.values(r.setup ?? {}).find((s) => s.state === "working") ?? null;
+}
+
+/** The setup try a run is on, or is about to start: "Setup try 2 of 5". */
+export function setupCount(s: SetupProgress): string {
+  const last = s.tries.at(-1);
+  const current = last && !last.step ? s.tries.length : s.tries.length + 1;
+  return `Setup try ${Math.min(current, s.of)} of ${s.of}`;
+}
+
 /** The five steps of a run and where each one stands. */
 export function pipeline(r: Run) {
   const b = r.board;
@@ -79,13 +94,16 @@ export function pipeline(r: Run) {
   const grading = cells.filter((c) => c.stage === "tests" || c.stage === "judge").length;
   const passed = b ? b.rows.filter((row) => row.check.stage === "passed").length : r.tasks;
   const leftOut = r.left_out.length;
+  // Working out a repository's commands comes after its PRs are found and before any is checked.
+  const setup = settingUp(r);
   type State = "done" | "now" | "todo";
   const st = (ok: boolean, now: boolean): State => (ok ? "done" : now && active ? "now" : "todo");
   return [
-    { key: "find", title: "Find PRs", what: "Merged, with tests", state: st(r.phase !== "collecting", r.phase === "collecting"),
+    { key: "find", title: "Find PRs", what: "Merged, with tests", state: st(r.phase !== "collecting" || !!setup, r.phase === "collecting"),
       count: b?.rows.length ? `${b.rows.length} found` : r.tasks ? `${r.tasks} found` : null },
-    { key: "check", title: "Check", what: "Tests fail before, pass after", state: st(checked, b?.rows.some(isChecking) ?? r.phase === "checking"),
-      count: checked && (passed || leftOut) ? `${passed} passed${leftOut ? ` · ${leftOut} left out` : ""}` : null },
+    { key: "check", title: "Check", what: setup ? "Working out install and test commands" : "Tests fail before, pass after",
+      state: st(checked, !!setup || (b?.rows.some(isChecking) ?? r.phase === "checking")),
+      count: setup ? setupCount(setup) : checked && (passed || leftOut) ? `${passed} passed${leftOut ? ` · ${leftOut} left out` : ""}` : null },
     { key: "code", title: "Models code", what: "One sandbox per attempt", state: st(done || (checked && !doing(["queued", "sandboxes", "setup", "agent"]) && scored > 0), doing(["queued", "sandboxes", "setup", "agent"])),
       count: scored ? (coding ? `${coding} coding now` : plural(scored, "attempt")) : null },
     { key: "grade", title: "Grade", what: r.judged === false ? "Hidden tests" : "Hidden tests, then judges", state: st(done, doing(["tests", "judge"])),

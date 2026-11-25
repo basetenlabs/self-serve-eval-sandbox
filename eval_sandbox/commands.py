@@ -358,10 +358,11 @@ def parse(text: str) -> dict:
 
 
 def loop(context: str, *, ask, run, read, prove, fixed: dict | None = None, say=lambda text: None,
-         tries: int = TRIES, turns: int = TURNS, budget: float = BUDGET_USD) -> dict:
+         tries: int = TRIES, turns: int = TURNS, budget: float = BUDGET_USD, start: int = 0) -> dict:
     """Ask the model for commands until a try passes. `ask(messages)` gives (answer, usd); `run(command)`
     and `read(path)` give text from the scratch sandbox; `prove(setup, test)` a Proof. `fixed` holds a
-    command that was given, which every try keeps. Returns {setup, test, tried, spent}; raises Unsolved."""
+    command that was given, which every try keeps; `start` counts tries made before it, for what `say` tells.
+    Returns {setup, test, tried, spent}; raises Unsolved."""
     fixed = fixed or {}
     system = SYSTEM.replace("TRIES", str(tries)).replace("TURNS", str(turns))
     messages = [{"role": "system", "content": system}, {"role": "user", "content": context}]
@@ -381,7 +382,7 @@ def loop(context: str, *, ask, run, read, prove, fixed: dict | None = None, say=
             if not setup or not test:
                 reply = "A try needs both commands, setup and test."
             else:
-                say(f"trying install `{short(setup)}` (try {len(tried) + 1} of {tries})")
+                say(f"trying install `{short(setup)}` (try {start + len(tried) + 1} of {start + tries})")
                 proof = prove(setup, test)
                 tried.append((setup, test, proof))
                 if proof.passed:
@@ -389,7 +390,7 @@ def loop(context: str, *, ask, run, read, prove, fixed: dict | None = None, say=
                 if proof.step == "sandbox":  # not the commands' fault: another try would fail the same way
                     raise Unsolved("the sandbox failed, not the commands", tried, spent)
                 if len(tried) >= tries:
-                    raise Unsolved(f"none of its {tries} tries passed", tried, spent)
+                    raise Unsolved(f"none of the model's {tries} tries passed", tried, spent)
                 reply = f"That failed at {proof.step} ({tries - len(tried)} tries left):\n{proof.output}"
         elif kind == "run" and str(action.get("command") or "").strip():
             say(f"looking around: `{short(str(action['command']))}`")
@@ -480,13 +481,13 @@ def context(repo: str, task: tasks.Task, paths: list[str], read, first: tuple | 
 
 def settle(job_path: Path, repo: str, mine: list[tasks.Task], settings: runner.Settings, run_id: str, *,
            setup: str | None = None, test: str | None = None, status=lambda text: None, ask=None,
-           saved_path: Path | None = None) -> tuple[dict, list[tasks.Task]]:
+           saved_path: Path | None = None, progress=lambda record: None) -> tuple[dict, list[tasks.Task]]:
     """The install and test commands a run uses for `repo`, and its tasks rewritten for them where they changed.
 
     Given ones win. A repository with commands of its own in tasks.recipe keeps them, and ones an earlier
     run proved are used as they are (this run's check proves them again). Otherwise they're worked out
     here, on one of its pull requests, and kept for the next run. SystemExit says what was tried when
-    nothing works.
+    nothing works. While they're worked out, `progress` gets each try and what is happening now (Progress).
     """
     if setup and test:
         entry = saved(repo, saved_path)
@@ -501,65 +502,127 @@ def settle(job_path: Path, repo: str, mine: list[tasks.Task], settings: runner.S
 
     # The smallest PR whose tests can be named, so its proof is quick.
     task = min(mine, key=lambda t: (not runnable(t), t.meta["task"].get("lines_changed", 0)))
-    pr, language = task.meta["task"]["pr_number"], task.meta["task"].get("language") or ""
+    pr = task.meta["task"]["pr_number"]
     fixed = {k: v for k, v in (("setup", setup), ("test", test)) if v}
-    logs = job_path / "commands" / repo.replace("/", "__")
-    say = lambda text: status(f"Working out how to install and test {repo}: {text}")  # noqa: E731
-    count = 0
-
-    def prove_here(s: str, t: str) -> Proof:
-        nonlocal count
-        count += 1
-        return prove(task, s, t, settings, run_id, logs / f"try-{count}")
-
     guessed = (fixed.get("setup") or used(task)[0], fixed.get("test") or used(task)[1])
-    first, found, how, spent, model = None, None, "", 0.0, None
-    if guessed[1] != UNKNOWN["test"]:
-        default = tasks.recipe("", language, []) if language in ("Go", "Python") else {}
-        how = "default" if guessed == (default.get("setup"), default.get("test")) else "guess"
-        say(f"trying {'its default commands' if how == 'default' else 'a guess from its files'} on #{pr}")
-        proof = prove_here(*guessed)
-        first = (*guessed, proof)
-        if proof.passed:
-            found = guessed
-        elif proof.step == "sandbox":  # nothing a model could fix
-            raise SystemExit(failure(repo, pr, [first], "the sandbox failed, not the commands"))
-    if not found:
-        catalog, _ = config.load()
-        model = catalog[MODEL]
-        if not ask and (missing := config.missing_credential(model)):
-            raise SystemExit(failure(repo, pr, [first] if first else [], missing))
-        say(f"{model.label} is reading the repository" + (f" (the first guess failed at {first[2].step})" if first else ""))
-        mirror = tasks.DEFAULT_REPOS / f"{task.meta['task']['repo'].replace('/', '__')}.git"
-        paths, read = files_at(mirror, task.meta["task"]["base_sha"]) if mirror.exists() else ([], lambda p: None)
-        bench = Bench(task, settings, run_id)
-        try:
-            got = loop(context(repo, task, paths, read, first, fixed),
-                       ask=ask or chat(model, job_path / "trials" / f"commands-{repo.replace('/', '__')}"),
-                       run=bench.run, read=bench.read, prove=prove_here, fixed=fixed, say=say)
-        except Unsolved as exc:
-            tried = ([first] if first else []) + exc.tried
-            raise SystemExit(failure(repo, pr, tried, exc.why, exc.spent, model.label)) from None
-        except runtime.RuntimeError as exc:  # the model couldn't be reached
-            raise SystemExit(failure(repo, pr, [first] if first else [], str(exc))) from None
-        finally:
-            bench.close()
-        found, how, spent = (got["setup"], got["test"]), "model", got["spent"]
+    watch = Progress(repo, pr, TRIES + (guessed[1] != UNKNOWN["test"]), status, progress)
+    try:
+        found, how, spent, model = work_out(job_path, repo, task, guessed, fixed, settings, run_id, ask, watch)
+    except SystemExit as exc:
+        watch.end("failed", str(exc.code))
+        raise
+    watch.end("done")
     entry = {"setup": found[0], "test": found[1], "how": how, "at": now(),
              "proven_on": {"pr": pr, "commit": task.meta["task"].get("reference_sha")}}
     keep(repo, entry, saved_path)
     retargeted = [retarget(t, *found) if used(t) != found else t for t in mine]
-    record = {**entry, "source": "default" if how == "default" else "worked out", "tries": count,
+    record = {**entry, "source": "default" if how == "default" else "worked out", "tries": len(watch.state["tries"]),
               "cost_usd": round(spent, 4), "model": model.label if model else None}
     return record, retargeted
 
+
+def work_out(job_path: Path, repo: str, task: tasks.Task, guessed: tuple[str, str], fixed: dict,
+             settings: runner.Settings, run_id: str, ask, watch: "Progress") -> tuple:
+    """Prove the first guess on `task`, then let the model loop work the commands out if it fails.
+    Returns (found, how, spent, model); SystemExit says what was tried when nothing works."""
+    pr, language = task.meta["task"]["pr_number"], task.meta["task"].get("language") or ""
+    logs = job_path / "commands" / repo.replace("/", "__")
+
+    def prove_here(s: str, t: str) -> Proof:
+        watch.proving(s)
+        started = time.monotonic()
+        proof = prove(task, s, t, settings, run_id, logs / f"try-{len(watch.state['tries'])}")
+        watch.proved(proof, time.monotonic() - started)
+        return proof
+
+    first, found, how, spent, model = None, None, "", 0.0, None
+    if guessed[1] != UNKNOWN["test"]:
+        default = tasks.recipe("", language, []) if language in ("Go", "Python") else {}
+        how = watch.by = "default" if guessed == (default.get("setup"), default.get("test")) else "guess"
+        watch.say(f"trying {'its default commands' if how == 'default' else 'a guess from its files'} on #{pr}")
+        proof = prove_here(*guessed)
+        first = (*guessed, proof)
+        if proof.passed:
+            return guessed, how, spent, model
+        if proof.step == "sandbox":  # nothing a model could fix
+            raise SystemExit(failure(repo, pr, [first], "the sandbox failed, not the commands"))
+    catalog, _ = config.load()
+    model = catalog[MODEL]
+    if not ask and (missing := config.missing_credential(model)):
+        raise SystemExit(failure(repo, pr, [first] if first else [], missing))
+    watch.by = model.label
+    watch.say(f"{model.label} is reading the repository" + (f" (the first guess failed at {first[2].step})" if first else ""))
+    mirror = tasks.DEFAULT_REPOS / f"{task.meta['task']['repo'].replace('/', '__')}.git"
+    paths, read = files_at(mirror, task.meta["task"]["base_sha"]) if mirror.exists() else ([], lambda p: None)
+    bench = watch.bench = Bench(task, settings, run_id)
+    try:
+        got = loop(context(repo, task, paths, read, first, fixed),
+                   ask=ask or chat(model, job_path / "trials" / f"commands-{repo.replace('/', '__')}"),
+                   run=bench.run, read=bench.read, prove=prove_here, fixed=fixed, say=watch.say, start=int(bool(first)))
+    except Unsolved as exc:
+        tried = ([first] if first else []) + exc.tried
+        raise SystemExit(failure(repo, pr, tried, exc.why, exc.spent, model.label)) from None
+    except runtime.RuntimeError as exc:  # the model couldn't be reached
+        raise SystemExit(failure(repo, pr, [first] if first else [], str(exc))) from None
+    finally:
+        bench.close()
+    return (got["setup"], got["test"]), "model", got["spent"], model
+
+
+class Progress:
+    """Working out a repository's commands as the page shows it: each try (who proposed it, its install
+    command, where it stopped and the line that says why), what is happening now, and the sandboxes it
+    holds. `publish` gets a copy of `state` after every change; `status` the sentence for the run's line."""
+
+    def __init__(self, repo: str, pr: int, of: int, status, publish):
+        self.status, self.publish, self.by, self.bench = status, publish, "", None
+        self.state = {"repo": repo, "pr": pr, "of": of, "started_at": now(), "state": "working", "now": "",
+                      "tries": [], "sandboxes": 0}
+
+    def say(self, text: str) -> None:
+        self.state["now"] = text
+        self.status(f"Working out how to install and test {self.state['repo']}: {text}")
+        self.send()
+
+    def proving(self, setup: str) -> None:
+        self.state["tries"].append({"n": len(self.state["tries"]) + 1, "by": self.by, "setup": short(setup, 240),
+                                    "started_at": now()})
+        self.send()
+
+    def proved(self, proof: Proof, seconds: float) -> None:
+        self.state["tries"][-1].update(step="passed" if proof.passed else proof.step, seconds=round(seconds),
+                                       error=None if proof.passed else gist(proof.output))
+        self.send()
+
+    def end(self, state: str, why: str | None = None) -> None:
+        self.state.update(state=state, finished_at=now(), **({"why": why} if why else {}))
+        self.send()
+
+    def send(self) -> None:
+        working = self.state["state"] == "working"
+        tries = self.state["tries"]
+        self.state["sandboxes"] = working * ((bool(tries) and "step" not in tries[-1])
+                                             + bool(self.bench and self.bench.name))
+        self.publish(json.loads(json.dumps(self.state)))
+
+
+# Lines that say why a command failed, over the counts and banners test runners end with.
+SAYS_WHY = re.compile(r"\w(?:Error|Exception)\b:|\berror\b:|command not found|No such file|Permission denied|"
+                      r"not found|Cannot find|cannot find|Could not|could not|ENOENT|EACCES", re.I)
+
+
+def gist(output: str, chars: int = 240) -> str:
+    """The line of a failed command's output that best says why: the last one that names an error, else the last."""
+    lines = [line.strip() for line in runner.ANSI.sub("", output or "").splitlines() if line.strip()]
+    line = next((line for line in reversed(lines) if SAYS_WHY.search(line)), lines[-1] if lines else "")
+    return line if len(line) <= chars else line[:chars - 1] + "…"
 
 def failure(repo: str, pr: int, tried: list, why: str, spent: float = 0.0, model: str | None = None) -> str:
     """Why a run stops when nothing worked: what it tried, the last error, and what to do instead."""
     text = f"Couldn't work out how to install and test {repo}"
     if tried:
         setup, test, proof = tried[-1]
-        error = next((line for line in reversed(proof.output.splitlines()) if line.strip()), proof.output)[-300:]
+        error = gist(proof.output, 300)
         text += (f": {len(tried)} tr{'y' if len(tried) == 1 else 'ies'} on #{pr} failed ({why}). The last was install "
                  f"`{short(setup, 120)}` and test `{short(test, 120)}`, which failed at {proof.step}: {error.strip()}")
     else:
