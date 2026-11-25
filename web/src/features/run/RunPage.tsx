@@ -170,7 +170,8 @@ function now(run: Run): string {
   const step = pipeline(run).find((s) => s.state === "now")?.key;
   const { done, total } = run.progress;
   const sofar = total ? ` ${done} of ${total} attempts finished.` : "";
-  if (step === "find") return run.step === "commands" && run.detail ? run.detail.replace(/\.?$/, ".") : "Finding merged pull requests that came with tests.";
+  if (run.step === "commands" && run.detail) return run.detail.replace(/\.?$/, ".");
+  if (step === "find") return "Finding merged pull requests that came with tests.";
   if (step === "check") return "Checking that each pull request's tests fail before the fix and pass after.";
   if (step === "code") return `Models coding, each attempt in its own sandbox.${sofar}`;
   if (step === "grade") return `Grading with the hidden tests${run.judged === false ? "" : ", then the judges"}.${sofar}`;
@@ -183,7 +184,8 @@ function RunNotes({ run }: { run: Run }) {
   let line: string | null = null;
   if (run.phase === "stopped") line = `Stopped${p.total ? ` with ${p.done} of ${p.total} attempts finished` : ""}.${run.read_only ? "" : " Resume to carry on where it left off."}`;
   else if (run.phase === "done" && run.resumable) line = `${plural(run.lost, "attempt")} ${run.lost === 1 ? "was" : "were"} lost to sandbox, setup or provider problems, not the models.${run.read_only ? "" : ` Resume runs ${run.lost === 1 ? "it" : "them"} again.`}`;
-  else if (run.phase === "collecting" || run.phase === "failed" || (run.phase === "checking" && !k.total)) line = run.detail;
+  // While a repository's commands are worked out, the Setup panel on the board says what's happening.
+  else if ((run.phase === "collecting" && run.step !== "commands") || run.phase === "failed" || (run.phase === "checking" && !k.total)) line = run.detail;
   const used = Object.entries(run.commands ?? {});
   if (!line && !run.left_out.length && !run.note && !run.log && !used.length) return null;
   return (

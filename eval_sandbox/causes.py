@@ -178,6 +178,36 @@ def provider(message: str) -> str:
     return f"{base[:-1]} ({said})." if said else base
 
 
+# Why a PR's check failed for want of something the sandbox doesn't give, read from its log: a tool the image
+# lacks, or tests that reach for the network or a service while they run offline.
+MISSING_TOOL = re.compile(r"(?:^|[\s:])([A-Za-z][\w.+-]*): (?:command )?not found\s*$", re.M)
+DOWNLOAD = re.compile(r"failed to download|error sending request for url|Network is unreachable|ENETUNREACH|"
+                      r"Failed to establish a new connection", re.I)
+LOOKUP = re.compile(r"(?:failed to resolve host|Could not resolve host|getaddrinfo (?:ENOTFOUND|EAI_AGAIN)|"
+                    r"could not translate host name)[:\s]+[\"'`]?([\w.-]+)|Temporary failure in name resolution|"
+                    r"Name or service not known", re.I)
+REFUSED = re.compile(r"Connection refused|ECONNREFUSED|could not connect to server", re.I)
+PORT = re.compile(r"(?:localhost|127\.0\.0\.1|::1)\W{0,4}(?:port\s+)?(\d{2,5})(?![\d.])", re.I)
+
+
+def environment(log: str) -> str | None:
+    """What a failed install or test run needed that the sandbox doesn't give, as a clause; None when the
+    log doesn't say."""
+    log = log or ""
+    if tool := MISSING_TOOL.search(log):
+        return f"the sandbox has no `{tool[1]}`"
+    if DOWNLOAD.search(log):
+        return "they download something while they run, and tests run without network"
+    if lookup := LOOKUP.search(log):
+        host = lookup[1] if lookup.lastindex else None
+        return (f"they look up the host {host}, and tests run without network or other services" if host
+                else "they need the network, and tests run without it")
+    if REFUSED.search(log):
+        port = PORT.search(log)
+        return f"they need a service{f' on port {port[1]}' if port else ''} that the sandbox doesn't run"
+    return None
+
+
 def signature(result: dict) -> tuple[str, str] | None:
     """How a lost attempt failed, the same for attempts that failed the same way: its step and cause,
     without the names of its sandboxes."""

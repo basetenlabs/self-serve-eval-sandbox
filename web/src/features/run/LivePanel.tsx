@@ -8,6 +8,7 @@ import type { Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Activity, useActivity } from "./Activity";
 import { Board, BoardLegend, toneStyle } from "./Board";
+import { Setup } from "./Setup";
 
 /** The run as it happens: the sandbox fleet, progress, scores so far, the board and a feed. */
 export function LivePanel({ run, models, colors, onOpen }: { run: Run; models: Model[]; colors: Record<string, SwatchT>; onOpen?: (taskId: string) => void }) {
@@ -16,15 +17,20 @@ export function LivePanel({ run, models, colors, onOpen }: { run: Run; models: M
   const labels = React.useMemo(() => Object.fromEntries(models.map((m) => [m.key, m.label])), [models]);
   const feed = useActivity(run, labels);
   const b = run.board;
+  // Working out a repository's commands, or where that failed: what the board is waiting for.
+  const setup = Object.values(run.setup ?? {}).find((s) => (active && run.step === "commands" && s.state === "working")
+    || (run.phase === "failed" && s.state === "failed"));
+  const setupPanel = setup ? <Setup setup={setup} now={now} live={active} /> : null;
   if (!b) {
-    return <Empty title={active ? "Finding pull requests" : "No board for this run"}>{run.detail || "The board fills in as PRs are found and checked."}</Empty>;
+    return setupPanel ?? <Empty title={active ? "Finding pull requests" : "No board for this run"}>{run.detail || "The board fills in as PRs are found and checked."}</Empty>;
   }
   // A run that ended before any model started has no fleet, progress or scores to show.
   if (!active && !b.rows.some((row) => row.cells.some((c) => isFinal(c) || isLive(c.stage)))) {
-    return <Empty title="No attempts ran">{run.phase === "stopped" ? "The run was stopped before any model started." : "The run ended before any model started; the note above says why."}</Empty>;
+    return setupPanel ?? <Empty title="No attempts ran">{run.phase === "stopped" ? "The run was stopped before any model started." : "The run ended before any model started; the note above says why."}</Empty>;
   }
   return (
     <div className="grid gap-12">
+      {setupPanel}
       <div className="grid gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)_minmax(0,1.1fr)]">
         <Fleet run={run} colors={colors} />
         <Progress run={run} now={now} />
@@ -49,6 +55,7 @@ function Fleet({ run, colors }: { run: Run; colors: Record<string, SwatchT> }) {
   const active = isActive(run.phase);
   const vms: { tone: Tone; model?: string; verifier?: boolean }[] = [];
   if (active) {
+    for (let i = 0; i < (b.setup_sandboxes ?? 0); i++) vms.push({ tone: "check" }); // working out install and test commands
     for (const row of b.rows) {
       if (isChecking(row)) vms.push({ tone: "check" });
       for (const c of row.cells) {
