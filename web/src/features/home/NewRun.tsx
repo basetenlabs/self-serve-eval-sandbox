@@ -131,8 +131,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const judging = judgesOn ? offer!.cost_per_attempt * attempts : 0; // one review per attempt, its last try's
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) + judging : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
-  // A run takes at least its slowest attempt, however many go at once.
-  const minutes = mode === "quick" ? quickMinutes : Math.max(1, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60));
+  // A run takes at least its slowest attempt, however many go at once. Cheapest model first runs a PR's models one
+  // after another, so at most every model's attempt in turn: an upper bound, like its cost.
+  const chain = models.reduce((s, m) => s + (m.seconds_per_attempt ?? 0), 0);
+  const minutes = mode === "quick" ? quickMinutes * (escalateOn ? models.length : 1)
+    : Math.max(1, Math.round(Math.max(escalateOn ? chain : slowest, (slowest * attempts) / 4) / 60));
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
@@ -289,8 +292,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
                 <PlanStat label="Estimated cost" value={<Rolling value={cost == null || !prs ? "–" : `${escalateOn ? "≤" : "≈"} ${usd(cost)}`} />}
                   tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}${judgesOn ? ", and the judges' review of each attempt" : ""}.${escalateOn ? " Cheapest model first costs less: this is the most it can, if every PR went up to every model." : ""}`
                     : "No earlier run to estimate from yet."} />
-                <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `≈ ${minutes} min` : "–"} />}
-                  tip={mode === "quick" && tries > 1 ? `${quickAtOnce < attempts ? `Up to ${quickAtOnce} attempts run` : "Every attempt starts"} at once, and one the model fails runs again: the slowest sets the end.`
+                <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `${escalateOn ? "≤" : "≈"} ${minutes} min` : "–"} />}
+                  tip={escalateOn ? "Cheapest model first runs a PR's models one after another: this is the longest it can take, if every PR went up to every model."
+                    : mode === "quick" && tries > 1 ? `${quickAtOnce < attempts ? `Up to ${quickAtOnce} attempts run` : "Every attempt starts"} at once, and one the model fails runs again: the slowest sets the end.`
                     : slowest ? `Slowest model takes about ${dur(slowest)} per attempt${tries > 1 ? ", its tries included" : ""}.` : undefined} />
               </div>
               {offer && <JudgesSwitch offer={offer} on={judgesOn} onChange={(v) => { setError(null); setJudges(v); }} />}

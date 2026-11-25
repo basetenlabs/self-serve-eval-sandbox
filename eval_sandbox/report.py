@@ -25,7 +25,7 @@ from pathlib import Path
 
 from .causes import sentence
 from .config import Model, redact_known
-from .runner import ANSI, tries_left
+from .runner import ANSI, escalation_step, tries_left
 from .tasks import DEFAULT_TASKS
 from .tasks import load as load_task
 
@@ -259,9 +259,11 @@ def escalation(meta: dict, trials: list[dict], summary: dict[str, dict]) -> dict
     """What an escalation run did with each task, cheapest model first: which models tried it and which solved it,
     how many each model solved, what the run cost, and what running every model on every task would have:
     the cost of the attempts that ran plus an estimate for those that didn't (`every_model`). The estimate for a
-    model is its mean cost per attempt in this run, else the page's estimate when the run started (from earlier
-    runs), else a model of this run's scaled by output token price. A cost counts every try of every attempt
-    that ran, attempts not scored included."""
+    model is the page's estimate when the run started (from earlier runs), else its cost per try in this run times
+    the tries an attempt takes at its solve rate here, else a model of this run's scaled by output token price.
+    Not its mean per attempt in this run: a model above the first ran only the tasks the ones below failed, the
+    hard ones, which take every try. A cost counts every try of every attempt that ran, attempts not scored
+    included. A task whose climb ended on an attempt that wasn't scored is `not_scored`, not unsolved."""
     plan = meta["escalation"]
     specs = {m["key"]: m for m in meta.get("models") or []}
     ladder = [k for k in plan["ladder"] if k in specs]
@@ -272,9 +274,8 @@ def escalation(meta: dict, trials: list[dict], summary: dict[str, dict]) -> dict
     for task_id in meta.get("tasks") or []:
         ran = {k: t for k in ladder if (t := first.get((task_id, k)))}
         winner = next((k for k in ladder if ran.get(k, {}).get("outcome") == "solved"), None)
-        last = ran.get(ladder[-1]) if ladder else None
-        rows.append({"task_id": task_id, "solved_by": winner,
-                     "done": bool(winner or (last and not tries_left(last, tries))),
+        done = bool(ladder) and escalation_step(ladder, ran, tries) is None  # a lost attempt waits for a resume
+        rows.append({"task_id": task_id, "solved_by": winner, "done": done,
                      "steps": [{"model": k, "outcome": t["outcome"],
                                 **({"invalid_reason": t["invalid_reason"]} if t.get("invalid_reason") else {})}
                                for k, t in ran.items()]})
@@ -291,10 +292,12 @@ def escalation(meta: dict, trials: list[dict], summary: dict[str, dict]) -> dict
             spent += sum(c or 0 for c in costs)
 
     def estimate(key: str) -> tuple[float | None, str | None]:
-        if (each := (summary.get(key) or {}).get("cost_per_attempt")) is not None:
-            return each, "this run"
         if (each := (plan.get("cost_per_attempt") or {}).get(key)) is not None:
             return each, "earlier runs"
+        s = summary.get(key) or {}
+        if (each := s.get("cost_per_try")) is not None and s.get("tries"):
+            rate = (s.get("solved") or 0) / s["tries"]  # each try after the first runs only if the ones before failed
+            return each * sum((1 - rate) ** n for n in range(tries)), "this run"
         mine = output_price(specs[key])
         for base in ladder:  # a model of this run, scaled by the two models' output token price
             theirs, each = output_price(specs[base]), (summary.get(base) or {}).get("cost_per_attempt")
@@ -311,8 +314,10 @@ def escalation(meta: dict, trials: list[dict], summary: dict[str, dict]) -> dict
     cost = spent if priced else None
     every = cost + guessed if cost is not None and guessed is not None else None
     remaining = sum(not r["done"] for r in rows)
+    ended = [r for r in rows if r["done"] and not r["solved_by"]]
+    not_scored = sum(bool(r["steps"]) and r["steps"][-1]["outcome"] == "invalid" for r in ended)
     return {"ladder": ladder, "tasks": rows, "solved_by": solved_by, "tried": tried,
-            "unsolved": sum(r["done"] and not r["solved_by"] for r in rows), "remaining": remaining,
+            "unsolved": len(ended) - not_scored, "not_scored": not_scored, "remaining": remaining,
             "cost_usd": cost,
             "every_model": {"cost_usd": every, "estimated_usd": guessed, "estimated_attempts": sum(unrun.values()),
                             "estimates": estimates},

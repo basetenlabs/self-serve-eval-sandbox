@@ -454,7 +454,9 @@ export interface Escalation {
   solved_by: Record<string, number>;
   tried: Record<string, number>;
   unsolved: number;
-  /** PRs still going up the ladder (a stopped run). */
+  /** PRs whose climb ended on an attempt that wasn't scored. */
+  not_scored?: number;
+  /** PRs still going up the ladder (a stopped run, or one waiting on a lost attempt). */
   remaining: number;
   /** Every try of every attempt that ran; null when one isn't priced. */
   cost_usd: number | null;

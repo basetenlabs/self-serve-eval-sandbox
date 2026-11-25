@@ -40,7 +40,7 @@ DEFAULT_LIMIT = 10
 DEFAULT_TRIES = 3
 ACTIVE = ("collecting", "checking", "running")
 # An escalation run (--escalate, "Cheapest model first" on the page) climbs from its cheapest model up.
-ESCALATE_NEEDS = "Cheapest model first needs at least two models: pick another one."
+ESCALATE_NEEDS = "Cheapest model first needs at least two different models: pick another one."
 # An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
 # A run on a private repository loses these PR_EVAL_PRIVATE_RETENTION_DAYS after it ends (unset: kept);
 # its report and each attempt's result stay.
@@ -412,7 +412,12 @@ def measured(job_dirs: list[Path]) -> tuple[dict[str, dict], dict[str, float]]:
         data = read_json(job_dir / "report.json")
         # By repositories, the quick sample's too: its set of repositories changes over time.
         where = scope(repo_of(t) for t in meta.get("tasks") or [])
+        # An escalation run's cheapest model ran every task, but the ones above it only those it failed, the
+        # hard ones: their figures would overstate them. Only the first model's count.
+        first = ((meta.get("escalation") or {}).get("ladder") or [None])[0]
         for key, s in (data.get("summary") or {}).items():
+            if meta.get("escalation") and key != first:
+                continue
             if s.get("valid") and s.get("cost_per_attempt") is not None:
                 each = per_try(s)
                 found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(where, each)
@@ -463,6 +468,7 @@ def escalation_plan(models: list[config.Model], request: Request, jobs_dir: Path
     (see ladder), and the cost per attempt the page showed for each when it started, which its report uses for a
     model the run never reached."""
     catalog, _ = config.load(models_config)
+    models = list({m.key: m for m in models}.values())  # a model named twice is one rung
     order, costs = ladder(models, cost_estimates(jobs_dir, {**catalog, **{m.key: m for m in models}}),
                           request_scope(request))
     return {"ladder": [m.key for m in order], "cost_per_attempt": costs}
@@ -478,8 +484,9 @@ def new_job(request: Request, models: list[config.Model], judge: config.Panel | 
     path = jobs_dir / run_id
     if (path / "run.json").exists():
         raise SystemExit(f"{path} exists: pass --resume {path} to finish it, or choose another --name")
-    if escalation:
-        models, attempts = sorted(models, key=lambda m: escalation["ladder"].index(m.key)), 1
+    if escalation:  # each model once, in the ladder's order
+        models = sorted({m.key: m for m in models}.values(), key=lambda m: escalation["ladder"].index(m.key))
+        attempts = 1
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
     write_json(path / "run.json", {
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": harness,

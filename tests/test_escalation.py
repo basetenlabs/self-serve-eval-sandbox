@@ -48,7 +48,7 @@ def scripted(job_dir: Path, outcomes: dict[tuple[str, str], str], ran: list):
             ran.append((task.id, m.key))
             tried = ran.count((task.id, m.key))  # a failed try is followed by the next, up to the run's tries
         outcome = outcomes.get((task.id, m.key), "failed")
-        reason = "provider-error" if outcome == "lost" else "no-patch" if outcome == "invalid" else None
+        reason = "provider-error" if outcome == "lost" else "verifier-apply-error" if outcome == "invalid" else None
         return write_result(job_dir, task.id, m.key, "invalid" if reason else outcome, reason=reason, tried=tried)
     return run_trial
 
@@ -111,6 +111,42 @@ class Ladder(unittest.TestCase):
                       pipeline.plan_line({**job.meta, "tasks": ["o__r-1"]}, LADDER))
 
 
+    def test_a_model_named_twice_is_one_rung(self):
+        # A ladder of cheap, cheap, dear would climb from cheap to cheap again, forever.
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(pipeline.config, "load", return_value=({}, None)):
+            plan = pipeline.escalation_plan([CHEAP, DEAR, CHEAP], pipeline.Request(task_ids=["o__r-1"]), Path(d))
+            job = pipeline.new_job(pipeline.Request(task_ids=["o__r-1"]), [CHEAP, DEAR, CHEAP], None, name="e",
+                                   jobs_dir=Path(d), escalation=plan)
+        self.assertEqual(plan["ladder"], ["cheap", "dear"])
+        self.assertEqual([m["key"] for m in job.meta["models"]], ["cheap", "dear"])
+
+    def test_an_escalation_run_measures_only_its_cheapest_model(self):
+        # The cheap model ran all ten PRs and solved eight; the dear one only the two it failed, every try.
+        tasks = [f"o__r-{i}" for i in range(10)]
+        trials = [trial(t, "cheap", "solved", 0.1) for t in tasks[:8]] + \
+            [trial(t, "cheap", "failed", 0.1, (0.1, 0.1)) for t in tasks[8:]] + \
+            [trial(t, "dear", "failed", 1.0, (1.0, 1.0)) for t in tasks[8:]]
+        summary = {k: report.summarize([t for t in trials if t["model"] == k]) for k in ("cheap", "dear")}
+        with tempfile.TemporaryDirectory() as d:
+            for name, plan in (("esc", {"ladder": ["cheap", "dear"]}), ("plain", None)):
+                (Path(d) / name).mkdir()
+                (Path(d) / name / "run.json").write_text(json.dumps({"tasks": tasks, **({"escalation": plan} if plan else {})}))
+                (Path(d) / name / "report.json").write_text(json.dumps({"summary": summary}))
+            escalated, _ = pipeline.measured([Path(d) / "esc"])
+            plain, _ = pipeline.measured([Path(d) / "plain"])
+        self.assertEqual(set(escalated), {"cheap"})
+        self.assertEqual(set(plain), {"cheap", "dear"})
+
+
+def trial(task_id: str, key: str, outcome: str, cost: float, earlier: tuple = ()) -> dict:
+    """One attempt as the report reads it, with the cost of each of its tries."""
+    result = {"task_id": task_id, "model": key, "attempt": 1, "outcome": outcome, "agent": {"cost_usd": cost},
+              "try": len(earlier) + 1}
+    if earlier:
+        result["earlier_tries"] = [{"outcome": "failed", "agent": {"cost_usd": c}} for c in earlier]
+    return result
+
+
 class Step(unittest.TestCase):
     def step(self, tries: int = 1, **results):
         return runner.escalation_step(KEYS, {k: v for k, v in results.items()}, tries)
@@ -120,8 +156,12 @@ class Step(unittest.TestCase):
         self.assertEqual(self.step(), "cheap")
         self.assertIsNone(self.step(cheap=solved))
         self.assertEqual(self.step(cheap=failed), "mid")
-        self.assertEqual(self.step(cheap={"outcome": "invalid", "invalid_reason": "no-patch"}), "mid")  # not scored
-        self.assertEqual(self.step(cheap={"outcome": "invalid", "invalid_reason": "sandbox-error"}), "mid")
+        # Only a scored failure goes up. Lost to infrastructure, it waits there for a resume to run it again; any
+        # other attempt not scored is the task's or the verifier's trouble, so no model above pays for it.
+        self.assertEqual(self.step(cheap={"outcome": "invalid", "invalid_reason": "sandbox-error"}), "cheap")
+        self.assertEqual(self.step(cheap=failed, mid={"outcome": "invalid", "invalid_reason": "provider-error"}), "mid")
+        self.assertIsNone(self.step(cheap={"outcome": "invalid", "invalid_reason": "task-unstated-name"}))
+        self.assertIsNone(self.step(cheap=failed, mid={"outcome": "invalid", "invalid_reason": "verifier-apply-error"}))
         self.assertIsNone(self.step(cheap=failed, mid=solved))
         self.assertIsNone(self.step(cheap=failed, mid=failed, dear=failed))  # unsolved after every model
 
@@ -131,18 +171,19 @@ class Step(unittest.TestCase):
         self.assertEqual(self.step(2, cheap={"outcome": "failed", "try": 2}), "mid")
         # The last model's attempt lost to infrastructure runs again, as a lost attempt does on any run.
         self.assertEqual(self.step(cheap=failed, mid=failed, dear={"outcome": "invalid", "invalid_reason": "provider-error"}), "dear")
-        self.assertIsNone(self.step(cheap=failed, mid=failed, dear={"outcome": "invalid", "invalid_reason": "no-patch"}))
+        self.assertIsNone(self.step(cheap=failed, mid=failed, dear={"outcome": "invalid", "invalid_reason": "verifier-timeout"}))
 
 
 class Scheduling(unittest.TestCase):
     OUTCOMES = {("a", "cheap"): "solved",
                 ("b", "cheap"): "failed", ("b", "mid"): "solved",
-                ("c", "cheap"): "invalid", ("c", "mid"): "lost", ("c", "dear"): "solved",
-                ("d", "cheap"): "failed", ("d", "mid"): "failed", ("d", "dear"): "failed"}
+                ("c", "cheap"): "failed", ("c", "mid"): "lost", ("c", "dear"): "solved",  # dear waits for a resume
+                ("d", "cheap"): "failed", ("d", "mid"): "failed", ("d", "dear"): "failed",
+                ("e", "cheap"): "invalid"}  # not scored: no model above runs
 
     def test_a_task_climbs_only_as_far_as_it_has_to(self):
         ran, progress = [], []
-        candidates = [SimpleNamespace(id=t) for t in "abcd"]
+        candidates = [SimpleNamespace(id=t) for t in "abcde"]
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(runner, "needs_check", side_effect=lambda t, _: t.id in ("a", "c")), \
                 mock.patch.object(runner, "validation_status", return_value="valid"), \
@@ -152,13 +193,13 @@ class Scheduling(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             runner.check_and_run(candidates, LADDER, 1, Path(d), runner.Settings(concurrency=3), "r",
                                  on_result=lambda result, done, total: progress.append((done, total)), ladder=LADDER)
-            lost = runner.lost_rungs(["a", "b", "c", "d"], LADDER, Path(d))
-        by_task = {t: [k for task, k in ran if task == t] for t in "abcd"}
-        self.assertEqual(by_task, {"a": ["cheap"], "b": ["cheap", "mid"], "c": ["cheap", "mid", "dear"],
-                                   "d": ["cheap", "mid", "dear"]})
+            lost = runner.lost_rungs(list("abcde"), LADDER, Path(d))
+        by_task = {t: [k for task, k in ran if task == t] for t in "abcde"}
+        self.assertEqual(by_task, {"a": ["cheap"], "b": ["cheap", "mid"], "c": ["cheap", "mid"],
+                                   "d": ["cheap", "mid", "dear"], "e": ["cheap"]})
         self.assertEqual(progress[-1], (9, 9))  # every count ends where it started from: no cell waits forever
         self.assertTrue(all(done <= total for done, total in progress))
-        self.assertEqual(lost, 0)
+        self.assertEqual(lost, 1)  # c, on mid
 
     def test_a_resume_picks_each_task_up_where_its_ladder_stopped(self):
         with tempfile.TemporaryDirectory() as d:
@@ -167,24 +208,27 @@ class Scheduling(unittest.TestCase):
             write_result(job_dir, "b", "cheap", "solved")  # done
             # c: nothing yet
             for k in ("cheap", "mid"):
-                write_result(job_dir, "d", k, "failed")
+                write_result(job_dir, "d", k, "failed", tried=2)
             write_result(job_dir, "d", "dear", "invalid", reason="sandbox-error")  # lost on the last model
             write_result(job_dir, "e", "cheap", "failed", tried=1)  # stopped between its tries
             write_result(job_dir, "f", "cheap", "solved")
             write_result(job_dir, "f", "mid", "failed")  # a later rung's leftover never reruns a solved task
-            tasks = [SimpleNamespace(id=t) for t in "abcdef"]
+            write_result(job_dir, "g", "cheap", "invalid", reason="provider-error")  # lost on the first model
+            write_result(job_dir, "h", "cheap", "invalid", reason="task-unstated-name")  # not scored: over
+            tasks = [SimpleNamespace(id=t) for t in "abcdefgh"]
             pending = runner.pending_trials(tasks, LADDER, 1, job_dir, tries=2, ladder=LADDER)
             self.assertEqual([(t.id, m.key, attempt) for t, m, attempt, _ in pending],
-                             [("a", "mid", 1), ("c", "cheap", 1), ("d", "dear", 1), ("e", "cheap", 1)])
-            self.assertEqual(runner.lost_rungs(["a", "b", "d"], LADDER, job_dir, tries=2), 2)  # a hasn't finished
+                             [("a", "mid", 1), ("c", "cheap", 1), ("d", "dear", 1), ("e", "cheap", 1), ("g", "cheap", 1)])
+            self.assertEqual(runner.lost_rungs(list("abdgh"), LADDER, job_dir, tries=2), 2)  # d and g; a isn't lost
             ran = []
             outcomes = {("a", "mid"): "failed", ("a", "dear"): "solved", ("c", "cheap"): "solved",
-                        ("d", "dear"): "failed", ("e", "cheap"): "failed", ("e", "mid"): "solved"}
+                        ("d", "dear"): "failed", ("e", "cheap"): "failed", ("e", "mid"): "solved",
+                        ("g", "cheap"): "solved"}
             with mock.patch.object(runner, "run_trial", side_effect=scripted(job_dir, outcomes, ran)), \
                     contextlib.redirect_stdout(io.StringIO()):
                 runner.run(tasks, LADDER, 1, job_dir, runner.Settings(concurrency=2), "r", tries=2, ladder=LADDER)
             self.assertEqual(sorted(set(ran)), sorted([("a", "mid"), ("a", "dear"), ("c", "cheap"), ("d", "dear"),
-                                                       ("e", "cheap"), ("e", "mid")]))
+                                                       ("e", "cheap"), ("e", "mid"), ("g", "cheap")]))
             self.assertEqual(ran.count(("a", "mid")), 2)  # failed on both its tries, then up to dear
             self.assertEqual(runner.pending_trials(tasks, LADDER, 1, job_dir, tries=2, ladder=LADDER), [])
 
@@ -194,6 +238,8 @@ class Scheduling(unittest.TestCase):
             self.assertEqual(len(runner.climb(job, {"outcome": "failed"}, LADDER, Path(d))), 1)
             self.assertEqual(runner.climb(job, {"outcome": "solved"}, LADDER, Path(d)), [])
             self.assertEqual(runner.climb(job, {"outcome": "interrupted"}, LADDER, Path(d)), [])
+            for reason in ("sandbox-error", "verifier-apply-error"):  # lost waits for a resume; not scored ends it
+                self.assertEqual(runner.climb(job, {"outcome": "invalid", "invalid_reason": reason}, LADDER, Path(d)), [])
             self.assertEqual(runner.climb((job[0], DEAR, 1, Path(d)), {"outcome": "failed"}, LADDER, Path(d)), [])
             with mock.patch.object(runner, "STOPPING", threading.Event()) as stopping:
                 stopping.set()
@@ -215,7 +261,7 @@ def escalation_run(d: str, plan_costs: dict | None = None, phase: str = "done") 
     write_result(job_dir, "a", "cheap", "solved", cost=0.1)
     write_result(job_dir, "b", "cheap", "failed", cost=0.2, tried=2, earlier=[0.1])
     write_result(job_dir, "b", "mid", "solved", cost=1.0)
-    write_result(job_dir, "c", "cheap", "invalid", reason="no-patch", cost=0.05)
+    write_result(job_dir, "c", "cheap", "failed", cost=0.05, tried=2, earlier=[0.05])
     write_result(job_dir, "c", "mid", "failed", cost=1.0, tried=2, earlier=[1.0])
     write_result(job_dir, "c", "dear", "failed", cost=4.0, tried=2, earlier=[4.0])
     write_result(job_dir, "d", "cheap", "solved", cost=0.1, tried=2, earlier=[0.1])
@@ -230,19 +276,20 @@ class Report(unittest.TestCase):
         self.assertEqual(e["ladder"], KEYS)
         self.assertEqual({t["task_id"]: t["solved_by"] for t in e["tasks"]}, {"a": "cheap", "b": "mid", "c": None, "d": "cheap"})
         self.assertEqual([s["model"] for s in e["tasks"][2]["steps"]], KEYS)
-        self.assertEqual(e["tasks"][2]["steps"][0], {"model": "cheap", "outcome": "invalid", "invalid_reason": "no-patch"})
+        self.assertEqual(e["tasks"][2]["steps"][0], {"model": "cheap", "outcome": "failed"})
         self.assertEqual((e["solved_by"], e["tried"]), ({"cheap": 2, "mid": 1, "dear": 0}, {"cheap": 4, "mid": 2, "dear": 1}))
-        self.assertEqual((e["unsolved"], e["remaining"], data["complete"]), (1, 0, True))
-        # Every try of every attempt that ran, the one not scored too.
-        spent = 0.1 + (0.1 + 0.2) + 1.0 + 0.05 + (1.0 + 1.0) + (4.0 + 4.0) + (0.1 + 0.1)
+        self.assertEqual((e["unsolved"], e["not_scored"], e["remaining"], data["complete"]), (1, 0, 0, True))
+        # Every try of every attempt that ran.
+        spent = 0.1 + (0.1 + 0.2) + 1.0 + (0.05 + 0.05) + (1.0 + 1.0) + (4.0 + 4.0) + (0.1 + 0.1)
         self.assertAlmostEqual(e["cost_usd"], spent)
-        # Not run: mid on a and d, dear on a, b and d; each at its mean cost per attempt in this run.
-        mid_each, dear_each = data["summary"]["mid"]["cost_per_attempt"], data["summary"]["dear"]["cost_per_attempt"]
-        self.assertAlmostEqual(mid_each, (1.0 + 2.0) / 2)
-        self.assertAlmostEqual(dear_each, 8.0)
+        # Not run: mid on a and d, dear on a, b and d. No figure from earlier runs, so each at its cost per try in
+        # this run, for the tries an attempt takes at its solve rate here (of 2): mid solved 1 of its 3 tries.
+        self.assertEqual((data["summary"]["mid"]["cost_per_try"], data["summary"]["dear"]["cost_per_try"]), (1.0, 4.0))
+        mid_each, dear_each = 1.0 * (1 + 2 / 3), 4.0 * 2
         every = e["every_model"]
         self.assertEqual(every["estimates"]["cheap"], {"attempts": 0, "cost_per_attempt": None, "source": None})
         self.assertEqual(every["estimates"]["dear"], {"attempts": 3, "cost_per_attempt": dear_each, "source": "this run"})
+        self.assertAlmostEqual(every["estimates"]["mid"]["cost_per_attempt"], mid_each)
         self.assertEqual(every["estimated_attempts"], 5)
         self.assertAlmostEqual(every["estimated_usd"], 2 * mid_each + 3 * dear_each)
         self.assertAlmostEqual(every["cost_usd"], spent + 2 * mid_each + 3 * dear_each)
@@ -265,6 +312,39 @@ class Report(unittest.TestCase):
         self.assertEqual(e["every_model"]["estimates"]["mid"]["source"], "prices")
         self.assertAlmostEqual(e["every_model"]["estimates"]["mid"]["cost_per_attempt"], cheap_each * 4.4 / 0.5)
 
+    def test_skipped_attempts_are_priced_from_earlier_runs_before_this_one(self):
+        # Ten PRs, three tries: cheap solves eight; dear gets the two it failed, the hard ones, and fails them on
+        # every try at $1 each. Its $3 per attempt here would price its eight skipped attempts as hard ones too.
+        tasks = [f"o__r-{i}" for i in range(10)]
+        trials = [trial(t, "cheap", "solved", 0.1) for t in tasks[:8]] + \
+            [trial(t, "cheap", "failed", 0.1, (0.1, 0.1)) for t in tasks[8:]] + \
+            [trial(t, "dear", "failed", 1.0, (1.0, 1.0)) for t in tasks[8:]]
+        summary = {k: report.summarize([t for t in trials if t["model"] == k]) for k in ("cheap", "dear")}
+        meta = {"models": [CHEAP.as_dict(), DEAR.as_dict()], "tasks": tasks, "tries": 3,
+                "escalation": {"ladder": ["cheap", "dear"], "cost_per_attempt": {"cheap": 0.12, "dear": 1.3}}}
+        e = report.escalation(meta, trials, summary)
+        spent = 8 * 0.1 + 2 * 0.3 + 2 * 3.0
+        self.assertEqual(e["every_model"]["estimates"]["dear"], {"attempts": 8, "cost_per_attempt": 1.3, "source": "earlier runs"})
+        self.assertAlmostEqual(e["every_model"]["cost_usd"], spent + 8 * 1.3)
+        self.assertAlmostEqual(e["saving"], 1 - spent / (spent + 8 * 1.3))
+        # Without a figure from earlier runs: its cost per try here, for the tries it took (it solved none).
+        meta["escalation"]["cost_per_attempt"] = {"cheap": None, "dear": None}
+        dear = report.escalation(meta, trials, summary)["every_model"]["estimates"]["dear"]
+        self.assertEqual((dear["source"], round(dear["cost_per_attempt"], 6)), ("this run", 3.0))
+
+    def test_a_lost_attempt_keeps_its_pr_unfinished_and_one_not_scored_ends_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            job_dir = escalation_run(d)
+            write_result(job_dir, "c", "dear", "invalid", reason="provider-error")  # a resume runs it again
+            e = report.build_data(job_dir)["escalation"]
+            self.assertEqual((e["remaining"], e["saving"], e["tasks"][2]["done"]), (1, None, False))
+            for name in ("c__mid__1", "c__dear__1"):
+                (job_dir / "trials" / name / "result.json").unlink()
+            write_result(job_dir, "c", "cheap", "invalid", reason="task-unstated-name")  # the task's fault: over
+            e = report.build_data(job_dir)["escalation"]
+        self.assertEqual((e["remaining"], e["unsolved"], e["not_scored"], e["tasks"][2]["done"]), (0, 0, 1, True))
+        self.assertIsNotNone(e["saving"])
+
     def test_an_unfinished_run_shows_no_saving_and_a_plain_run_no_escalation(self):
         with tempfile.TemporaryDirectory() as d:
             job_dir = escalation_run(d)
@@ -284,9 +364,11 @@ class Page(unittest.TestCase):
             (job_dir / "trials" / "c__dear__1" / "result.json").unlink()
             (job_dir / "trials" / "c__dear__1" / "stage.json").write_text(json.dumps({"stage": "agent", "at": "x"}))
             meta = json.loads((job_dir / "run.json").read_text())
-            meta["tasks"] += ["e"]
-            meta["candidates"] += ["e", "f"]  # e passed its check and waits for cheap; f is still being checked
+            meta["tasks"] += ["e", "g", "h"]
+            meta["candidates"] += ["e", "f", "g", "h"]  # e passed its check and waits for cheap; f is still being checked
             (job_dir / "run.json").write_text(json.dumps(meta))
+            write_result(job_dir, "g", "cheap", "invalid", reason="sandbox-error")  # lost: waits there for a resume
+            write_result(job_dir, "h", "cheap", "invalid", reason="verifier-apply-error")  # not scored: over
             page = app.App(job_dir.parent)
             with mock.patch.object(app, "alive", return_value=True):
                 run = page.describe(job_dir)
@@ -295,23 +377,27 @@ class Page(unittest.TestCase):
                 stopped = page.board(page.describe(job_dir))
         stages = {r["id"]: [c["stage"] for c in r["cells"]] for r in board["rows"]}
         self.assertEqual(stages, {"a": ["solved", "not-needed", "not-needed"], "b": ["failed", "solved", "not-needed"],
-                                  "c": ["invalid", "failed", "agent"], "d": ["solved", "not-needed", "not-needed"],
-                                  "e": ["queued", "cheaper", "cheaper"], "f": ["waiting", "cheaper", "cheaper"]})
+                                  "c": ["failed", "failed", "agent"], "d": ["solved", "not-needed", "not-needed"],
+                                  "e": ["queued", "cheaper", "cheaper"], "f": ["waiting", "cheaper", "cheaper"],
+                                  "g": ["invalid", "not-run", "not-run"], "h": ["invalid", "not-run", "not-run"]})
         self.assertEqual(run["ladder"], KEYS)
-        # Done: the six results. Still to come: c's dear, and all three of e's at most.
-        self.assertEqual(run["progress"], {"done": 6, "total": 6 + 1 + 3})
+        # Done: the eight results. Still to come: c's dear, and all three of e's at most; g's only after a resume.
+        self.assertEqual((run["progress"], run["lost"]), ({"done": 8, "total": 8 + 1 + 3}, 1))
         self.assertEqual({r["id"]: [c["stage"] for c in r["cells"]] for r in stopped["rows"]}["e"],
                          ["not-run", "not-run", "not-run"])
 
-    def test_only_a_lost_attempt_on_the_last_model_makes_a_finished_run_resumable(self):
+    def test_a_lost_attempt_on_any_model_makes_a_finished_run_resumable(self):
         with tempfile.TemporaryDirectory() as d:
             job_dir = escalation_run(d)
-            write_result(job_dir, "b", "cheap", "invalid", reason="sandbox-error")  # mid made up for it
             page = app.App(job_dir.parent)
             self.assertEqual((page.describe(job_dir)["lost"], page.describe(job_dir)["resumable"]), (0, False))
             write_result(job_dir, "c", "dear", "invalid", reason="provider-error")
             run = page.describe(job_dir)
-        self.assertEqual((run["lost"], run["resumable"], run["progress"]), (1, True, {"done": 7, "total": 7}))
+            self.assertEqual((run["lost"], run["resumable"], run["progress"]), (1, True, {"done": 7, "total": 7}))
+            (job_dir / "trials" / "b__mid__1" / "result.json").unlink()
+            write_result(job_dir, "b", "cheap", "invalid", reason="sandbox-error")  # lost on the first model
+            run = page.describe(job_dir)
+        self.assertEqual((run["lost"], run["resumable"], run["progress"]), (2, True, {"done": 6, "total": 6}))
 
     def test_run_again_brings_back_the_switch(self):
         meta = {"request": {"quick": True}, "models": [{"key": "cheap"}, {"key": "mid"}]}
@@ -332,6 +418,7 @@ class Page(unittest.TestCase):
         self.assertIn("--escalate", start({"models": ["a", "b"], "escalate": True})["argv"])
         self.assertNotIn("--escalate", start({"models": ["a", "b"]})["argv"])  # off by default
         self.assertEqual(start({"models": ["a"], "escalate": True})["error"], pipeline.ESCALATE_NEEDS)
+        self.assertEqual(start({"models": ["a", "a"], "escalate": True})["error"], pipeline.ESCALATE_NEEDS)
 
 
 class Cli(unittest.TestCase):
@@ -350,9 +437,16 @@ class Cli(unittest.TestCase):
             self.assertEqual(execute.call_count, 2)
             with self.assertRaisesRegex(SystemExit, "keeps its models"):
                 cli.main(["run", "--resume", str(jobs / "e"), "--attempts", "2"])
-            with mock.patch.object(pipeline, "preflight", return_value=([CHEAP], None)), \
-                    self.assertRaisesRegex(SystemExit, "at least two models"):
-                cli.main(["run", "o/r", "--escalate", "--models", "cheap", "--jobs", str(jobs), "--name", "one"])
+            # More tries would send back a model whose failure already sent its tasks up.
+            with self.assertRaisesRegex(SystemExit, "its tries"):
+                cli.main(["run", "--resume", str(jobs / "e"), "--tries", str(meta["tries"] + 1)])
+            cli.main(["run", "--resume", str(jobs / "e"), "--tries", str(meta["tries"])])  # the same is fine
+            self.assertEqual(execute.call_count, 3)
+            for models in ([CHEAP], [CHEAP, CHEAP]):
+                with mock.patch.object(pipeline, "preflight", return_value=(models, None)), \
+                        self.assertRaisesRegex(SystemExit, "at least two different models"):
+                    cli.main(["run", "o/r", "--escalate", "--models", ",".join(m.key for m in models),
+                              "--jobs", str(jobs), "--name", "one"])
 
 
 if __name__ == "__main__":

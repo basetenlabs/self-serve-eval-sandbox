@@ -1201,25 +1201,26 @@ def tries_left(result: dict, tries: int) -> bool:
 
 
 # An escalation run sends each task to its cheapest model first, and to the next model up its ladder only when
-# every model below has ended without solving it: failed after its tries, or not scored. One attempt per model.
+# the hidden tests scored the one below as failed, after its tries. One attempt per model.
 
 def escalation_step(ladder: list[str], results: dict[str, dict | None], tries: int) -> str | None:
     """The model (key) a task goes to next on an escalation run, from what each rung of its `ladder` has
-    finished with so far (`results`, by key). None once a model solved it, or the last one ended without.
-    A rung stopped between its tries carries on; the last rung lost to infrastructure runs again, as a lost
-    attempt does on any run."""
+    finished with so far (`results`, by key); None once its climb is over. Only a scored failure sends it up.
+    A rung not run yet, lost to infrastructure (it waits for a resume to run it again, as on any run), or stopped
+    between its tries with none above it run yet is where it goes. Solved ends the climb, and so does any other
+    attempt that wasn't scored: that is the task's or the verifier's trouble, not the model's (AGENTS.md), so no
+    model above should pay for it."""
     if any((results.get(key) or {}).get("outcome") == "solved" for key in ladder):
         return None
-    ended = [i for i, key in enumerate(ladder) if results.get(key)]
-    if not ended:
-        return ladder[0]
-    top = ended[-1]
-    result = results[ladder[top]]
-    if tries_left(result, tries):
-        return ladder[top]
-    if top + 1 < len(ladder):
-        return ladder[top + 1]
-    return ladder[top] if lost(result) else None
+    for i, key in enumerate(ladder):
+        result = results.get(key)
+        if not result or lost(result):
+            return key
+        if result.get("outcome") != "failed":
+            return None
+        if tries_left(result, tries) and not any(results.get(above) for above in ladder[i + 1:]):
+            return key
+    return None
 
 
 def rung_results(task_id: str, ladder: list[str], job_dir: Path) -> dict[str, dict]:
@@ -1235,22 +1236,25 @@ def next_rung(task_id: str, ladder: list[Model], job_dir: Path, tries: int = 1) 
 
 
 def lost_rungs(task_ids: list[str], ladder: list[Model], job_dir: Path, tries: int = 1) -> int:
-    """How many tasks of a finished escalation run a resume would carry on: their last model's attempt was lost
-    to infrastructure."""
-    return sum(next_rung(t, ladder, job_dir, tries) is not None for t in task_ids)
+    """How many tasks of an escalation run wait on an attempt lost to infrastructure, which a resume runs again."""
+    keys, count = [m.key for m in ladder], 0
+    for task_id in task_ids:
+        results = rung_results(task_id, keys, job_dir)
+        key = escalation_step(keys, results, tries)
+        count += bool(key and lost(results[key]))
+    return count
 
 
 def climb(job: tuple, result: dict | None, ladder: list[Model], job_dir: Path) -> list[tuple]:
-    """The trial a task goes to once one rung of its ladder has ended: the next model up, unless this one solved
-    it, it was the last, or the run is stopping."""
-    if not result or STOPPING.is_set() or result.get("outcome") in ("solved", "interrupted"):
+    """The trial a task goes to once one rung of its ladder has ended: the next model up, only when the hidden
+    tests scored this one as failed (escalation_step), it wasn't the last, and the run isn't stopping."""
+    if not result or STOPPING.is_set() or result.get("outcome") != "failed":
         return []
     task, model = job[0], job[1]
     keys = [m.key for m in ladder]
-    if model.key not in keys or keys.index(model.key) + 1 >= len(ladder):
-        return []
-    up = ladder[keys.index(model.key) + 1]
-    return [(task, up, 1, job_dir / "trials" / trial_name(task, up, 1))]
+    # The next model above this one: a ladder names each model once (escalation_plan), and never this one again.
+    up = next((m for m in ladder[keys.index(model.key) + 1:] if m.key != model.key), None) if model.key in keys else None
+    return [(task, up, 1, job_dir / "trials" / trial_name(task, up, 1))] if up else []
 
 
 def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: int = 1):

@@ -48,8 +48,9 @@ def cmd_run(args) -> int:
         keys, added = pipeline.resumed_models(job.meta, args.models)
         if args.escalate and not job.meta.get("escalation"):
             sys.exit("--escalate is for a new run: this one sends every task to every model")
-        if job.meta.get("escalation") and (added or (args.attempts or 1) > 1):
-            sys.exit("An escalation run keeps its models and one attempt each: start a new run to change them")
+        if job.meta.get("escalation") and (added or (args.attempts or 1) > 1
+                                           or (args.tries or 0) > job.meta.get("tries", 1)):
+            sys.exit("An escalation run keeps its models, its tries and one attempt each: start a new run to change them")
         try:
             models, judge = pipeline.preflight(keys, pipeline.resumed_judge(job.meta, args.judge), args.models_config)
         except SystemExit as exc:
@@ -70,7 +71,7 @@ def cmd_run(args) -> int:
                                    quick=args.quick)
         plan = None
         if args.escalate:
-            if len(models) < 2:
+            if len({m.key for m in models}) < 2:
                 sys.exit(pipeline.ESCALATE_NEEDS)
             if (args.attempts or 1) > 1:
                 sys.exit("--escalate runs one attempt per model; leave out --attempts")

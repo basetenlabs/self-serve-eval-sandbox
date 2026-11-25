@@ -10,7 +10,7 @@ function run(e: Partial<Escalation> = {}): Escalation {
     ladder: ["flash", "glm", "opus"],
     tasks: [
       { task_id: "a", solved_by: "flash", done: true, steps: [{ model: "flash", outcome: "solved" }] },
-      { task_id: "b", solved_by: "opus", done: true, steps: [{ model: "flash", outcome: "failed" }, { model: "glm", outcome: "invalid", invalid_reason: "no-patch" }, { model: "opus", outcome: "solved" }] },
+      { task_id: "b", solved_by: "opus", done: true, steps: [{ model: "flash", outcome: "failed" }, { model: "glm", outcome: "failed" }, { model: "opus", outcome: "solved" }] },
       { task_id: "c", solved_by: null, done: true, steps: [{ model: "flash", outcome: "failed" }, { model: "glm", outcome: "failed" }, { model: "opus", outcome: "failed" }] },
     ],
     solved_by: { flash: 1, glm: 0, opus: 1 }, tried: { flash: 3, glm: 2, opus: 2 }, unsolved: 1, remaining: 0,
@@ -34,11 +34,16 @@ describe("cheapest model first", () => {
 
   it("says each PR's way up the ladder and where it ended", () => {
     const [a, b, c] = run().tasks;
-    expect(pathText(b.steps, labels)).toBe("DeepSeek V4.1 Flash failed, GLM-5.3 not scored, Claude Opus 5.5 solved");
+    expect(pathText(b.steps, labels)).toBe("DeepSeek V4.1 Flash failed, GLM-5.3 failed, Claude Opus 5.5 solved");
     expect(endText(a, labels)).toBe("Solved by DeepSeek V4.1 Flash");
     expect(endText(c, labels)).toBe("Unsolved after every model");
     expect(endText({ ...c, done: false }, labels)).toBe("Not finished");
     expect(pathText([], labels)).toBe("Not tried yet");
+    // An attempt that wasn't scored ends the climb: the task's or the verifier's trouble, not the model's.
+    const stuck = { task_id: "e", solved_by: null, done: true,
+      steps: [{ model: "flash", outcome: "failed" as const }, { model: "glm", outcome: "invalid" as const, invalid_reason: "task-unstated-name" }] };
+    expect(pathText(stuck.steps, labels)).toBe("DeepSeek V4.1 Flash failed, GLM-5.3 not scored");
+    expect(endText(stuck, labels)).toBe("Not scored on GLM-5.3");
   });
 
   it("leads with what the cheapest model solved and what climbing saved", () => {
@@ -57,7 +62,7 @@ describe("cheapest model first", () => {
       .toBe("So far, DeepSeek V4.1 Flash solved 1 of 3 PRs on its own.");
     expect(costLine(run({ saving: 0 }))).toBe("It cost $4.00: every PR went up to every model, so nothing was saved.");
     expect(estimateNote(run(), labels)).toBe("$4.00 is what this run's attempts cost. The rest is estimated: about $6.00 for the "
-      + "2 attempts this run skipped (1 attempt of GLM-5.3 at $1.00 each, its average per attempt in this run; "
+      + "2 attempts this run skipped (1 attempt of GLM-5.3 at $1.00 each, its cost per try in this run, for the tries an attempt is likely to take; "
       + "1 attempt of Claude Opus 5.5 at $5.00 each, its cost per attempt in earlier runs).");
     const none = run({ every_model: { cost_usd: 4, estimated_usd: 0, estimated_attempts: 0, estimates: {} } });
     expect(estimateNote(none, labels)).toBe("Every model ran on every PR, so nothing here is estimated.");

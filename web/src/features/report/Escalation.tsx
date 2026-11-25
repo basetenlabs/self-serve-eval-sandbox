@@ -53,6 +53,14 @@ export function EscalationResults({ report, colors, onOpen }: {
               <span className="num shrink-0 text-[16px]">{plural(e.unsolved, "PR")}</span>
               <span className="w-14 shrink-0" />
             </li>
+            {!!e.not_scored && (
+              <li className="flex min-w-0 items-center gap-2.5 border-t border-lightGrey2 py-4">
+                <span className="w-6 shrink-0" />
+                <span className="min-w-0 flex-1 text-[16px] text-body">Not scored, so no model above it ran</span>
+                <span className="num shrink-0 text-[16px]">{plural(e.not_scored, "PR")}</span>
+                <span className="w-14 shrink-0" />
+              </li>
+            )}
           </ol>
         </Column>
         <Column heading="Each PR" aside={<span className="label-mono text-muted-foreground">{plural(e.tasks.length, "PR")}</span>}>

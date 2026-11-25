@@ -423,8 +423,11 @@ class App:
                         cells.append({"model": key, "attempt": attempt, **live})
                     elif solved:  # a cheaper model solved it: this one never runs
                         cells.append({"model": key, "attempt": attempt, "stage": "not-needed"})
-                    elif active and up in models and key in models and models.index(key) > models.index(up):
-                        cells.append({"model": key, "attempt": attempt, "stage": "cheaper"})  # waits for a cheaper one
+                    elif ladder and key in ladder and (up is None or ladder.index(key) > ladder.index(up)):
+                        # Above where its climb ended (not scored), or above the model it waits on: a cheaper one
+                        # runs first, unless that attempt was lost and waits for a resume.
+                        waits = active and up is not None and not runner.lost(rungs[up])
+                        cells.append({"model": key, "attempt": attempt, "stage": "cheaper" if waits else "not-run"})
                     else:
                         cells.append({"model": key, "attempt": attempt,
                                       "stage": ("queued" if task_id in kept else "setup-wait" if setting_up else "waiting")
@@ -546,7 +549,7 @@ class App:
             return {"error": NO_PAGE_TOKEN}
         if not hosted() and not checks["gh"]:
             return {"error": "Sign in to GitHub first: run `gh auth login` in a terminal."}
-        keys = [k for k in form.get("models") or [] if isinstance(k, str)]
+        keys = list(dict.fromkeys(k for k in form.get("models") or [] if isinstance(k, str)))  # each once
         if not keys:
             return {"error": "Choose at least one model."}
         try:  # the models' keys; the run itself picks the judges that can run here (pipeline.judges_here)
@@ -555,7 +558,7 @@ class App:
             return {"error": str(exc.code)}
         # Cheapest model first: each PR goes to the next model up only when the ones below didn't solve it.
         escalate = form.get("escalate") is True
-        if escalate and len(set(keys)) < 2:
+        if escalate and len(keys) < 2:
             return {"error": pipeline.ESCALATE_NEEDS}
         # The LLM judges switch, on unless turned off: off, the hidden tests alone and no judge is paid for.
         judged = form.get("judges") is not False and (state.get("judges") or {}).get("on", True)
@@ -881,13 +884,15 @@ def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
 
 def climbed(job_dir: Path, task_ids: list[str], ladder: list[str], tries: int) -> tuple[int, int]:
     """An escalation run's attempts that may still run, and how many of its finished ones a resume runs again
-    (lost to infrastructure on the last model). A task's models above the one that solved it count for neither."""
+    (lost to infrastructure: the task waits there). A task's models above where its climb ended count for neither."""
     left = lost = 0
     for task_id in task_ids:
         results = runner.rung_results(task_id, ladder, job_dir)
         if (up := runner.escalation_step(ladder, results, tries)) is None:
             continue
-        lost += runner.lost(results[up])
+        if runner.lost(results[up]):  # it waits there for a resume, and climbs only after that
+            lost += 1
+            continue
         left += len(ladder) - ladder.index(up) - bool(results[up])
     return left, lost
 

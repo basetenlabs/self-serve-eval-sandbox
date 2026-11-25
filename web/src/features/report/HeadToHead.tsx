@@ -23,12 +23,15 @@ type Side = { m: Model; fill: string; ink: string };
  * The chip names the better of the best open model and the closed one, who serves it and by how much
  * ("Baseten's DeepSeek V4.1 Flash is 71% cheaper"); the line under it says what the chip leaves out.
  */
-export function HeadToHead({ t, S, ranked, colors, trials, judgesDecide, attempts, tries = 1, onOpen, sample }: {
+export function HeadToHead({ t, S, ranked, colors, trials, judgesDecide, attempts, tries = 1, onOpen, sample, escalated }: {
   t: Takeaway; S: Record<string, Summary>; ranked: Model[]; colors: Record<string, Swatch>; trials: Trial[];
   /** Solved also needed the judges' pass: runs from before they only reviewed. */
   judgesDecide: boolean; attempts: number; tries?: number; onOpen?: (taskId: string) => void; sample?: string | null;
+  /** Cheapest model first: a model above the first ran only the PRs the ones below failed, so neither who solved
+   *  the same PRs nor solve rates compare; its own results say that instead. */
+  escalated?: boolean;
 }) {
-  const grid = !!t.pairs?.n;
+  const grid = !escalated && !!t.pairs?.n;
   const scored = ranked.filter((m) => S[m.key]?.valid);
   if (scored.length < 2) return null;
   const sides: Side[] = [...scored.filter(isOpen), ...scored.filter((m) => !isOpen(m))]
@@ -36,7 +39,7 @@ export function HeadToHead({ t, S, ranked, colors, trials, judgesDecide, attempt
   const many = sides.length > 2;
   const fills = (open: boolean) => [...new Set(sides.filter((s) => isOpen(s.m) === open).map((s) => s.fill))];
   const metrics: Metric[] = [
-    ...(grid ? [] : [{ key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x: number | null) => pct(x), delta: t.solve, max: 1 } as Metric]),
+    ...(grid || escalated ? [] : [{ key: "pass_at_1", name: "Solve rate", units: "% of attempts · higher is better", format: (x: number | null) => pct(x), delta: t.solve, max: 1 } as Metric]),
     { key: "cost_per_solved", name: "Cost per solved task", units: "USD · lower is better", format: usd, delta: t.cost },
     { key: "median_seconds", name: "Time per task", units: "Median per attempt · lower is better", format: dur, delta: t.time },
   ];

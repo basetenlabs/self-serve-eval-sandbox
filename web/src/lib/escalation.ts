@@ -24,10 +24,13 @@ export function pathText(steps: Escalation["tasks"][number]["steps"], labels: Re
   return steps.map((s) => `${labels[s.model] ?? s.model} ${DID[s.outcome] ?? s.outcome}`).join(", ");
 }
 
-/** Where a PR ended up: the model that solved it, unsolved after every model, or still on its way. */
+/** Where a PR ended up: the model that solved it, unsolved after every model, not scored (an attempt that wasn't
+ *  scored ends its climb: the task's or the verifier's trouble, not the model's), or still on its way. */
 export function endText(task: Escalation["tasks"][number], labels: Record<string, string>): string {
   if (task.solved_by) return `Solved by ${labels[task.solved_by] ?? task.solved_by}`;
-  return task.done ? "Unsolved after every model" : "Not finished";
+  if (!task.done) return "Not finished";
+  const last = task.steps[task.steps.length - 1];
+  return last?.outcome === "invalid" ? `Not scored on ${labels[last.model] ?? last.model}` : "Unsolved after every model";
 }
 
 /** The run's answer: what the cheapest model solved on its own and how many more the ones above it took, then what
@@ -57,7 +60,7 @@ export function costLine(e: Escalation): string | null {
 }
 
 const SOURCE: Record<string, string> = {
-  "this run": "its average per attempt in this run",
+  "this run": "its cost per try in this run, for the tries an attempt is likely to take",
   "earlier runs": "its cost per attempt in earlier runs",
   prices: "token prices, from a model that ran here",
 };
