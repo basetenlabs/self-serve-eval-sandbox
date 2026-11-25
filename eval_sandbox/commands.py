@@ -390,7 +390,7 @@ def loop(context: str, *, ask, run, read, prove, fixed: dict | None = None, say=
                 if proof.step == "sandbox":  # not the commands' fault: another try would fail the same way
                     raise Unsolved("the sandbox failed, not the commands", tried, spent)
                 if len(tried) >= tries:
-                    raise Unsolved(f"none of its {tries} tries passed", tried, spent)
+                    raise Unsolved(f"none of the model's {tries} tries passed", tried, spent)
                 reply = f"That failed at {proof.step} ({tries - len(tried)} tries left):\n{proof.output}"
         elif kind == "run" and str(action.get("command") or "").strip():
             say(f"looking around: `{short(str(action['command']))}`")
