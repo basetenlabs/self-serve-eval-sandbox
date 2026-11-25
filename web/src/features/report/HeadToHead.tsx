@@ -222,7 +222,7 @@ function Solved({ p, sides: shown, by, S, judgesDecide, attempts, tries, onOpen,
 }
 
 /** One PR's line: opens its attempts on the page, or the PR on GitHub where the page can't. */
-function PullRow({ task, onOpen, children }: { task: Task; onOpen?: (taskId: string) => void; children: React.ReactNode }) {
+export function PullRow({ task, onOpen, children }: { task: Task; onOpen?: (taskId: string) => void; children: React.ReactNode }) {
   const body = (
     <>
       <span className="w-36 shrink-0 truncate font-mono text-[12px] text-muted-foreground">{task.repo.split("/").pop()}#{task.pr}</span>

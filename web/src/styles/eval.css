@@ -163,7 +163,7 @@ textarea.bt-input.ev-pulls { min-block-size: 36px; max-block-size: 192px; resize
 .ev-plan-stat > .value { font: 400 32px/1.2 var(--beausite); letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ev-plan-rows { grid-template-columns: auto minmax(0, 1fr); column-gap: 16px; }
 .ev-plan-rows dd { font-size: 14px; }
-/* The LLM judges switch above the plan's rows: its label and switch on one line, the server's line about the judges under them. */
+/* The plan's switches above its rows (LLM judges, cheapest model first): label and switch on one line, a line about it under them. */
 .ev-judges { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--color-lightGrey2); }
 .ev-judges > .ev-small { grid-column: 1 / -1; }
 

@@ -3,7 +3,7 @@ import { Column, Empty, isActive, Swatch } from "@/components/brand";
 import { useNow } from "@/lib/api";
 import { clock, pct, usd } from "@/lib/format";
 import type { Swatch as SwatchT } from "@/lib/models";
-import { isChecking, isFinal, isLive, SANDBOXES, STAGE, type Tone } from "@/lib/stages";
+import { counted, isChecking, isFinal, isLive, SANDBOXES, STAGE, type Tone } from "@/lib/stages";
 import type { Model, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Activity, useActivity } from "./Activity";
@@ -67,7 +67,7 @@ function Fleet({ run, colors }: { run: Run; colors: Record<string, SwatchT> }) {
     }
   }
   const cells = b.rows.flatMap((r) => r.cells);
-  const scored = cells.filter((c) => c.stage !== "left-out" && c.stage !== "not-run").length;
+  const scored = cells.filter(counted).length;
   const capacity = Math.min(96, Math.max(vms.length, (b.concurrency || 8) * 2));
   return (
     <Column heading="Sandboxes" aside={active ? <span className="label-xs text-muted-foreground">Up to {capacity} at once</span> : null}>
@@ -107,7 +107,7 @@ function Progress({ run, now }: { run: Run; now: number }) {
   const active = isActive(run.phase);
   const cells = run.board!.rows.flatMap((r) => r.cells);
   const finished = cells.filter(isFinal).length;
-  const scored = cells.filter((c) => c.stage !== "left-out" && c.stage !== "not-run").length;
+  const scored = cells.filter(counted).length;
   const share = scored ? finished / scored : 0;
   let seconds = run.started ? ((active ? now : new Date(run.active_at).getTime()) - new Date(run.started).getTime()) / 1000 : null;
   if (!active && seconds != null && seconds > 3 * 3600) seconds = null; // regraded or resumed later: the span isn't the run's time
