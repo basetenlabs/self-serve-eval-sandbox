@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import causes, commands, config, meter, pipeline, report, runner, runtime, slots, tasks, trace
-from .pipeline import alive, repo_of
+from .pipeline import alive, borrowed, expected_tries, repo_of
 from .rundir import ACCESS, OVER_LIMIT, SPEND_LEDGER, read_json
 
 PAGE = Path(__file__).with_name("app.html")
@@ -316,6 +316,10 @@ class App:
         done = len(list((job_dir / "trials").glob("*/result.json"))) if (job_dir / "trials").is_dir() else 0
         last = [meta.get("created_at") or "", status.get("updated_at") or ""]
         total = len(run_tasks) * len(models) * attempts
+        ladder = (meta.get("escalation") or {}).get("ladder")
+        if ladder:  # an escalation run: a task's models above the one that solves it never run
+            left, lost_rungs = climbed(job_dir, run_tasks, ladder, meta.get("tries", 1))
+            total = done + left
         child = self.children.get(job_dir.name)
         if child and child.poll() is None and phase not in pipeline.ACTIVE:
             phase, detail = "collecting", "Starting"  # resumed a moment ago; its status comes next
@@ -343,7 +347,8 @@ class App:
             summary = {m["key"]: {k: data["summary"][m["key"]].get(k) for k in
                                   ("pass_at_1", "solved", "tasks_solved", "valid", "cost_per_solved", "invalid")}
                        for m in data["models"] if m["key"] in data["summary"]}
-        lost = sum(map(runner.lost, data.get("trials") or []))  # resume runs these again
+        # Resume runs these again; on an escalation run, only a lost attempt no model above it can make up for.
+        lost = lost_rungs if ladder else sum(map(runner.lost, data.get("trials") or []))
         candidates = meta.get("candidates") or []
         tasks_dir = Path(meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
         hints = meta.get("left_out_hints") or {}
@@ -365,6 +370,7 @@ class App:
             "resumable": (phase in ("stopped", "failed") or (phase == "done" and lost > 0)) and meta.get("backend") == "baseten"
                          and bool(meta.get("request") or run_tasks),
             "again": again(meta),
+            **({"ladder": ladder} if ladder else {}),
         }
 
     def board(self, run: dict) -> dict:
@@ -379,6 +385,7 @@ class App:
         setup_sandboxes = sum(r.get("sandboxes") or 0 for r in (meta.get("setup") or {}).values()
                               if r.get("state") == "working") if setting_up else 0
         models, attempts = [m["key"] for m in meta.get("models") or []], meta.get("attempts", 1)
+        ladder, tries = (meta.get("escalation") or {}).get("ladder"), meta.get("tries", 1)
         rows, sandboxes = [], 0
         reported = None
         for task_id in meta.get("candidates") or meta.get("tasks") or []:
@@ -400,6 +407,10 @@ class App:
                 check = live if active and live.get("run_id") == run["id"] else {"stage": "queued" if active else "stopped"}
                 sandboxes += check["stage"] in CHECK_STAGES
             cells = []
+            # An escalation run: the model this task goes to next, and whether one below it has solved it already.
+            rungs = runner.rung_results(task_id, ladder, job_dir) if ladder else {}
+            up = runner.escalation_step(ladder, rungs, tries) if ladder else None
+            solved = any(r.get("outcome") == "solved" for r in rungs.values())
             for key in models:
                 for attempt in range(1, attempts + 1):
                     trial = job_dir / "trials" / f"{task_id}__{key}__{attempt}"
@@ -410,6 +421,10 @@ class App:
                     elif (live := read_json(trial / "stage.json")) and active:
                         sandboxes += SANDBOXES.get(live["stage"], 0) if task_id in kept else 1
                         cells.append({"model": key, "attempt": attempt, **live})
+                    elif solved:  # a cheaper model solved it: this one never runs
+                        cells.append({"model": key, "attempt": attempt, "stage": "not-needed"})
+                    elif active and up in models and key in models and models.index(key) > models.index(up):
+                        cells.append({"model": key, "attempt": attempt, "stage": "cheaper"})  # waits for a cheaper one
                     else:
                         cells.append({"model": key, "attempt": attempt,
                                       "stage": ("queued" if task_id in kept else "setup-wait" if setting_up else "waiting")
@@ -439,22 +454,7 @@ class App:
     def measured(self, runs: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
         """estimates(), and what one answer of each judge model cost in the most recent run it answered in,
         from one read of each report."""
-        found: dict[str, dict] = {}
-        judges: dict[str, float] = {}
-        for run in runs:  # newest first
-            job_dir = self.jobs_dir / run["id"]
-            meta = read_json(job_dir / "run.json")
-            data = read_json(job_dir / "report.json")
-            # By repositories, the quick sample's too: its set of repositories changes over time.
-            scope = ",".join(sorted({repo_of(t).lower() for t in meta.get("tasks") or []}))
-            for key, s in (data.get("summary") or {}).items():
-                if s.get("valid") and s.get("cost_per_attempt") is not None:
-                    each = per_try(s)
-                    found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(scope, each)
-            for model, each in (data.get("judging") or {}).items():
-                if each.get("answers"):
-                    judges.setdefault(model, each["cost_usd"] / each["answers"])
-        return found, judges
+        return pipeline.measured([self.jobs_dir / run["id"] for run in runs])  # newest first
 
     def repo_info(self, text: str, user: str | None = None) -> dict:
         repo = parse_repo(text)
@@ -553,6 +553,10 @@ class App:
             pipeline.preflight(keys, "none", self.models_config)
         except SystemExit as exc:
             return {"error": str(exc.code)}
+        # Cheapest model first: each PR goes to the next model up only when the ones below didn't solve it.
+        escalate = form.get("escalate") is True
+        if escalate and len(set(keys)) < 2:
+            return {"error": pipeline.ESCALATE_NEEDS}
         # The LLM judges switch, on unless turned off: off, the hidden tests alone and no judge is paid for.
         judged = form.get("judges") is not False and (state.get("judges") or {}).get("on", True)
         try:
@@ -587,6 +591,7 @@ class App:
         argv += ["--setup", setup] if setup else []
         argv += ["--test", test] if test else []
         argv += [] if judged else ["--judge", "none"]
+        argv += ["--escalate"] if escalate else []
         if user:  # whose run it is: only they see it, and it counts toward their limits, as does what it should cost
             (self.jobs_dir / run_id).mkdir(parents=True, exist_ok=True)
             limited = SPEND_TOTAL or SPEND_PER_PERSON
@@ -842,45 +847,6 @@ def spending(everyone: list[tuple[Path, dict]], unpriced: dict[str, float] | Non
     return total, by_owner
 
 
-def per_try(s: dict) -> dict:
-    """A model's cost, time and solve rate per try from its summary in a report, and what an attempt of up to
-    DEFAULT_TRIES tries comes to. A report from before tries were recorded has one try per attempt."""
-    tries = s.get("tries") or s["valid"]
-    cost = s.get("cost_per_try", s["cost_per_attempt"])
-    seconds = s.get("median_seconds_per_try", s.get("median_seconds"))
-    rate = (s.get("solved") or 0) / tries if tries else None
-    expected = expected_tries(rate, pipeline.DEFAULT_TRIES)
-    return {"cost_per_attempt": cost * expected, "seconds_per_attempt": None if seconds is None else seconds * expected,
-            "tries_per_attempt": expected, "cost_per_try": cost, "solve_rate": rate}
-
-
-def expected_tries(solve_rate: float | None, tries: int) -> float:
-    """How many tries an attempt of up to `tries` takes on average: each one after the first runs only when
-    every try before it failed. Without a solve rate to go by, all of them."""
-    if solve_rate is None:
-        return float(tries)
-    return sum((1 - solve_rate) ** n for n in range(tries))
-
-
-def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[str, dict]:
-    """A model with no runs yet takes the cost and time per attempt of the first of its `estimate_from` models that
-    has them, the cost scaled by the two models' output price."""
-    for key, m in catalog.items():
-        if key in found:
-            continue
-        for base in (catalog[k] for k in m.estimate_from if k in catalog and k in found):
-            mine, theirs = m.rate_for(m.model), base.rate_for(base.model)
-            if not mine or not theirs or not theirs.get("output"):
-                continue
-            ratio = mine["output"] / theirs["output"]
-            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r,
-                                        **({"cost_per_try": e["cost_per_try"] * r} if "cost_per_try" in e else {})}
-            source = found[base.key]
-            found[key] = {**scale(source), "by_scope": {k: scale(v) for k, v in source["by_scope"].items()}}
-            break
-    return found
-
-
 def still_to_spend(job_dir: Path, unpriced: dict[str, float]) -> float:
     """What a run going is still expected to spend: the estimate it started (or resumed) with, less what its
     ledger shows it has spent. A run with no estimate (started locally, or before estimates were kept) holds none."""
@@ -913,6 +879,19 @@ def ledger_cost(ledger: Path, since: str, unpriced: dict[str, float]) -> float:
     return cost
 
 
+def climbed(job_dir: Path, task_ids: list[str], ladder: list[str], tries: int) -> tuple[int, int]:
+    """An escalation run's attempts that may still run, and how many of its finished ones a resume runs again
+    (lost to infrastructure on the last model). A task's models above the one that solved it count for neither."""
+    left = lost = 0
+    for task_id in task_ids:
+        results = runner.rung_results(task_id, ladder, job_dir)
+        if (up := runner.escalation_step(ladder, results, tries)) is None:
+            continue
+        lost += runner.lost(results[up])
+        left += len(ladder) - ladder.index(up) - bool(results[up])
+    return left, lost
+
+
 def again(meta: dict) -> dict | None:
     """What Run again puts back in the form: the run's pull requests (the ones its check kept, so a
     repository's latest merges stay the same PRs), its models and its commands."""
@@ -920,8 +899,9 @@ def again(meta: dict) -> dict | None:
     # A model no longer offered comes back as the one that replaced it, which the form shows before Start.
     models = list(dict.fromkeys(pipeline.RETIRED.get(m["key"], m["key"]) for m in meta.get("models") or []))
     judges = bool(meta.get("judge"))  # the LLM judges switch as the run had it
+    escalate = {"escalate": True} if meta.get("escalation") else {}  # and the cheapest model first, if it went so
     if request.get("quick"):
-        return {"quick": True, "models": models, "judges": judges}
+        return {"quick": True, "models": models, "judges": judges, **escalate}
     pulls: dict[str, list[int]] = {}
     for task_id in meta.get("tasks") or meta.get("candidates") or []:
         number = task_id.rsplit("-", 1)[-1]
@@ -930,7 +910,7 @@ def again(meta: dict) -> dict | None:
     if not pulls or sum(map(len, pulls.values())) > MAX_LIMIT:
         return None
     return {"pulls": pulls, "setup": request.get("setup"), "test": request.get("test"), "models": models,
-            "judges": judges}
+            "judges": judges, **escalate}
 
 
 def cell(model: str, attempt: int, result: dict) -> dict:
