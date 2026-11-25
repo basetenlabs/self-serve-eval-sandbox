@@ -23,6 +23,7 @@ const COMMANDS = "pr-eval-again-commands"; // a run's install and test commands,
 type Commands = { setup: string; test: string };
 const MODELS_KEY = "pr-eval-models-3"; // a new name when the default models change, so everyone starts on them once
 const JUDGES_KEY = "pr-eval-judges"; // the LLM judges switch, on unless turned off
+const ESCALATE_KEY = "pr-eval-escalate"; // cheapest model first, off unless turned on
 // Quick-sample attempts start together (up to state.quick.at_once), so the slowest try sets the end; an
 // attempt the model fails runs again, so a run of several tries can take that long for each.
 const QUICK_MINUTES = 35;
@@ -52,6 +53,9 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const offer = state.judges;
   const [judgesWanted, setJudges] = useStored<boolean>(JUDGES_KEY, true);
   const judgesOn = !!offer?.on && judgesWanted;
+  // Cheapest model first: each PR goes up to the next model only when the ones below didn't solve it.
+  const [escalateWanted, setEscalate] = useStored<boolean>(ESCALATE_KEY, false);
+  const escalateOn = escalateWanted && chosenModels.length >= 2;
   const [error, setError] = React.useState<string | null>(null);
   const [starting, setStarting] = React.useState(false);
   const form = React.useRef<HTMLFormElement>(null);
@@ -127,8 +131,11 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   const judging = judgesOn ? offer!.cost_per_attempt * attempts : 0; // one review per attempt, its last try's
   const cost = priced ? models.reduce((s, m) => s + m.cost_per_attempt! * prs, 0) + judging : null;
   const slowest = Math.max(0, ...models.map((m) => m.seconds_per_attempt ?? 0));
-  // A run takes at least its slowest attempt, however many go at once.
-  const minutes = mode === "quick" ? quickMinutes : Math.max(1, Math.round(Math.max(slowest, (slowest * attempts) / 4) / 60));
+  // A run takes at least its slowest attempt, however many go at once. Cheapest model first runs a PR's models one
+  // after another, so at most every model's attempt in turn: an upper bound, like its cost.
+  const chain = models.reduce((s, m) => s + (m.seconds_per_attempt ?? 0), 0);
+  const minutes = mode === "quick" ? quickMinutes * (escalateOn ? models.length : 1)
+    : Math.max(1, Math.round(Math.max(escalateOn ? chain : slowest, (slowest * attempts) / 4) / 60));
   const commandsGiven = !!(setup.trim() && test.trim());
   const left = state.spend ? Math.max(0, state.spend.cap - state.spend.spent) : null;
   const over = left != null && cost != null && prs > 0 && cost > left;
@@ -156,7 +163,8 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
     const which = mode === "quick" ? { quick: true }
       : mode === "pasted" ? { pulls: pastedPulls }
         : { pulls: { [repo!]: chosen } };
-    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test, ...(offer ? { judges: judgesOn } : {}) });
+    const res = await post("/api/runs", { ...which, models: chosenModels, setup, test, ...(offer ? { judges: judgesOn } : {}),
+      ...(escalateOn ? { escalate: true } : {}) });
     setStarting(false);
     if (res.error || !res.id) {
       setError(res.error ?? "The run didn't start.");
@@ -278,17 +286,19 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
 
       <div className="bt-aside">
         <div className="grid gap-12 lg:sticky lg:top-3">
-          <Column heading={<Step n="03">Start</Step>} aside={attempts > 0 && <span className="label-mono text-muted-foreground">{plural(attempts, "attempt")}</span>}>
+          <Column heading={<Step n="03">Start</Step>} aside={attempts > 0 && <span className="label-mono text-muted-foreground">{escalateOn ? "Up to " : ""}{plural(attempts, "attempt")}</span>}>
             <div className="ev-plan">
               <div className="ev-plan-stats">
-                <PlanStat label="Estimated cost" value={<Rolling value={cost == null || !prs ? "–" : `≈ ${usd(cost)}`} />}
-                  tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}${judgesOn ? ", and the judges' review of each attempt" : ""}.`
+                <PlanStat label="Estimated cost" value={<Rolling value={cost == null || !prs ? "–" : `${escalateOn ? "≤" : "≈"} ${usd(cost)}`} />}
+                  tip={priced ? `From each model's cost per attempt in its most recent run on these repositories, or else its most recent run${tries > 1 ? ", with the tries it's likely to take" : ""}${judgesOn ? ", and the judges' review of each attempt" : ""}.${escalateOn ? " Cheapest model first costs less: this is the most it can, if every PR went up to every model." : ""}`
                     : "No earlier run to estimate from yet."} />
-                <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `≈ ${minutes} min` : "–"} />}
-                  tip={mode === "quick" && tries > 1 ? `${quickAtOnce < attempts ? `Up to ${quickAtOnce} attempts run` : "Every attempt starts"} at once, and one the model fails runs again: the slowest sets the end.`
+                <PlanStat label="Estimated time" value={<Rolling value={models.length && prs ? `${escalateOn ? "≤" : "≈"} ${minutes} min` : "–"} />}
+                  tip={escalateOn ? "Cheapest model first runs a PR's models one after another: this is the longest it can take, if every PR went up to every model."
+                    : mode === "quick" && tries > 1 ? `${quickAtOnce < attempts ? `Up to ${quickAtOnce} attempts run` : "Every attempt starts"} at once, and one the model fails runs again: the slowest sets the end.`
                     : slowest ? `Slowest model takes about ${dur(slowest)} per attempt${tries > 1 ? ", its tries included" : ""}.` : undefined} />
               </div>
               {offer && <JudgesSwitch offer={offer} on={judgesOn} onChange={(v) => { setError(null); setJudges(v); }} />}
+              <EscalateSwitch on={escalateOn} can={chosenModels.length >= 2} onChange={(v) => { setError(null); setEscalate(v); }} />
               <dl className="bt-kv ev-plan-rows">
                 <PlanRow label="Pull requests">{prs || "–"}</PlanRow>
                 {tries > 1 && (
@@ -328,7 +338,7 @@ export function NewRun({ state, go, hurry }: { state: AppState; go: (r: Route) =
   );
 }
 
-/** Put a run's pull requests, models, commands and judges switch in the form; it reads them when it next mounts. */
+/** Put a run's pull requests, models, commands and switches in the form; it reads them when it next mounts. */
 export function fillAgain(again: Again) {
   const links = Object.entries(again.pulls ?? {}).flatMap(([repo, numbers]) => numbers.map((n) => `https://github.com/${repo}/pull/${n}`));
   try {
@@ -336,6 +346,7 @@ export function fillAgain(again: Again) {
     if (!again.quick) localStorage.setItem("pr-eval-pulls", JSON.stringify(links.join("\n")));
     localStorage.setItem(MODELS_KEY, JSON.stringify(again.models));
     if (again.judges !== undefined) localStorage.setItem(JUDGES_KEY, JSON.stringify(again.judges));
+    localStorage.setItem(ESCALATE_KEY, JSON.stringify(!!again.escalate));
     sessionStorage.setItem(COMMANDS, JSON.stringify({ setup: again.setup ?? "", test: again.test ?? "" }));
   } catch { /* private window: the form stays as it was */ }
 }
@@ -454,6 +465,22 @@ function JudgesSwitch({ offer, on, onChange }: { offer: JudgesOffer; on: boolean
         aria-describedby="judges-note" disabled={!offer.on} onClick={() => onChange(!on)} />
       <p id="judges-note" className="ev-small" aria-live="polite">
         {!offer.on || on ? offer.note : "Off: the hidden tests alone, and no judge is paid for."}
+      </p>
+    </div>
+  );
+}
+
+/** Cheapest model first: off unless turned on, and only with two models or more to go up through. */
+function EscalateSwitch({ on, can, onChange }: { on: boolean; can: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <div className="ev-judges">
+      <Tip content="The models go cheapest first, by what an attempt cost them in earlier runs, else by token price. Each PR gets one attempt per model, with its tries.">
+        <span id="escalate-label" className="label-xs text-muted-foreground">Cheapest model first</span>
+      </Tip>
+      <button type="button" role="switch" className="bt-switch" aria-checked={on} aria-labelledby="escalate-label"
+        aria-describedby="escalate-note" disabled={!can} onClick={() => onChange(!on)} />
+      <p id="escalate-note" className="ev-small">
+        Each task starts on the cheapest model you picked; only the tasks it fails move up to the next.{can ? "" : " Pick two models or more to turn it on."}
       </p>
     </div>
   );

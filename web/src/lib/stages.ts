@@ -15,6 +15,9 @@ export const STAGE: Record<string, { label: string; tone: Tone; verb?: string }>
   "not-run": { label: "Not run", tone: "idle" },
   "left-out": { label: "Left out", tone: "idle" },
   interrupted: { label: "Stopped", tone: "idle" },
+  // Cheapest model first: a model waits until the ones below it have had their turn, and isn't needed once one solves it.
+  cheaper: { label: "Waiting for a cheaper model", tone: "idle" },
+  "not-needed": { label: "Not needed", tone: "idle" },
   sandboxes: { label: "Booting sandboxes", tone: "boot", verb: "booting its agent and verifier sandboxes" },
   setup: { label: "Installing deps", tone: "setup", verb: "installing dependencies" },
   agent: { label: "Agent coding", tone: "agent", verb: "agent started coding" },
@@ -41,6 +44,8 @@ export const isLive = (stage: string) => (STEPS as readonly string[]).includes(s
 export const isChecking = (row: BoardRow) => CHECK[row.check.stage]?.tone === "check";
 export const isFinal = (c: Cell) => c.stage === "solved" || c.stage === "failed" || c.stage === "invalid";
 export const stepIndex = (stage: string) => (STEPS as readonly string[]).indexOf(stage);
+/** Whether a cell is an attempt of the run: one left out, never run, or not needed (a cheaper model solved its PR) isn't. */
+export const counted = (c: Pick<Cell, "stage">) => c.stage !== "left-out" && c.stage !== "not-run" && c.stage !== "not-needed";
 
 /** Whether a run's judges decided solved along with its tests: only runs from before they reviewed beside them. */
 export const judgesDecide = (judge?: { review?: boolean } | null) => !!judge && !judge.review;
@@ -88,7 +93,7 @@ export function pipeline(r: Run) {
   // Runs from before the board existed only have their progress counts.
   const checked = b?.rows.length ? checkedRows === b.rows.length : r.phase !== "collecting" && r.phase !== "checking";
   const finished = b ? cells.filter(isFinal).length : r.progress.done;
-  const scored = b ? cells.filter((c) => c.stage !== "left-out" && c.stage !== "not-run").length : r.progress.total;
+  const scored = b ? cells.filter(counted).length : r.progress.total;
   const graded = b ? cells.filter((c) => c.stage === "solved" || c.stage === "failed").length : r.progress.done;
   const coding = cells.filter((c) => ["sandboxes", "setup", "agent"].includes(c.stage)).length;
   const grading = cells.filter((c) => c.stage === "tests" || c.stage === "judge").length;

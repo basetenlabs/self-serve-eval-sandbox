@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Empty, Eyebrow } from "@/components/brand";
 import { commandsSource } from "@/lib/commands";
+import { escalationHeadline, labelsOf } from "@/lib/escalation";
 import { day, harness, plural } from "@/lib/format";
 import { ordered, palette } from "@/lib/models";
 import { judgesDecide } from "@/lib/stages";
@@ -8,6 +9,7 @@ import { rank, takeaway } from "@/lib/stats";
 import type { Report } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { ReportView } from "@/lib/view";
+import { EscalationResults } from "./Escalation";
 import { HeadToHead } from "./HeadToHead";
 import { Leaderboard } from "./Leaderboard";
 import { Scatter } from "./Scatter";
@@ -31,17 +33,22 @@ export function reportFacts(report: Report): string[] {
   const last = trials.map((t) => t.finished_at).filter(Boolean).sort().pop();
   const dates = last && day(last) !== day(run.created_at) ? `${day(run.created_at)} to ${day(last)}` : day(run.created_at);
   return [harness(run), `${plural(tasks.length, "merged PR")} from ${plural(repos, "repo")}`,
-    `${plural(run.attempts, "attempt")} per task`, ...((run.tries ?? 1) > 1 ? [`up to ${run.tries} tries each`] : []), dates];
+    report.escalation ? "Cheapest model first" : `${plural(run.attempts, "attempt")} per task`,
+    ...((run.tries ?? 1) > 1 ? [`up to ${run.tries} tries each`] : []), dates];
 }
 
 /** The standalone report's header: facts, then the one-sentence answer. */
 export function ReportHeader({ report }: { report: Report }) {
   const { t } = useReportModel(report);
+  // Cheapest model first answers its own question: what the cheapest solved, and what climbing saved.
+  const climbed = report.escalation && report.trials.length ? escalationHeadline(report.escalation, labelsOf(report.models)) : null;
+  const head = climbed?.head ?? t.verdict?.head ?? t.sentence;
+  const cost = climbed ? climbed.cost : t.verdict?.cost;
   return (
     <header>
       <Eyebrow parts={reportFacts(report)} />
-      <h1 className="ev-title mt-6 max-w-[24ch] text-balance">{t.verdict?.head ?? t.sentence}</h1>
-      {t.verdict?.cost && <p className="mt-4 max-w-[46ch] text-[24px] leading-[1.3] tracking-[-0.01em] text-balance text-body">{t.verdict.cost}</p>}
+      <h1 className="ev-title mt-6 max-w-[24ch] text-balance">{head}</h1>
+      {cost && <p className="mt-4 max-w-[46ch] text-[24px] leading-[1.3] tracking-[-0.01em] text-balance text-body">{cost}</p>}
     </header>
   );
 }
@@ -60,12 +67,15 @@ export function Banners({ report, sample = true, pointer = true, commands = fals
 }) {
   const { run, tasks, trials } = report;
   const expected = (run.tasks ?? []).length * report.models.length * (run.attempts || 1);
+  // Cheapest model first counts PRs: how many attempts a PR takes depends on where it's solved.
+  const e = report.escalation;
+  const finished = e ? `${e.tasks.length - e.remaining} of ${plural(e.tasks.length, "PR")}` : `${trials.length} of ${expected || "?"} attempts`;
   const items: [string, React.ReactNode][] = [];
   const stopped = !report.complete && ["failed", "stopped"].includes(run.status?.phase ?? "") ? run.status?.detail : null;
   if (stopped) {
-    items.push(["Stopped", `${trials.length} of ${expected || "?"} attempts had finished. ${stopped}`]);
+    items.push(["Stopped", `${finished} had finished. ${stopped}`]);
   } else if (!report.complete) {
-    items.push(["In progress", `${trials.length} of ${expected || "?"} attempts had finished at ${new Date(report.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Results update as attempts finish.`]);
+    items.push(["In progress", `${finished} had finished at ${new Date(report.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Results update as attempts finish.`]);
   }
   if (run.note) items.push(["Note", run.note]);
   if (!run.judge) items.push(["Tests only", "No AI judge on this run: solved means the PR's hidden tests passed."]);
@@ -134,6 +144,7 @@ export function Results({ report, onOpen, view, onView }: {
     body = (
       <div className="grid gap-14">
         <Banners report={report} pointer={false} />
+        {report.escalation && <EscalationResults report={report} colors={colors} onOpen={onOpen} />}
         <Simple report={report} ranked={ranked} colors={colors} t={t} />
       </div>
     );
@@ -141,7 +152,8 @@ export function Results({ report, onOpen, view, onView }: {
     body = (
       <div className="grid gap-14">
         <Banners report={report} sample={!inDetails} commands />
-        <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judgesDecide={judgesDecide(report.run.judge)} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen}
+        {report.escalation && <EscalationResults report={report} colors={colors} onOpen={onOpen} />}
+        <HeadToHead t={t} S={S} ranked={ranked} colors={colors} trials={report.trials} judgesDecide={judgesDecide(report.run.judge)} attempts={report.run.attempts} tries={report.run.tries ?? 1} onOpen={onOpen} escalated={!!report.escalation}
           sample={inDetails ? smallSample(report.tasks.length, false) : null} />
         <Leaderboard report={report} ranked={ranked} colors={colors} />
         <Scatter models={ranked} S={S} colors={colors} />

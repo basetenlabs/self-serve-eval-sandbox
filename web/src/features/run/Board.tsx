@@ -151,6 +151,10 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
     sub = <div className="mt-0.5 truncate font-mono text-[12px]" title={line}>{line}</div>;
   } else if (c.stage === "invalid") {
     sub = <div className="mt-0.5 truncate text-[12px]" title={c.reason || undefined}>{c.reason || "infrastructure"}</div>;
+  } else if (c.stage === "cheaper" || c.stage === "not-needed") {
+    // Cheapest model first: why this model hasn't run, under a short label.
+    const why = c.stage === "cheaper" ? "for a cheaper model" : "a cheaper one solved it";
+    sub = <div className="mt-0.5 truncate text-[12px]" title={why}>{why}</div>;
   }
   const glyph = c.stage === "solved" ? "✓ " : c.stage === "failed" ? "✕ " : c.stage === "invalid" ? "! " : "";
   // The judges' review sits beside the tests' outcome, in their gold: it never changes it.
@@ -158,7 +162,7 @@ function AttemptCell({ c, swatch, now, judged }: { c: Cell; swatch?: SwatchT; no
   const cell = (
     <div key={c.stage} className={cn("flex h-12 animate-fade flex-col justify-center px-2.5", className)} style={style}>
       <div className="flex items-center justify-between gap-2">
-        <span className="label-xs truncate">{glyph}{failReason(c) ?? info.label}{live && c.try ? ` · try ${c.try}` : ""}</span>
+        <span className="label-xs truncate">{glyph}{failReason(c) ?? (c.stage === "cheaper" ? "Waiting" : info.label)}{live && c.try ? ` · try ${c.try}` : ""}</span>
         {live && c.started_at && <span className="num font-mono text-[12px]">{clock(secondsSince(c.started_at, now))}</span>}
         {review && <span className="ev-judge-mark" aria-label={review.text}>{review.glyph}</span>}
       </div>

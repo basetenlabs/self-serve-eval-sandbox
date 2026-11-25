@@ -1175,9 +1175,14 @@ def lost_trials(job_dir: Path) -> int:
     return sum(lost(json.loads(p.read_text())) for p in (job_dir / "trials").glob("*/result.json"))
 
 
-def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, tries: int = 1) -> list[tuple]:
+def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, tries: int = 1,
+                   ladder: list[Model] | None = None) -> list[tuple]:
     """Trials not finished in `job_dir`, lost to infrastructure, or failed with tries left (a stop between
-    tries, or a resume that raised --tries), attempt-major, so a stopped run is balanced."""
+    tries, or a resume that raised --tries), attempt-major, so a stopped run is balanced. On an escalation run
+    (`ladder`: its models, cheapest first) only each task's next rung (next_rung)."""
+    if ladder:
+        return [(task, model, 1, job_dir / "trials" / trial_name(task, model, 1))
+                for task in tasks if (model := next_rung(task.id, ladder, job_dir, tries))]
     pending = []
     for attempt in range(1, attempts + 1):
         for task in tasks:
@@ -1193,6 +1198,63 @@ def pending_trials(tasks: list[Task], models: list[Model], attempts: int, job_di
 def tries_left(result: dict, tries: int) -> bool:
     """Whether an attempt the model failed may still be tried again under the run's `tries`."""
     return result.get("outcome") == "failed" and (result.get("try") or 1) < tries
+
+
+# An escalation run sends each task to its cheapest model first, and to the next model up its ladder only when
+# the hidden tests scored the one below as failed, after its tries. One attempt per model.
+
+def escalation_step(ladder: list[str], results: dict[str, dict | None], tries: int) -> str | None:
+    """The model (key) a task goes to next on an escalation run, from what each rung of its `ladder` has
+    finished with so far (`results`, by key); None once its climb is over. Only a scored failure sends it up.
+    A rung not run yet, lost to infrastructure (it waits for a resume to run it again, as on any run), or stopped
+    between its tries with none above it run yet is where it goes. Solved ends the climb, and so does any other
+    attempt that wasn't scored: that is the task's or the verifier's trouble, not the model's (AGENTS.md), so no
+    model above should pay for it."""
+    if any((results.get(key) or {}).get("outcome") == "solved" for key in ladder):
+        return None
+    for i, key in enumerate(ladder):
+        result = results.get(key)
+        if not result or lost(result):
+            return key
+        if result.get("outcome") != "failed":
+            return None
+        if tries_left(result, tries) and not any(results.get(above) for above in ladder[i + 1:]):
+            return key
+    return None
+
+
+def rung_results(task_id: str, ladder: list[str], job_dir: Path) -> dict[str, dict]:
+    """What each rung (model key) of a task's ladder finished with: its result.json, empty if none yet."""
+    return {key: read_json(job_dir / "trials" / f"{task_id}__{key}__1" / "result.json") for key in ladder}
+
+
+def next_rung(task_id: str, ladder: list[Model], job_dir: Path, tries: int = 1) -> Model | None:
+    """The model a task goes to next on an escalation run, from what its rungs finished with in `job_dir`."""
+    keys = [m.key for m in ladder]
+    key = escalation_step(keys, rung_results(task_id, keys, job_dir), tries)
+    return next((m for m in ladder if m.key == key), None)
+
+
+def lost_rungs(task_ids: list[str], ladder: list[Model], job_dir: Path, tries: int = 1) -> int:
+    """How many tasks of an escalation run wait on an attempt lost to infrastructure, which a resume runs again."""
+    keys, count = [m.key for m in ladder], 0
+    for task_id in task_ids:
+        results = rung_results(task_id, keys, job_dir)
+        key = escalation_step(keys, results, tries)
+        count += bool(key and lost(results[key]))
+    return count
+
+
+def climb(job: tuple, result: dict | None, ladder: list[Model], job_dir: Path) -> list[tuple]:
+    """The trial a task goes to once one rung of its ladder has ended: the next model up, only when the hidden
+    tests scored this one as failed (escalation_step), it wasn't the last, and the run isn't stopping."""
+    if not result or STOPPING.is_set() or result.get("outcome") != "failed":
+        return []
+    task, model = job[0], job[1]
+    keys = [m.key for m in ladder]
+    # The next model above this one: a ladder names each model once (escalation_plan), and never this one again.
+    up = next((m for m in ladder[keys.index(model.key) + 1:] if m.key != model.key), None) if model.key in keys else None
+    return [(task, up, 1, job_dir / "trials" / trial_name(task, up, 1))] if up else []
 
 
 def trial_runner(models: list[Model], settings: Settings, run_id: str, tries: int = 1):
@@ -1321,11 +1383,13 @@ def fit(requested: int, free_mb: int | None = None) -> tuple[int, int, int | Non
 
 
 def run(tasks: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-        run_id: str, on_result=None, tries: int = 1) -> None:
-    """Run every trial not already finished in `job_dir`, a few at a time. Raises Halted if they all fail alike."""
-    pending = pending_trials(tasks, models, attempts, job_dir, tries)
+        run_id: str, on_result=None, tries: int = 1, ladder: list[Model] | None = None) -> None:
+    """Run every trial not already finished in `job_dir`, a few at a time. Raises Halted if they all fail alike.
+    On an escalation run (`ladder`), each task's next rung, and the one above it whenever a rung doesn't solve it."""
+    pending = pending_trials(tasks, models, attempts, job_dir, tries, ladder)
+    then = (lambda job, result: climb(job, result, ladder, job_dir)) if ladder else None
     in_parallel(pending, trial_runner(models, settings, run_id, tries), settings.concurrency, run_id, on_result,
-                halt=SameFailure())
+                then=then, halt=SameFailure())
 
 
 class Verdict:
@@ -1347,7 +1411,7 @@ class Verdict:
 
 
 def check_and_run(candidates: list[Task], models: list[Model], attempts: int, job_dir: Path, settings: Settings,
-                  run_id: str, on_checked=None, on_result=None, tries: int = 1) -> None:
+                  run_id: str, on_checked=None, on_result=None, tries: int = 1, ladder: list[Model] | None = None) -> None:
     """Check the tasks and run the models on each one as soon as its own check passes.
 
     Checks and trials share the run's sandboxes, checks first, so a slow check holds up
@@ -1356,6 +1420,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
     a check that doesn't pass deletes it and leaves no result. `on_checked(task, status,
     unchecked)` follows every task, those checked before first; `on_result(result, done,
     total)` every trial, where total counts the trials of tasks that have passed so far.
+    On an escalation run (`ladder`), a task that passes goes to its cheapest model, and up the ladder from there.
     """
     todo = [t for t in candidates if needs_check(t, settings)]
     trial = trial_runner(models, settings, run_id, tries)
@@ -1369,7 +1434,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
             on_checked(task, status, unchecked)
         if status != "valid":
             return []
-        trials = pending_trials([task], models, attempts, job_dir, tries)
+        trials = pending_trials([task], models, attempts, job_dir, tries, ladder)
         trials_total += len(trials)
         return trials
 
@@ -1377,7 +1442,7 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
     for task in candidates:
         if task not in todo:
             jobs += [("trial", t) for t in checked(task, validation_status(task, settings))]
-    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir, tries)]
+    jobs += [("early", t) for t in pending_trials(todo, models, attempts, job_dir, tries, ladder)]
 
     def check(task: Task) -> dict:
         status = None
@@ -1402,17 +1467,18 @@ def check_and_run(candidates: list[Task], models: list[Model], attempts: int, jo
         return check(item) if kind == "check" else early(item) if kind == "early" else trial(item)
 
     def then(job, result: dict | None) -> list:
-        nonlocal trials_done
+        nonlocal trials_done, trials_total
         kind, item = job
         if kind == "check":
             checked(item, result["status"])  # its attempts are already queued, as early ones
             return []
         if result is None:  # an early attempt on a task that didn't pass its check
             return []
-        trials_done += 1
+        up = climb(item, result, ladder, job_dir) if ladder else []
+        trials_done, trials_total = trials_done + 1, trials_total + len(up)
         if on_result:
             on_result(result, trials_done, trials_total)
-        return []
+        return [("trial", t) for t in up]
 
     def order(job) -> int:
         kind, item = job

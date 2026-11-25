@@ -46,6 +46,11 @@ def cmd_run(args) -> int:
         job = pipeline.Job(args.resume)
         pipeline.restore_execution(job.meta, runner.Settings())
         keys, added = pipeline.resumed_models(job.meta, args.models)
+        if args.escalate and not job.meta.get("escalation"):
+            sys.exit("--escalate is for a new run: this one sends every task to every model")
+        if job.meta.get("escalation") and (added or (args.attempts or 1) > 1
+                                           or (args.tries or 0) > job.meta.get("tries", 1)):
+            sys.exit("An escalation run keeps its models, its tries and one attempt each: start a new run to change them")
         try:
             models, judge = pipeline.preflight(keys, pipeline.resumed_judge(job.meta, args.judge), args.models_config)
         except SystemExit as exc:
@@ -64,10 +69,18 @@ def cmd_run(args) -> int:
         request = pipeline.Request(repos=repos, prs=args.pr, pulls=pulls, limit=args.limit, since=args.since, setup=args.setup,
                                    test=args.test, language=args.language, max_lines=args.max_lines, task_ids=args.task,
                                    quick=args.quick)
+        plan = None
+        if args.escalate:
+            if len({m.key for m in models}) < 2:
+                sys.exit(pipeline.ESCALATE_NEEDS)
+            if (args.attempts or 1) > 1:
+                sys.exit("--escalate runs one attempt per model; leave out --attempts")
+            plan = pipeline.escalation_plan(models, request, args.jobs, args.models_config)
+            print("cheapest model first: " + " -> ".join(plan["ladder"]))
         job = pipeline.new_job(request, models, judge, attempts=args.attempts or 1,
                                tries=args.tries or pipeline.DEFAULT_TRIES, name=args.name,
                                jobs_dir=args.jobs, image=args.image, tasks_dir=args.tasks, region=args.region,
-                               harness=args.harness)
+                               harness=args.harness, escalation=plan)
     print(f"run {job.id} -> {job.path}")
     settings = runner.Settings(image=args.image, concurrency=args.concurrency, memory=args.memory,
                                region=args.region, agent_timeout=args.agent_timeout,
@@ -193,6 +206,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--tries", type=int, help=f"tries per attempt: a try the model fails is run again from scratch, and "
                    f"the attempt is solved if any try solves it; every model gets the same (default {pipeline.DEFAULT_TRIES}; "
                    "1 = no second try; on --resume, raises the run's count)")
+    r.add_argument("--escalate", action="store_true",
+                   help="cheapest model first: each task goes to the cheapest of --models (by measured cost per attempt, "
+                        "else token price), and to the next one up only if the ones below didn't solve it; one attempt each")
     r.add_argument("--resume", type=Path, help="finish a stopped run in this job directory")
     r.add_argument("--harness", choices=runner.HARNESSES, default=runner.pi.NAME,
                    help="the coding agent every model runs in (default pi; a resumed run keeps its own)")

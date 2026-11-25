@@ -24,8 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .causes import sentence
-from .config import redact_known
-from .runner import ANSI
+from .config import Model, redact_known
+from .runner import ANSI, escalation_step, tries_left
 from .tasks import DEFAULT_TASKS
 from .tasks import load as load_task
 
@@ -242,7 +242,93 @@ def build_data(job_dir: Path) -> dict:
             "run": meta, "models": models, "summary": per_model, "slices": slices,
             "timing": summarize_timing(trials, meta.get("created_at")),
             "tasks": list(task_meta.values()), "trials": trials, "judging": judging(trials),
-            "complete": len(trials) == len(meta.get("tasks", [])) * len(models) * meta.get("attempts", 1)}
+            "complete": len(trials) == len(meta.get("tasks", [])) * len(models) * meta.get("attempts", 1),
+            **escalated(meta, trials, per_model)}
+
+
+def escalated(meta: dict, trials: list[dict], summary: dict[str, dict]) -> dict:
+    """An escalation run's own part of its report: `escalation`, and `complete` once every task has finished
+    (solved, or the last model has had its turn). Nothing for a run that sends every task to every model."""
+    if not meta.get("escalation"):
+        return {}
+    data = escalation(meta, trials, summary)
+    return {"escalation": data, "complete": data["remaining"] == 0}
+
+
+def escalation(meta: dict, trials: list[dict], summary: dict[str, dict]) -> dict:
+    """What an escalation run did with each task, cheapest model first: which models tried it and which solved it,
+    how many each model solved, what the run cost, and what running every model on every task would have:
+    the cost of the attempts that ran plus an estimate for those that didn't (`every_model`). The estimate for a
+    model is the page's estimate when the run started (from earlier runs), else its cost per try in this run times
+    the tries an attempt takes at its solve rate here, else a model of this run's scaled by output token price.
+    Not its mean per attempt in this run: a model above the first ran only the tasks the ones below failed, the
+    hard ones, which take every try. A cost counts every try of every attempt that ran, attempts not scored
+    included. A task whose climb ended on an attempt that wasn't scored is `not_scored`, not unsolved."""
+    plan = meta["escalation"]
+    specs = {m["key"]: m for m in meta.get("models") or []}
+    ladder = [k for k in plan["ladder"] if k in specs]
+    tries = meta.get("tries", 1)
+    first = {(t["task_id"], t["model"]): t for t in trials if (t.get("attempt") or 1) == 1}
+    rows, solved_by, tried, unrun = [], dict.fromkeys(ladder, 0), dict.fromkeys(ladder, 0), dict.fromkeys(ladder, 0)
+    spent, priced = 0.0, True
+    for task_id in meta.get("tasks") or []:
+        ran = {k: t for k in ladder if (t := first.get((task_id, k)))}
+        winner = next((k for k in ladder if ran.get(k, {}).get("outcome") == "solved"), None)
+        done = bool(ladder) and escalation_step(ladder, ran, tries) is None  # a lost attempt waits for a resume
+        rows.append({"task_id": task_id, "solved_by": winner, "done": done,
+                     "steps": [{"model": k, "outcome": t["outcome"],
+                                **({"invalid_reason": t["invalid_reason"]} if t.get("invalid_reason") else {})}
+                               for k, t in ran.items()]})
+        if winner:
+            solved_by[winner] += 1
+        for k in ladder:
+            if k not in ran:
+                unrun[k] += 1
+                continue
+            tried[k] += 1
+            costs = [(x.get("agent") or {}).get("cost_usd") for x in tries_of(ran[k])]
+            if None in costs and ran[k]["outcome"] in ("solved", "failed"):
+                priced = False  # a scored attempt without a price: the total isn't known
+            spent += sum(c or 0 for c in costs)
+
+    def estimate(key: str) -> tuple[float | None, str | None]:
+        if (each := (plan.get("cost_per_attempt") or {}).get(key)) is not None:
+            return each, "earlier runs"
+        s = summary.get(key) or {}
+        if (each := s.get("cost_per_try")) is not None and s.get("tries"):
+            rate = (s.get("solved") or 0) / s["tries"]  # each try after the first runs only if the ones before failed
+            return each * sum((1 - rate) ** n for n in range(tries)), "this run"
+        mine = output_price(specs[key])
+        for base in ladder:  # a model of this run, scaled by the two models' output token price
+            theirs, each = output_price(specs[base]), (summary.get(base) or {}).get("cost_per_attempt")
+            if mine and theirs and each is not None:
+                return each * mine / theirs, "prices"
+        return None, None
+
+    estimates = {}
+    for key in ladder:
+        each, source = estimate(key) if unrun[key] else (None, None)
+        estimates[key] = {"attempts": unrun[key], "cost_per_attempt": each, "source": source}
+    known = all(e["cost_per_attempt"] is not None for e in estimates.values() if e["attempts"])
+    guessed = sum(e["attempts"] * e["cost_per_attempt"] for e in estimates.values() if e["attempts"]) if known else None
+    cost = spent if priced else None
+    every = cost + guessed if cost is not None and guessed is not None else None
+    remaining = sum(not r["done"] for r in rows)
+    ended = [r for r in rows if r["done"] and not r["solved_by"]]
+    not_scored = sum(bool(r["steps"]) and r["steps"][-1]["outcome"] == "invalid" for r in ended)
+    return {"ladder": ladder, "tasks": rows, "solved_by": solved_by, "tried": tried,
+            "unsolved": len(ended) - not_scored, "not_scored": not_scored, "remaining": remaining,
+            "cost_usd": cost,
+            "every_model": {"cost_usd": every, "estimated_usd": guessed, "estimated_attempts": sum(unrun.values()),
+                            "estimates": estimates},
+            # Only once every task has finished: a stopped run's estimate covers attempts that may yet run.
+            "saving": 1 - cost / every if every and not remaining else None}
+
+
+def output_price(spec: dict) -> float | None:
+    """A model's price per million output tokens, from its entry in run.json."""
+    model = Model.from_dict(spec)
+    return (model.rate_for(model.model) or {}).get("output")
 
 
 def judging(trials: list[dict]) -> dict[str, dict]:

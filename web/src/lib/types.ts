@@ -40,7 +40,10 @@ export type Phase = "collecting" | "checking" | "running" | "judging" | "reporti
 
 export type CheckStage = "sandboxes" | "setup" | "base" | "reference" | "passed" | "left-out" | "queued" | "stopped" | "setup-wait";
 export type LiveStage = "sandboxes" | "setup" | "agent" | "tests" | "judge";
-export type CellStage = LiveStage | "solved" | "failed" | "invalid" | "queued" | "waiting" | "not-run" | "left-out";
+// An escalation run's cells also wait for a cheaper model ("cheaper"), and skip a model once a cheaper one solved the PR
+// ("not-needed").
+export type CellStage = LiveStage | "solved" | "failed" | "invalid" | "queued" | "waiting" | "not-run" | "left-out"
+  | "cheaper" | "not-needed";
 
 export interface Cell {
   model: string;
@@ -128,6 +131,8 @@ export interface Run {
   commands?: Record<string, CommandsUsed>;
   /** How working out each repository's commands went, try by try (repositories with none saved). */
   setup?: Record<string, SetupProgress>;
+  /** An escalation run's models, cheapest first: each PR goes up to the next only when the ones below didn't solve it. */
+  ladder?: string[];
 }
 
 /** Working out a repository's install and test commands at the start of a run, as it goes. */
@@ -183,6 +188,8 @@ export interface Again {
   models: string[];
   /** The LLM judges switch as the run had it; missing on Run again links from before the switch. */
   judges?: boolean;
+  /** Cheapest model first, as the run had it. */
+  escalate?: boolean;
 }
 
 /** The LLM judges switch, as the server works it out from the keys it has (pipeline.judges_offer). */
@@ -434,4 +441,32 @@ export interface Report {
   tasks: Task[];
   trials: Trial[];
   complete: boolean;
+  /** An escalation run's own figures (report.escalation); missing on every other run. */
+  escalation?: Escalation;
+}
+
+/** What an escalation run did: each PR went to the cheapest model first and up the ladder only while unsolved. */
+export interface Escalation {
+  /** The run's models, cheapest first. */
+  ladder: string[];
+  tasks: { task_id: string; solved_by: string | null; done: boolean; steps: { model: string; outcome: Outcome; invalid_reason?: string }[] }[];
+  /** PRs each model solved, and PRs that reached it. */
+  solved_by: Record<string, number>;
+  tried: Record<string, number>;
+  unsolved: number;
+  /** PRs whose climb ended on an attempt that wasn't scored. */
+  not_scored?: number;
+  /** PRs still going up the ladder (a stopped run, or one waiting on a lost attempt). */
+  remaining: number;
+  /** Every try of every attempt that ran; null when one isn't priced. */
+  cost_usd: number | null;
+  /** Every model on every PR: this run's attempts at their cost, plus an estimate for the ones it never ran. */
+  every_model: {
+    cost_usd: number | null;
+    estimated_usd: number | null;
+    estimated_attempts: number;
+    estimates: Record<string, { attempts: number; cost_per_attempt: number | null; source: "this run" | "earlier runs" | "prices" | null }>;
+  };
+  /** 1 - this run's cost / every model's; null until every PR has finished. */
+  saving: number | null;
 }

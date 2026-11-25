@@ -11,6 +11,7 @@ import { post, useReport } from "@/lib/api";
 import { commandsSource } from "@/lib/commands";
 import { plural, when } from "@/lib/format";
 import { href, type Route } from "@/lib/hooks";
+import { escalationHeadline, inLadder, labelsOf } from "@/lib/escalation";
 import { ordered, palette } from "@/lib/models";
 import { pipeline } from "@/lib/stages";
 import { takeaway } from "@/lib/stats";
@@ -44,15 +45,18 @@ export function RunPage({ id, tab, task, state, go, hurry }: {
 
   const active = isActive(run.phase);
   const current = tab === "results" || tab === "tasks" || tab === "board" ? tab : active || !run.report ? "board" : "results";
-  const models = ordered(run.models);
+  const models = inLadder(run.models, run.ladder); // cheapest first on an escalation run
   const colors = palette(models);
   // An open task lives in the address, so a link can point straight at one attempt's trace.
   const open = (taskId: string | null) => go({ page: "run", id, tab: current, task: taskId ?? undefined }, true);
   const finished = report ? new Set(report.trials.map((t) => t.task_id)) : null;
   // The headline: the paired verdict, with its cost line under it.
   const t = report?.trials.length ? takeaway(ordered(report.models), report.summary, report) : null;
-  const sentence = t?.verdict
-    ? <>{t.verdict.head}{t.verdict.cost && <span className="mt-2 block text-[16px] text-body">{t.verdict.cost}</span>}</>
+  // Cheapest model first: what the cheapest solved, how many the ones above it took, and what that saved.
+  const climbed = report?.trials.length && report.escalation ? escalationHeadline(report.escalation, labelsOf(report.models)) : null;
+  const lines = climbed ?? (t?.verdict ? { head: t.verdict.head, cost: t.verdict.cost } : null);
+  const sentence = lines
+    ? <>{lines.head}{lines.cost && <span className="mt-2 block text-[16px] text-body">{lines.cost}</span>}</>
     : t?.sentence ?? null;
   const board = <TabsTrigger value="board">{active ? "Live" : "Board"}</TabsTrigger>;
   const results = <TabsTrigger value="results" disabled={!run.report}>Results</TabsTrigger>;
@@ -110,7 +114,8 @@ function RunHeader({ run, state, sentence, hurry, go }: {
     go({ page: "home" });
     requestAnimationFrame(() => document.getElementById("new-run")?.scrollIntoView());
   };
-  const vs = ordered(run.models).map((m) => m.label).join(" vs ");
+  const vs = run.ladder?.length ? `Cheapest first: ${inLadder(run.models, run.ladder).map((m) => m.label).join(" → ")}`
+    : ordered(run.models).map((m) => m.label).join(" vs ");
   const reportUrl = run.report ? `/${run.report.replace(/^\//, "")}` : null;
   return (
     <header>

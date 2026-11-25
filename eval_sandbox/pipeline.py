@@ -26,7 +26,7 @@ from pathlib import Path
 
 from . import commands, config, judge, report, runner, runtime, tasks
 from .config import ROOT
-from .rundir import now, write_json
+from .rundir import ACCESS, now, read_json, write_json
 
 DEFAULT_JOBS = ROOT / "jobs"
 DEFAULT_MODELS = ["claude-opus", "deepseek-v4.1-flash", "glm-5.3"]
@@ -39,6 +39,8 @@ DEFAULT_LIMIT = 10
 # solved if any try solves it. Every model gets the same. Runs from before tries were recorded had one.
 DEFAULT_TRIES = 3
 ACTIVE = ("collecting", "checking", "running")
+# An escalation run (--escalate, "Cheapest model first" on the page) climbs from its cheapest model up.
+ESCALATE_NEEDS = "Cheapest model first needs at least two different models: pick another one."
 # An attempt's transcript: the agent's log, its condensed trace, the model proxy's log and the prompt.
 # A run on a private repository loses these PR_EVAL_PRIVATE_RETENTION_DAYS after it ends (unset: kept);
 # its report and each attempt's result stay.
@@ -347,19 +349,150 @@ def judges_offer(panel: config.Panel, *, hosted: bool = False, measured: dict[st
             "left_out": [j.name for j in gone], "note": note, "cost_per_attempt": round(cost, 4)}
 
 
+def per_try(s: dict) -> dict:
+    """A model's cost, time and solve rate per try from its summary in a report, and what an attempt of up to
+    DEFAULT_TRIES tries comes to. A report from before tries were recorded has one try per attempt."""
+    tries = s.get("tries") or s["valid"]
+    cost = s.get("cost_per_try", s["cost_per_attempt"])
+    seconds = s.get("median_seconds_per_try", s.get("median_seconds"))
+    rate = (s.get("solved") or 0) / tries if tries else None
+    expected = expected_tries(rate, DEFAULT_TRIES)
+    return {"cost_per_attempt": cost * expected, "seconds_per_attempt": None if seconds is None else seconds * expected,
+            "tries_per_attempt": expected, "cost_per_try": cost, "solve_rate": rate}
+
+
+def expected_tries(solve_rate: float | None, tries: int) -> float:
+    """How many tries an attempt of up to `tries` takes on average: each one after the first runs only when
+    every try before it failed. Without a solve rate to go by, all of them."""
+    if solve_rate is None:
+        return float(tries)
+    return sum((1 - solve_rate) ** n for n in range(tries))
+
+
+def borrowed(found: dict[str, dict], catalog: dict[str, config.Model]) -> dict[str, dict]:
+    """A model with no runs yet takes the cost and time per attempt of the first of its `estimate_from` models that
+    has them, the cost scaled by the two models' output price."""
+    for key, m in catalog.items():
+        if key in found:
+            continue
+        for base in (catalog[k] for k in m.estimate_from if k in catalog and k in found):
+            mine, theirs = m.rate_for(m.model), base.rate_for(base.model)
+            if not mine or not theirs or not theirs.get("output"):
+                continue
+            ratio = mine["output"] / theirs["output"]
+            scale = lambda e, r=ratio: {**e, "cost_per_attempt": e["cost_per_attempt"] * r,
+                                        **({"cost_per_try": e["cost_per_try"] * r} if "cost_per_try" in e else {})}
+            source = found[base.key]
+            found[key] = {**scale(source), "by_scope": {k: scale(v) for k, v in source["by_scope"].items()}}
+            break
+    return found
+
+
+def scope(repos) -> str:
+    """A set of repositories as the estimates key their figures: a large repository costs far more per attempt."""
+    return ",".join(sorted({r.lower() for r in repos}))
+
+
+def request_scope(request: Request) -> str:
+    """The repositories a run of `request` covers, as scope() keys them."""
+    if request.task_ids:
+        return scope(repo_of(t) for t in request.task_ids)
+    return scope(request.named() or tasks.sample(request.quick))
+
+
+def measured(job_dirs: list[Path]) -> tuple[dict[str, dict], dict[str, float]]:
+    """Cost and time per attempt for each model, from the most recent of these runs (newest first) that has them,
+    and from the most recent over each set of repositories (`by_scope`). Measured per try, then counted for an
+    attempt of up to DEFAULT_TRIES tries (see expected_tries). Also what one answer of each judge model cost in
+    the most recent run it answered in. One read of each report."""
+    found: dict[str, dict] = {}
+    judges: dict[str, float] = {}
+    for job_dir in job_dirs:
+        meta = read_json(job_dir / "run.json")
+        data = read_json(job_dir / "report.json")
+        # By repositories, the quick sample's too: its set of repositories changes over time.
+        where = scope(repo_of(t) for t in meta.get("tasks") or [])
+        # An escalation run's cheapest model ran every task, but the ones above it only those it failed, the
+        # hard ones: their figures would overstate them. Only the first model's count.
+        first = ((meta.get("escalation") or {}).get("ladder") or [None])[0]
+        for key, s in (data.get("summary") or {}).items():
+            if meta.get("escalation") and key != first:
+                continue
+            if s.get("valid") and s.get("cost_per_attempt") is not None:
+                each = per_try(s)
+                found.setdefault(key, {**each, "by_scope": {}})["by_scope"].setdefault(where, each)
+        for model, each in (data.get("judging") or {}).items():
+            if each.get("answers"):
+                judges.setdefault(model, each["cost_usd"] / each["answers"])
+    return found, judges
+
+
+def cost_estimates(jobs_dir: Path, catalog: dict[str, config.Model]) -> dict[str, dict]:
+    """Each model's cost and time per attempt as the page shows them: measured in the runs under `jobs_dir`,
+    newest first, else borrowed. A model with neither has no entry."""
+    def latest(d: Path) -> str:  # ISO times in UTC sort as text
+        meta = read_json(d / "run.json")
+        return max(meta.get("created_at") or "", (meta.get("status") or {}).get("updated_at") or "")
+    runs = [d for d in jobs_dir.iterdir() if (d / "run.json").is_file() and not read_json(d / ACCESS).get("smoke")] \
+        if jobs_dir.is_dir() else []
+    return borrowed(measured(sorted(runs, key=latest, reverse=True))[0], catalog)
+
+
+def token_price(model: config.Model) -> tuple[float, float]:
+    """A model's price per million output tokens, then input tokens; a model without a price sorts last."""
+    rate = model.rate_for(model.model) or {}
+    return rate.get("output", float("inf")), rate.get("input", float("inf"))
+
+
+def ladder(models: list[config.Model], estimates: dict[str, dict],
+           where: str = "") -> tuple[list[config.Model], dict[str, float | None]]:
+    """An escalation run's models by what an attempt of each is expected to cost, cheapest first, and the cost per
+    attempt the page shows for each (None where it shows none). The order goes by the figures for these
+    repositories (`where`, a scope()) when every model has one, else by the figures over every run when every
+    model has one, else by token price. Figures are never mixed with prices: they don't compare."""
+    def figure(m: config.Model, scoped: bool) -> float | None:
+        each = estimates.get(m.key) or {}
+        return ((each.get("by_scope") or {}).get(where) or {}).get("cost_per_attempt") if scoped \
+            else each.get("cost_per_attempt")
+    shown = {m.key: figure(m, True) if figure(m, True) is not None else figure(m, False) for m in models}
+    for scoped in ((True, False) if where else (False,)):
+        costs = {m.key: figure(m, scoped) for m in models}
+        if all(c is not None for c in costs.values()):
+            return sorted(models, key=lambda m: (costs[m.key], token_price(m))), shown
+    return sorted(models, key=token_price), shown
+
+
+def escalation_plan(models: list[config.Model], request: Request, jobs_dir: Path = DEFAULT_JOBS,
+                    models_config: Path = config.DEFAULT_MODELS) -> dict:
+    """An escalation run's ladder for its run.json, so a resume keeps the order: its models' keys, cheapest first
+    (see ladder), and the cost per attempt the page showed for each when it started, which its report uses for a
+    model the run never reached."""
+    catalog, _ = config.load(models_config)
+    models = list({m.key: m for m in models}.values())  # a model named twice is one rung
+    order, costs = ladder(models, cost_estimates(jobs_dir, {**catalog, **{m.key: m for m in models}}),
+                          request_scope(request))
+    return {"ladder": [m.key for m in order], "cost_per_attempt": costs}
+
+
 def new_job(request: Request, models: list[config.Model], judge: config.Panel | None, *, attempts: int = 1,
             tries: int = DEFAULT_TRIES, name: str | None = None, jobs_dir: Path = DEFAULT_JOBS, image: str = runner.DEFAULT_IMAGE,
-            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1", harness: str = runner.pi.NAME) -> Job:
+            tasks_dir: Path = tasks.DEFAULT_TASKS, region: str = "us-pdx-1", harness: str = runner.pi.NAME,
+            escalation: dict | None = None) -> Job:
+    """A new run's folder and run.json. `escalation` (escalation_plan) makes it an escalation run: its models
+    in the ladder's order, cheapest first, and one attempt each."""
     run_id = name or default_name(request)
     path = jobs_dir / run_id
     if (path / "run.json").exists():
         raise SystemExit(f"{path} exists: pass --resume {path} to finish it, or choose another --name")
+    if escalation:  # each model once, in the ladder's order
+        models = sorted({m.key: m for m in models}.values(), key=lambda m: escalation["ladder"].index(m.key))
+        attempts = 1
     path.mkdir(parents=True, exist_ok=True)  # the page makes it first, for the run's log
     write_json(path / "run.json", {
         "run_id": run_id, "created_at": now(), "request": asdict(request), "harness": harness,
         "harness_version": None, "backend": "baseten", "image": image, "region": region,
         "attempts": attempts, "tries": tries, "models": [m.as_dict() for m in models],
-        "judge": judge.as_dict() if judge else None,
+        "judge": judge.as_dict() if judge else None, **({"escalation": escalation} if escalation else {}),
         "tasks": [], "tasks_dir": str(tasks_dir.resolve()), "host": platform.platform()})
     return Job(path)
 
@@ -412,6 +545,7 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
     """Take a new or resumed run as far as it can go. Returns the exit code."""
     tasks_dir = Path(job.meta.get("tasks_dir") or tasks.DEFAULT_TASKS)
     attempts, tries = job.meta.get("attempts", 1), job.meta.get("tries", 1)
+    ladder = rungs(job.meta, models)
     try:
         restore_execution(job.meta, settings)
         fit_memory(job, settings)
@@ -433,11 +567,12 @@ def execute(job: Job, models: list[config.Model], settings: runner.Settings) -> 
             if len(check(job, selected, settings)) != len(selected):
                 raise SystemExit("The original task set no longer passes validation; start a new run.")
             start_running(job, models, settings)
-            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job), tries=tries)
+            runner.run(selected, models, attempts, job.path, settings, job.id, on_result=progress_printer(job), tries=tries,
+                       ladder=ladder)
         else:
             check_and_run(job, settle_commands(job, candidates, settings), models, settings)
         path = report.build(job.path)
-        lost = runner.lost_trials(job.path)
+        lost = runner.lost_rungs(job.meta["tasks"], ladder, job.path, tries) if ladder else runner.lost_trials(job.path)
         job.status("done", f"Finished. Report: {path}" + (
             f". {lost} attempt(s) were lost to sandbox, setup or provider problems, not the models; "
             f"run them again with: pr-eval run --resume {job.path}" if lost else ""))
@@ -516,8 +651,26 @@ def collecting(job: Job):
 
 
 def start_running(job: Job, models: list[config.Model], settings: runner.Settings) -> None:
-    job.status("running", f"Running {len(job.meta['tasks'])} tasks x {len(models)} models" + times(job.meta))
+    job.status("running", f"Running {plan_line(job.meta, models)}")
     report.build(job.path)
+
+
+def plan_line(meta: dict, models: list[config.Model]) -> str:
+    """The tasks and models of a run for its status line: every task on every model, or on an escalation run
+    the cheapest model first and then each one above it."""
+    if ladder := rungs(meta, models):
+        return (f"{len(meta['tasks'])} tasks on the cheapest model first ("
+                + ", then ".join(m.label for m in ladder) + ")" + times(meta))
+    return f"{len(meta['tasks'])} tasks x {len(models)} models" + times(meta)
+
+
+def rungs(meta: dict, models: list[config.Model]) -> list[config.Model] | None:
+    """An escalation run's models in its ladder's order, cheapest first; None for a run that sends every task to
+    every model."""
+    if not (plan := meta.get("escalation")):
+        return None
+    found = {m.key: m for m in models}
+    return [found[key] for key in plan["ladder"] if key in found]
 
 
 def times(meta: dict) -> str:
@@ -547,13 +700,13 @@ def check_and_run(job: Job, candidates: list[tasks.Task], models: list[config.Mo
         job.meta["checked"] = True
         leave_out(job, statuses)
         if job.meta["tasks"]:
-            job.status("running", f"All checked. Running {len(job.meta['tasks'])} tasks x {len(models)} models"
-                                  + times(job.meta))
+            job.status("running", f"All checked. Running {plan_line(job.meta, models)}")
         else:
             job.save()
 
     runner.check_and_run(candidates, models, job.meta.get("attempts", 1), job.path, settings, job.id,
-                         on_checked=checked, on_result=progress_printer(job), tries=job.meta.get("tries", 1))
+                         on_checked=checked, on_result=progress_printer(job), tries=job.meta.get("tries", 1),
+                         ladder=rungs(job.meta, models))
     if not job.meta["tasks"]:
         for repo, used in (job.meta.get("commands") or {}).items():
             if used.get("source") == "saved":  # they may have gone stale: the next run works them out afresh

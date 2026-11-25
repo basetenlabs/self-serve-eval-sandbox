@@ -14,8 +14,9 @@ export function Simple({ report, ranked, colors, t }: { report: Report; ranked: 
   const S = report.summary;
   // Baseten's open models first, then the comparison, as in the side by side; each best first.
   const shown = [...ranked.filter(isOpen), ...ranked.filter((m) => !isOpen(m))].filter((m) => S[m.key]);
-  // The side by side's chips. Solve rate only without a PR-by-PR count, which the headline already says.
-  const chips = ([["Solve rate", t.pairs?.n ? undefined : t.solve], ["Cost per solved task", t.cost], ["Time per task", t.time]] as [string, Lead | undefined][])
+  // The side by side's chips. Solve rate only without a PR-by-PR count, which the headline already says. Not on a
+  // cheapest-first run: its models had different PRs, the harder ones going to the models above.
+  const chips = report.escalation ? [] : ([["Solve rate", t.pairs?.n ? undefined : t.solve], ["Cost per solved task", t.cost], ["Time per task", t.time]] as [string, Lead | undefined][])
     .filter((c): c is [string, Lead] => !!c[1]);
   return (
     <div className="grid gap-14">
@@ -34,7 +35,7 @@ export function Simple({ report, ranked, colors, t }: { report: Report; ranked: 
         <Column heading="Every model">
           <ul>
             {shown.map((m) => (
-              <Row key={m.key} m={m} s={S[m.key]} swatch={colors[m.key]} unscored={report.complete ? report.tasks.length - S[m.key].tasks : 0} />
+              <Row key={m.key} m={m} s={S[m.key]} swatch={colors[m.key]} unscored={report.complete && !report.escalation ? report.tasks.length - S[m.key].tasks : 0} />
             ))}
           </ul>
         </Column>
